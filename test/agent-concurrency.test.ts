@@ -195,8 +195,6 @@ This should not be advertised or launched.`);
   });
 
   it("frees slots across user turns so a later turn can still delegate under the cap", async () => {
-    // With a live in-flight gauge (and no per-turn reset), each turn's child
-    // releases its slot on completion, so the next turn delegates under the cap.
     const { session, registration } = await createSession({ maxConcurrentSubagents: 1 });
 
     registration.setResponses([
@@ -229,7 +227,6 @@ This should not be advertised or launched.`);
     const tool = session.getToolDefinition("Agent") as any;
     const ctx = makeExecutionContext({ hasUI: false, model, modelRegistry });
 
-    // Two children that stay in-flight until released, plus a recovery response.
     let release1!: () => void;
     let release2!: () => void;
     const gate1 = new Promise<void>((resolve) => {
@@ -250,12 +247,9 @@ This should not be advertised or launched.`);
       fauxAssistantMessage("recovery child done"),
     ]);
 
-    // The slot is taken synchronously before runSubagent's first await, so two
-    // un-awaited launches saturate the cap of 2 with both children still running.
     const inFlight1 = tool.execute("c1", { description: "A", prompt: "Task A." }, undefined, undefined, ctx);
     const inFlight2 = tool.execute("c2", { description: "B", prompt: "Task B." }, undefined, undefined, ctx);
 
-    // A third launch while two are genuinely in-flight must queue, not reject.
     let queuedSettled = false;
     const queued = tool.execute("c3", { description: "C", prompt: "Task C." }, undefined, undefined, ctx).then((result: any) => {
       queuedSettled = true;
@@ -264,7 +258,6 @@ This should not be advertised or launched.`);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(queuedSettled).toBe(false);
 
-    // Release one child: its slot transfers to the queued launch.
     release1();
     expect((await inFlight1).details.status).toBe("done");
     const recovered = await queued;
@@ -318,8 +311,6 @@ This should not be advertised or launched.`);
     const tool = session.getToolDefinition("Agent") as any;
     const ctx = makeExecutionContext({ hasUI: false, model, modelRegistry });
 
-    // Drive execute() directly so the failure path is deterministic and the
-    // per-turn reset does not mask whether the finally released the slot.
     registration.setResponses([fauxAssistantMessage("recovery child done")]);
 
     const aborted = new AbortController();
@@ -334,8 +325,6 @@ This should not be advertised or launched.`);
     expect(failed.details.status).toBe("aborted");
     expect(failed.details.error).toContain("Aborted while waiting for a concurrency slot");
 
-    // With maxConcurrentSubagents 1, the second launch is only possible if the failed
-    // child released its slot via the same finally that releases completed ones.
     const recovered = await tool.execute(
       "recovery-agent-call",
       { description: "Recovery search", prompt: "Second task that succeeds." },

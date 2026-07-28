@@ -138,7 +138,6 @@ describe("runWorkflow", () => {
   });
 
   it("still rejects nondeterminism reached through computed/aliased forms", () => {
-    // Determinism stays enforced even though escape hardening is gone.
     expect(() => parseWorkflowScript(`${META}const r = Math.random();`)).toThrow(/deterministic/);
     expect(() => parseWorkflowScript(`${META}const d = new Date();`)).toThrow(/deterministic|Date/i);
   });
@@ -612,7 +611,7 @@ describe("structured output capture", () => {
     expect(first.content[0].text).toContain("received");
 
     const second = await tool.execute("c2", { kind: "second" });
-    expect(capture.value).toEqual({ kind: "first" }); // first wins; not overwritten
+    expect(capture.value).toEqual({ kind: "first" });
     expect(capture.count).toBe(2);
     expect(capture.duplicateCall).toBe(true);
     expect(second.content[0].text).toContain("ignoring duplicate");
@@ -756,19 +755,16 @@ describe("workflow tool rendering", () => {
     expect(text).toContain("Workflow(audit)");
     expect(text).toContain("running");
     expect(text).toContain("running · 1/3");
-    // scan phase is complete (beta done) -> ✓ header; unphased bucket is still running despite a failed branch.
     expect(text).toContain("✓ scan done · 1/1");
     expect(text).toContain("✓ Codex Agent(codex-reviewer, beta)");
     expect(text).toContain("▶ unphased running · 0/2");
     expect(text).toContain("Pi Agent(custom-agent: alpha)");
     expect(text).toContain("✗ Claude Agent(claude-reviewer, gamma)");
-    // declared phase renders before the unphased bucket.
     expect(text.indexOf("scan")).toBeLessThan(text.indexOf("unphased"));
   });
 
   it("shows an entered phase header before its first agent starts", () => {
     const theme = makeMockTheme();
-    // phase('scan') has fired but no agent in it has launched yet.
     const details: WorkflowToolDetails = {
       name: "setup",
       status: "running",
@@ -779,7 +775,6 @@ describe("workflow tool rendering", () => {
       logs: [],
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    // Active phase is visible and marked current, not collapsed to the flat list.
     expect(text).toContain("▶ scan running · 0/0");
   });
 
@@ -895,8 +890,6 @@ describe("workflow tool rendering", () => {
       logs: [],
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    // Earliest agents are shown; the "not shown" marker stands for the later ones
-    // and must come after the visible rows.
     expect(text).toContain("Agent(agent, a1)");
     expect(text).toContain("... 2 agent(s) not shown");
     expect(text.indexOf("a1")).toBeLessThan(text.indexOf("not shown"));
@@ -914,8 +907,6 @@ describe("workflow tool rendering", () => {
       agents: [{ index: 1, label: "alpha", status: "running" }],
       logs: [],
     });
-    // frame 0 -> first braille glyph, frame 1 -> second: proves the runtime
-    // heartbeat's frame counter drives the animation, with no UI-side timer.
     const f0 = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: make(0) }, {}, theme));
     const f1 = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: make(1) }, {}, theme));
     expect(f0).toContain("⠋ Agent(agent: alpha)");
@@ -956,7 +947,6 @@ describe("workflow tool rendering", () => {
     const agents = [
       { index: 1, label: "t1", phase: "loop1:opt", status: "done" as const },
       { index: 2, label: "t2", phase: "loop1:opt", status: "done" as const },
-      // loop2:opt has 8 agents -> per-phase cap of 6 plus a "... 2 more" line.
       ...Array.from({ length: 8 }, (_, i) => ({
         index: 3 + i,
         label: `u${i + 1}`,
@@ -981,8 +971,6 @@ describe("workflow tool rendering", () => {
 
   it("shows the earliest agents in an over-cap running wave and hides the rest", () => {
     const theme = makeMockTheme();
-    // 12 concurrent agents (the screenshot scenario): the 6-row window must show
-    // the earliest indices #1..#6 with "... 6 more" for #7..#12 — not the newest.
     const details: WorkflowToolDetails = {
       name: "ceiling_opt",
       status: "running",

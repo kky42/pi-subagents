@@ -1,23 +1,4 @@
 #!/usr/bin/env node
-// Complex end-to-end probe for the `workflow` tool. This driver pins down EVERY
-// workflow feature by handing the model exact scripts to run verbatim and
-// asserting on the persisted session details + run journal.
-//
-// Features covered:
-//   - inline `script` source + auto-persistence (scriptPath, runId, journalPath)
-//   - meta + phases, log(), phase(), args, cwd globals
-//   - parallel() fan-out and pipeline() multi-stage (with originalItem)
-//   - structured output via agent({ schema }) -> injected structured_output tool
-//   - plain-text agent output contract
-//   - concurrency queue-and-drain (fan-out wider than maxConcurrentSubagents)
-//   - determinism rejection (Date.now() refused at parse time)
-//   - saved-workflow registry via { name } (global ~/.pi/agent/workflows)
-//   - resume-by-replay via { scriptPath, resumeFromRunId } (cached prefix)
-//
-// Usage:
-//   node scripts/e2e/workflow-features.mjs --model deepseek/deepseek-v4-flash --thinking high
-//   node scripts/e2e/workflow-features.mjs --model openai/gpt-5.4-mini --thinking high --keep
-//
 // The run uses the caller's real ~/.pi/agent config (so provider/model resolution
 // and saved-workflow roots match production). It writes a temp fixture + sessions
 // under an OS temp dir and prints PASS/FAIL/INCONCLUSIVE per check.
@@ -86,9 +67,6 @@ function slug(text) {
   return text.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "model";
 }
 
-// ---------------------------------------------------------------------------
-// Fixture: a tiny multi-file repo the subagents can actually read.
-// ---------------------------------------------------------------------------
 function createFixture(root) {
   const fx = path.join(root, "fixture");
   ensureDir(path.join(fx, "src"));
@@ -125,10 +103,7 @@ function createFixture(root) {
   return fx;
 }
 
-// ---------------------------------------------------------------------------
-// Embedded workflow scripts handed to the model verbatim. No backticks inside
-// (string concatenation only) so they embed cleanly in prompts.
-// ---------------------------------------------------------------------------
+// Avoid backticks so these verbatim workflow scripts embed cleanly in prompts.
 const KITCHEN_SINK = `export const meta = {
   name: "feature_probe",
   description: "Probe parallel, pipeline, phase, log, args, cwd, structured output, and plain-text agents.",
@@ -247,9 +222,6 @@ const DISCOVERABILITY_PROMPT = [
   "per-file import result. Do not change any files.",
 ].join(" ");
 
-// ---------------------------------------------------------------------------
-// pi runner
-// ---------------------------------------------------------------------------
 // Per-session wall-clock cap. Upstream providers occasionally stall on first
 // token; a stuck session must not block the whole suite, so we SIGTERM/SIGKILL
 // and let the scenario assert on whatever was persisted (usually nothing -> a
@@ -316,9 +288,6 @@ function runPi({ model, thinking, deepseekApiKeyEnv, agentDir, cwd, sessionDir, 
   });
 }
 
-// ---------------------------------------------------------------------------
-// Session + journal analysis
-// ---------------------------------------------------------------------------
 function findNewestJsonl(dir) {
   if (!existsSync(dir)) return undefined;
   const files = readdirSync(dir)
@@ -392,9 +361,6 @@ function parseResultFromText(text) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Prompt builders
-// ---------------------------------------------------------------------------
 function inlinePrompt(script, args) {
   return [
     "Use the workflow tool now. Call it with the `script` parameter set to EXACTLY the following JavaScript, verbatim — do not modify it, do not wrap it in markdown fences.",
@@ -427,9 +393,6 @@ function resumePrompt(scriptPath, runId, args) {
   ].join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Assertion helpers
-// ---------------------------------------------------------------------------
 function makeScenario(name) {
   const checks = [];
   return {
@@ -448,9 +411,6 @@ function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
 
-// ---------------------------------------------------------------------------
-// Scenarios
-// ---------------------------------------------------------------------------
 async function scenarioKitchenSink(ctx) {
   const s = makeScenario("kitchen-sink (parallel + pipeline + schema + plain-text + globals + persistence)");
   const sessionDir = path.join(ctx.sessionRoot, "kitchen-sink");
@@ -504,7 +464,6 @@ async function scenarioKitchenSink(ctx) {
   s.check("pipeline produced items with plain-text sentences", items.length >= 1 && items.every((it) => isNonEmptyString(it.sentence)), JSON.stringify(items));
   s.check("return value synthesized (count matches items)", result?.count === items.length && items.length >= 1, JSON.stringify({ count: result?.count, items: items.length }));
 
-  // Hand the resume scenario what it needs.
   ctx.kitchen = { sessionDir, sessionId: `${ctx.idBase}-kitchen`, scriptPath: wf.scriptPath, runId: wf.runId, result, agentCount: wf.agentCount };
   return { scenario: s };
 }
@@ -628,7 +587,7 @@ async function scenarioResume(ctx) {
     extension: extensionPath,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details; // newest workflow result = the resume run
+  const wf = a.workflow?.details;
   s.check("model invoked the workflow tool for resume", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
   if (!wf) {
     s.check("resume workflow result present", false, "no workflow toolResult");
@@ -714,12 +673,9 @@ async function scenarioBranch(ctx) {
   return { scenario: s };
 }
 
-// Filter / gate + zero-count early exit. Run A keeps survivors; run B (a set with
-// no kleur importers) must hit the early-return path with no downstream agents.
 async function scenarioGate(ctx) {
   const s = makeScenario("filter/gate on structured output + zero-count early exit");
 
-  // Run A: full set -> at least one survivor expected.
   const sessionA = path.join(ctx.sessionRoot, "gate-survivors");
   await runPi({
     ...ctx.run,
@@ -750,7 +706,6 @@ async function scenarioGate(ctx) {
     s.soft("[survivors] survivor set includes report.js", survivors.some((f) => String(f).includes("report.js")), JSON.stringify(survivors));
   }
 
-  // Run B: a single non-kleur file -> early exit, no summary agents.
   const sessionB = path.join(ctx.sessionRoot, "gate-empty");
   await runPi({
     ...ctx.run,
@@ -777,7 +732,6 @@ async function scenarioGate(ctx) {
   return { scenario: s };
 }
 
-// Route / dispatch: classify into an enum, then switch to a kind-specific agent.
 async function scenarioRoute(ctx) {
   const s = makeScenario("route/dispatch on a structured enum");
   const sessionDir = path.join(ctx.sessionRoot, "route");
@@ -842,9 +796,6 @@ async function scenarioDiscoverability(ctx) {
   return { scenario: s };
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 function printScenario(result) {
   const { scenario } = result;
   const failed = scenario.checks.filter((c) => c.status === "FAIL").length;

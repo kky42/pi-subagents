@@ -372,15 +372,11 @@ Default tools prompt marker.`);
     let secondChildContext: Context | undefined;
 
     registration.setResponses([
-      // Round 1: the parent delegates, producing an Agent tool result that is
-      // appended to the parent conversation.
       fauxAssistantMessage(
         [fauxToolCall("Agent", { description: "First search", prompt: "First task." })],
         { stopReason: "toolUse" },
       ),
       fauxAssistantMessage("FIRST_CHILD_SECRET_RESULT"),
-      // Parent continuation: delegate again now that the first tool result is in
-      // the parent history.
       fauxAssistantMessage(
         [fauxToolCall("Agent", { description: "Second search", prompt: "Second task." })],
         { stopReason: "toolUse" },
@@ -396,8 +392,6 @@ Default tools prompt marker.`);
 
     const serialized = JSON.stringify(secondChildContext?.messages);
     expect(serialized).toContain("Second task.");
-    // The second child gets a fresh context: no parent user prompt, no earlier
-    // delegated prompt, and crucially no earlier child's tool result.
     expect(serialized).not.toContain("FIRST_CHILD_SECRET_RESULT");
     expect(serialized).not.toContain("First task.");
     expect(serialized).not.toContain("Delegate twice in sequence.");

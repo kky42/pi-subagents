@@ -9,7 +9,6 @@
  * path has no cap at all, so the guard has to live here.
  */
 
-/** Max characters of child stderr retained for diagnostics. */
 export const MAX_STDERR_CHARS = 128 * 1024;
 
 /**
@@ -21,7 +20,6 @@ export const MAX_STDERR_CHARS = 128 * 1024;
 export const MAX_STDOUT_LINE_CHARS = 4 * 1024 * 1024;
 
 export interface BoundedBuffer {
-  /** Append a chunk; content past the cap is dropped from the middle. */
   append(chunk: string): void;
   /**
    * The retained text. When the input exceeded the cap, the head and the tail
@@ -29,7 +27,6 @@ export interface BoundedBuffer {
    * of a failure (where the real error usually is) survive truncation.
    */
   text(): string;
-  /** Whether any input was dropped. */
   overflowed(): boolean;
 }
 
@@ -38,8 +35,6 @@ export function createBoundedBuffer(maxChars: number): BoundedBuffer {
   const tailLimit = Math.max(0, maxChars - headLimit);
   let head = "";
   let tail = "";
-  // Total chars routed to the tail before the rolling cap dropped any; used to
-  // decide whether the middle was actually elided.
   let tailRawLen = 0;
 
   return {

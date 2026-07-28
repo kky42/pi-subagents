@@ -51,7 +51,6 @@ export type HarnessState = {
 
 const DEFAULT_MODEL_DEFS: FauxModelDef[] = [{ id: "faux-thinker", name: "Faux Thinker", reasoning: true }];
 
-/** Connect Pi AI's explicit faux provider/Models APIs to coding-agent's registry bridge. */
 export function installFauxProvider(
   modelRegistry: ModelRegistry,
   faux: FauxProviderHandle,
@@ -221,8 +220,6 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     return { session, registration, model, models, modelRegistry, sessionManager };
   }
 
-  // Drive a single root delegation and capture the child session's context,
-  // stream options, model, and the root's post-delegation continuation context.
   async function delegateOnce(
     session: { prompt: (input: string) => Promise<unknown> },
     registration: FauxProviderHandle,

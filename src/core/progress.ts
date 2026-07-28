@@ -162,21 +162,13 @@ export interface ProgressEmitterOptions {
 }
 
 export interface ProgressEmitter {
-  /** The live progress node, or undefined when progress is disabled. */
   readonly progress: SubagentProgressNode | undefined;
-  /** Append an activity line (no-op when disabled). */
   addActivity(line: string): void;
-  /** Replace the latest activity line (no-op when disabled). */
   replaceLatestActivity(line: string): void;
-  /** Update the standard usage carried by subsequent progress results. */
   setUsage(usage: SubagentUsage, telemetry: SubagentTelemetry): void;
-  /** Emit a progress snapshot immediately, resetting the throttle window. */
   emit(): void;
-  /** Emit a progress snapshot, throttled to PROGRESS_UPDATE_INTERVAL_MS. */
   emitSoon(): void;
-  /** Start the periodic heartbeat that keeps the live row fresh. */
   startHeartbeat(): void;
-  /** Clear the pending throttle timer and stop the heartbeat. */
   stop(): void;
 }
 
@@ -330,7 +322,6 @@ export function getFinalAssistantFailure(
           : {}),
       };
     }
-    // The terminal assistant turn ended normally; not a failure.
     return undefined;
   }
   return undefined;

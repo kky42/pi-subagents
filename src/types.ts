@@ -78,11 +78,9 @@ export interface WorkflowToolDetails {
   result?: unknown;
   error?: string;
   telemetry?: SubagentTelemetry & { missingUsageAgentCount?: number };
-  /** Monotonic spinner frame, advanced by the runtime heartbeat while agents run. */
   frame?: number;
 }
 
-/** Pi's standard tool/assistant usage shape. */
 export type SubagentUsage = Usage;
 
 /** Data-quality metadata that Pi's standard Usage type cannot represent. */
@@ -120,7 +118,6 @@ export interface SubagentToolDetails {
   /** Backend-native session/thread id used internally for session_key continuation. */
   sessionId?: string;
   progress?: SubagentProgressNode;
-  /** Number of currently running subagents, used to choose rich vs compact live rendering. */
   activeCount?: number;
   frame?: number;
 }

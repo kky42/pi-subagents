@@ -28,7 +28,6 @@ const piped = await pipeline(["beta"], (item) => agent("Return the word " + item
 log("alpha=" + alpha + " beta=" + piped[0]);
 return { alpha, beta: piped[0], args };`;
 
-// parseWorkflowScript is part of the public surface; sanity-check it directly.
 assert.equal(parseWorkflowScript(script).meta.name, "smoke-runtime");
 
 const limiter = new ConcurrencyLimiter(2);
@@ -60,7 +59,6 @@ assert.deepEqual(seenCalls, [
 assert.equal(limiter.activeCount, 0, "all limiter slots must be released");
 assert.equal(limiter.pendingCount, 0);
 
-// Abort classification must survive compilation too.
 const abortController = new AbortController();
 abortController.abort();
 const aborted = await runWorkflow(script, {

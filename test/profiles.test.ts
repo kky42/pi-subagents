@@ -146,14 +146,12 @@ tools: []
 ---
 
 Ignored.`);
-    // Unparseable YAML frontmatter: parseFrontmatter throws and the profile is dropped.
     writeFileSync(join(subagentsDir, "malformed-yaml.md"), `---
 description: : : oops
   bad: [unclosed
 ---
 
 Ignored.`);
-    // Valid frontmatter with an empty body: custom profiles may omit an extra system prompt.
     writeFileSync(join(subagentsDir, "empty-body.md"), `---
 description: Valid frontmatter but empty body.
 ---

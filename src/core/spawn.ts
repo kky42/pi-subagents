@@ -124,13 +124,10 @@ export interface SpawnSubagentParams {
   onUsage: (usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   /** Tools (and the extensions that provide them) to keep out of the child session. Defaults to {@link CHILD_EXCLUDED_TOOLS}. */
   excludeTools?: readonly string[];
-  /** Text appended after the task prompt (e.g. a structured-output contract). */
   appendInstructions?: string;
-  /** Extra tools to register in the child session (e.g. a structured_output tool). */
   customTools?: ToolDefinition[];
   /** Backend session/thread id resolved from a caller-facing session_key. */
   sessionId?: string;
-  /** Persist the child session so a session_key can continue it later. */
   persistSession?: boolean;
   /** JSON schema for CLI backends that can validate final text output natively. */
   outputSchema?: unknown;

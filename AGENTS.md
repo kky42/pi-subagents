@@ -1,5 +1,19 @@
 # Agent Notes
 
+## Comment standards
+
+- Code must explain its own behavior through clear names, types, structure, and tests. Do not use comments to narrate what the next line, branch, loop, function, or assertion does.
+- Keep a comment only when it preserves information that cannot be recovered from the code itself. Allowed cases are:
+  - why a design was chosen and which tradeoff it accepts;
+  - why a default, limit, timeout, or threshold has its particular value;
+  - an external constraint, compatibility requirement, protocol rule, security boundary, or non-obvious failure mode;
+  - a temporary workaround or compromise and the condition under which it can be removed;
+  - an actionable `TODO`/`FIXME` with the missing behavior or blocking condition.
+- Prefer improving unclear code over explaining it with a comment. Delete decorative section labels, comments that repeat symbol names or test assertions, and stale historical narration.
+- Documentation for public APIs exposed through `package.json` exports may describe contracts, inputs, outputs, and failure semantics, but must not paraphrase the implementation. A TypeScript `export` alone does not justify documentation.
+- When changing nearby code, update or remove its comments in the same change. A misleading comment is worse than no comment.
+- These rules apply to source, tests, scripts, and examples. Do not edit generated output, vendored dependencies, or `refs/` solely to enforce them.
+
 ## pi-flow Agent contract (v1)
 
 - This repo implements a lightweight pi extension named `pi-flow`, not a fork of `refs/pi-subagents`.

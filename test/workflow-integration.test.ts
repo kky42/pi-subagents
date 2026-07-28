@@ -310,7 +310,6 @@ return [a, b];`;
       const { session, registration, model, modelRegistry } = await createSession();
       const tool = session.getToolDefinition("workflow") as any;
 
-      // Child: end on a structured_output tool call, then stop on the next turn.
       registration.setResponses([
         fauxAssistantMessage(
           [fauxToolCall("structured_output", { answer: "42", confidence: 0.9 })],
@@ -455,7 +454,6 @@ return [a, b];`;
       );
       expect(result.usage?.cost).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
-      // Progress was streamed incrementally, not just at the end.
       expect(updates.length).toBeGreaterThan(0);
       expect(
         updates.some((update) => update.details.agents.some((agent: any) => agent.status === "running")),

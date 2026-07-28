@@ -225,8 +225,6 @@ describe("pi-subagent progress and status", () => {
     expect(result.details.result).toBeUndefined();
     expect(result.content[0].text).toContain("rate limit exceeded");
     expect(usageUpdates).toBeGreaterThan(0);
-    // Exactly one provider call: retry is disabled, so the injected error turn
-    // is terminal (no retries drained the queue).
     expect(registration.getPendingResponseCount()).toBe(0);
 
     disposeSession(session);
@@ -263,8 +261,6 @@ describe("pi-subagent progress and status", () => {
 
     expect(result.details.status).toBe("error");
     expect(result.details.progress?.status).toBe("error");
-    // stopReason retained as a diagnostic detail, but framed as a failure that
-    // matches the "error" status rather than asserting an abort.
     expect(result.details.error).toContain("stopReason: aborted");
     expect(result.content[0].text).toContain("failed:");
     expect(result.content[0].text).not.toContain("aborted:");

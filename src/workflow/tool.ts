@@ -93,7 +93,6 @@ function workflowResult(text: string, details: WorkflowToolDetails) {
   };
 }
 
-/** Build an early-return error result, filling the fixed error-snapshot fields. */
 function workflowError(
   text: string,
   details: Partial<WorkflowToolDetails> & { name: string; error: string },
@@ -352,10 +351,6 @@ export function createWorkflowTool(
       return new Text(`${theme.bold("Workflow")}${name}`, 0, 0);
     },
     renderResult(result, _options, theme) {
-      // Pure function of the snapshot: the spinner frame is carried on the
-      // snapshot itself and advanced by the runtime heartbeat in execute(), so
-      // there is no UI-side timer to leak when a row is torn down or rendered in
-      // a non-live context (e.g. HTML export).
       const details = result.details as WorkflowToolDetails;
       return renderWorkflowSnapshot(details, theme, details.frame ?? 0);
     },
@@ -483,9 +478,6 @@ function renderFlatAgents(container: Container, details: WorkflowToolDetails, th
   for (const agent of renderedAgents) {
     container.addChild(renderSubagentNode(agent, theme, frame, runningCount, "  "));
   }
-  // selectAgentsForRender keeps the earliest agents, so the hidden ones are the
-  // later indices — the "not shown" marker belongs after the visible rows (as in
-  // renderPhaseTree), standing for what continues below.
   const hiddenAgents = details.agents.length - renderedAgents.length;
   if (hiddenAgents > 0) {
     container.addChild(new Text(`  ${theme.fg("muted", `... ${hiddenAgents} agent(s) not shown`)}`, 0, 0));
@@ -504,8 +496,6 @@ function renderWorkflowSnapshot(details: WorkflowToolDetails, theme: Theme, fram
     ),
   );
 
-  // Phase-grouped tree when the workflow uses phase() (including before the first
-  // agent in a phase starts); otherwise keep the flat list.
   if ((details.plannedPhases?.length ?? 0) > 0 || details.phases.length > 0 || details.agents.some((agent) => agent.phase)) {
     renderPhaseTree(container, details, theme, frame);
   } else {

@@ -52,15 +52,14 @@ describe("ConcurrencyLimiter", () => {
       return release;
     });
     expect(limiter.pendingCount).toBe(2);
-    // Waiters do not push the active count past max while they wait.
     expect(limiter.activeCount).toBe(1);
 
-    r1(); // hands the slot to waiter 2, not back to the pool
+    r1();
     const r2 = await p2;
     expect(order).toEqual([2]);
     expect(limiter.activeCount).toBe(1);
 
-    r2(); // hands the slot to waiter 3
+    r2();
     const r3 = await p3;
     expect(order).toEqual([2, 3]);
 
@@ -81,13 +80,13 @@ describe("ConcurrencyLimiter", () => {
       return release;
     });
     await Promise.resolve();
-    expect(resolved).toBe(false); // must wait — at capacity
+    expect(resolved).toBe(false);
     expect(limiter.activeCount).toBe(3);
 
     releases[0]?.();
     const queuedRelease = await queued;
     expect(resolved).toBe(true);
-    expect(limiter.activeCount).toBe(3); // slot handed off, never additive
+    expect(limiter.activeCount).toBe(3);
 
     queuedRelease();
     releases[1]?.();
@@ -114,7 +113,6 @@ describe("ConcurrencyLimiter", () => {
     await expect(pending).rejects.toThrow(/Aborted/);
     expect(limiter.pendingCount).toBe(0);
 
-    // The aborted waiter never held a slot, so releasing the holder returns to 0.
     r1?.();
     expect(limiter.activeCount).toBe(0);
   });
@@ -131,7 +129,7 @@ describe("ConcurrencyLimiter", () => {
     await expect(abortedWaiter).rejects.toThrow(/Aborted/);
     expect(limiter.pendingCount).toBe(1);
 
-    r1?.(); // should skip the (already removed) aborted waiter and feed the live one
+    r1?.();
     const liveRelease = await liveWaiter;
     expect(limiter.activeCount).toBe(1);
     liveRelease();

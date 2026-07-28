@@ -12,7 +12,6 @@ export interface WorkflowMeta {
   phases?: WorkflowMetaPhase[];
 }
 
-/** A single agent() invocation requested by a workflow script. */
 export interface WorkflowAgentCall {
   index?: number;
   prompt: string;
