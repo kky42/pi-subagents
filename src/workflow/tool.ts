@@ -14,7 +14,7 @@ import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { filterProfilesForModelRegistry } from "../core/model.ts";
 import { getSubagentProfiles } from "../profiles.ts";
 import { WORKFLOW_PROMPT_GUIDELINES, WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
-import type { SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
+import type { SubagentTelemetry, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
 import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
 import { createWorkflowAgentRunner } from "./agent-runner.ts";
@@ -23,13 +23,73 @@ export interface CreateWorkflowToolOptions {
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
-  updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
+  updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
+}
+
+function aggregateWorkflowUsage(agents: readonly WorkflowAgentSnapshot[]): {
+  usage?: SubagentUsage;
+  telemetry: WorkflowToolDetails["telemetry"];
+} {
+  const withUsage = agents.filter((agent): agent is WorkflowAgentSnapshot & { usage: SubagentUsage } => Boolean(agent.usage));
+  const missingUsageAgentCount = agents.length - withUsage.length;
+  if (withUsage.length === 0) {
+    return {
+      telemetry: {
+        tokensKnown: false,
+        costKnown: false,
+        costBreakdownKnown: false,
+        partial: agents.length > 0,
+        missingUsageAgentCount,
+      },
+    };
+  }
+  const usage: SubagentUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  let reasoningReported = false;
+  for (const agent of withUsage) {
+    usage.input += agent.usage.input;
+    usage.output += agent.usage.output;
+    usage.cacheRead += agent.usage.cacheRead;
+    usage.cacheWrite += agent.usage.cacheWrite;
+    usage.cost.input += agent.usage.cost.input;
+    usage.cost.output += agent.usage.cost.output;
+    usage.cost.cacheRead += agent.usage.cost.cacheRead;
+    usage.cost.cacheWrite += agent.usage.cost.cacheWrite;
+    usage.cost.total += agent.usage.cost.total;
+    if (agent.usage.reasoning !== undefined) {
+      usage.reasoning = (usage.reasoning ?? 0) + agent.usage.reasoning;
+      reasoningReported = true;
+    }
+  }
+  if (!reasoningReported) delete usage.reasoning;
+  usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  const telemetry = withUsage.map((agent) => agent.telemetry);
+  return {
+    usage,
+    telemetry: {
+      tokensKnown: missingUsageAgentCount === 0 && telemetry.every((item) => item?.tokensKnown !== false),
+      costKnown: missingUsageAgentCount === 0 && telemetry.every((item) => item?.costKnown !== false),
+      costBreakdownKnown: missingUsageAgentCount === 0 && telemetry.every((item) => item?.costBreakdownKnown === true),
+      costEstimated: telemetry.some((item) => item?.costEstimated === true),
+      partial: missingUsageAgentCount > 0 || telemetry.some((item) => item?.partial === true),
+      missingUsageAgentCount,
+    },
+  };
 }
 
 function workflowResult(text: string, details: WorkflowToolDetails) {
+  const aggregate = aggregateWorkflowUsage(details.agents);
+  details.telemetry = aggregate.telemetry;
   return {
     content: [{ type: "text" as const, text }],
     details,
+    ...(aggregate.usage ? { usage: aggregate.usage } : {}),
   };
 }
 
@@ -131,15 +191,16 @@ export function createWorkflowTool(
         thinkingLevel: options.getThinkingLevel(),
         timeoutMs: options.getSubagentTimeoutMs(),
         toolCallId,
-        onUsage: (index, usage) => options.updateStatus(ctx, `${toolCallId}:agent:${index}`, usage),
-        onProgress: (childIndex, details) => {
+        onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${toolCallId}:agent:${index}`, usage, telemetry),
+        onProgress: (childIndex, details, usage) => {
           const agent = snapshot.agents.find((item) => item.index === childIndex);
           if (!agent) return;
           const progress = details.progress;
           agent.status = details.status;
           agent.result = details.result;
           agent.error = details.error;
-          agent.usage = details.usage ?? progress?.usage;
+          agent.usage = usage;
+          agent.telemetry = details.telemetry ?? progress?.telemetry;
           if (progress) {
             agent.startedAt = progress.startedAt;
             agent.endedAt = progress.endedAt;

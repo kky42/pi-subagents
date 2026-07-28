@@ -447,6 +447,13 @@ return [a, b];`;
       expect(result.details.agents.map((agent: any) => agent.status)).toEqual(["done", "done"]);
       expect(result.details.agents.map((agent: any) => agent.backend)).toEqual(["pi", "pi"]);
       expect(result.details.result).toEqual(["first done", "second done"]);
+      expect(result.details.agents.every((agent: any) => agent.usage?.totalTokens > 0)).toBe(true);
+      const childTotal = result.details.agents.reduce((sum: number, agent: any) => sum + agent.usage.totalTokens, 0);
+      expect(result.usage?.totalTokens).toBe(childTotal);
+      expect(result.usage?.totalTokens).toBe(
+        result.usage.input + result.usage.output + result.usage.cacheRead + result.usage.cacheWrite,
+      );
+      expect(result.usage?.cost).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
       // Progress was streamed incrementally, not just at the end.
       expect(updates.length).toBeGreaterThan(0);

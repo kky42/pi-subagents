@@ -25,7 +25,7 @@ vi.mock("../src/profiles.ts", () => ({
   ]),
 }));
 
-import { getSubagentUsage } from "../src/core/progress.ts";
+import { getSubagentUsage, textResult } from "../src/core/progress.ts";
 import { incrementalPiUsage } from "../src/core/spawn.ts";
 import { createWorkflowAgentRunner } from "../src/workflow/agent-runner.ts";
 import { executeWorkflow } from "../headless.ts";
@@ -38,33 +38,41 @@ beforeEach(() => {
   sdkState.available = [{ provider: "fallback", id: "model-b" }];
   spawn.mockReset();
   spawn.mockImplementation(async (params) => {
-    params.onUsage({ input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.1 });
-    return { content: [], details: { status: "done", result: "ok", usage: {} } };
+    const usage = { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 } };
+    params.onUsage(usage, { tokensKnown: true, costKnown: true, costBreakdownKnown: false });
+    return { content: [], details: { status: "done", result: "ok" }, usage };
   });
 });
 
 describe("canonical workflow agent runner", () => {
+  it("omits standard tool usage when telemetry is unavailable", () => {
+    expect(textResult("done", {
+      description: "unknown",
+      subagentType: "reviewer",
+      status: "done",
+    })).not.toHaveProperty("usage");
+  });
+
   it("reports aggregate cache hit rate from cumulative Pi session stats", () => {
     expect(getSubagentUsage({
       getSessionStats: () => ({
         tokens: { input: 100, output: 10, cacheRead: 50, cacheWrite: 50 },
         cost: 0.2,
       }),
-    })).toMatchObject({ cacheHitRate: 25 });
+    })).toMatchObject({ totalTokens: 210, cost: { total: 0.2 } });
   });
 
   it("reports cumulative cache hit rate for only the current resumed Pi call", () => {
     expect(incrementalPiUsage(
-      { input: 140, output: 25, cacheRead: 60, cacheWrite: 4, cost: 0.9, costKnown: true, cacheHitRate: 30 },
-      { input: 100, output: 20, cacheRead: 50, cacheWrite: 1, cost: 0.7, costKnown: true },
+      { input: 140, output: 25, cacheRead: 60, cacheWrite: 4, totalTokens: 229, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.9 } },
+      { input: 100, output: 20, cacheRead: 50, cacheWrite: 1, totalTokens: 171, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.7 } },
     )).toEqual({
       input: 40,
       output: 5,
       cacheRead: 10,
       cacheWrite: 3,
-      cost: expect.closeTo(0.2),
-      costKnown: true,
-      cacheHitRate: expect.closeTo(18.8679),
+      totalTokens: 58,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: expect.closeTo(0.2) },
     });
   });
 
@@ -141,16 +149,17 @@ describe("headless workflow", () => {
   it("computes aggregate cache hit rate from cumulative child usage", async () => {
     spawn.mockImplementation(async (params) => {
       const first = params.description === "one";
-      params.onUsage(first
-        ? { input: 50, output: 1, cacheRead: 50, cacheWrite: 0, cost: 0 }
-        : { input: 100, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 });
-      return { content: [], details: { status: "done", result: params.description } };
+      const usage = first
+        ? { input: 50, output: 1, cacheRead: 50, cacheWrite: 0, totalTokens: 101, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+        : { input: 100, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 101, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+      params.onUsage(usage, { tokensKnown: true, costKnown: false, costBreakdownKnown: false });
+      return { content: [], details: { status: "done", result: params.description }, usage };
     });
     const result = await executeWorkflow({
       cwd: process.cwd(),
       script: `export const meta = { name: "cache", description: "test" };\nreturn await parallel([() => agent("a", { label: "one", subagent_type: "reviewer" }), () => agent("b", { label: "two", subagent_type: "reviewer" })]);`,
     });
-    expect(result.usage).toMatchObject({ input: 150, cacheRead: 50, cacheHitRate: 25 });
+    expect(result.usage).toMatchObject({ input: 150, cacheRead: 50, totalTokens: 202 });
   });
 
   it("runs without an ExtensionContext or UI and reports cumulative usage", async () => {
@@ -160,7 +169,7 @@ describe("headless workflow", () => {
       script: `export const meta = { name: "headless", description: "test" };\nreturn await agent("inspect", { subagent_type: "reviewer" });`,
     });
     expect(result.result).toBe("ok");
-    expect(result.usage).toMatchObject({ input: 2, output: 3, childAgents: 1, cacheHitRate: 0 });
+    expect(result.usage).toMatchObject({ input: 2, output: 3, totalTokens: 5, childAgents: 1 });
     expect(usage.length).toBeGreaterThan(0);
   });
 });

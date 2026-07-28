@@ -10,7 +10,7 @@ import {
   MAX_STDERR_CHARS,
   MAX_STDOUT_LINE_CHARS,
 } from "./stream.ts";
-import type { SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import type { SubagentProfile, SubagentTelemetry, SubagentUsage, ThinkingLevel } from "../types.ts";
 
 const CLAUDE_COMMAND = "claude";
 const FORCE_KILL_DELAY_MS = 3000;
@@ -189,18 +189,13 @@ export function claudeUsageToSubagentUsage(usage: ClaudeTokenUsage, costUsd: num
   const cacheRead = Math.max(0, usage.cacheReadInputTokens);
   const cacheWrite = Math.max(0, usage.cacheCreationInputTokens);
   const output = Math.max(0, usage.outputTokens);
-  const promptTokens = input + cacheRead + cacheWrite;
-  const hasBillableTokens = promptTokens + output > 0;
-  const costKnown = costUsd !== undefined && (!hasBillableTokens || costUsd > 0);
   return {
     input,
     output,
     cacheRead,
     cacheWrite,
-    cost: costKnown ? costUsd ?? 0 : 0,
-    costKnown,
-    costEstimated: false,
-    cacheHitRate: promptTokens > 0 ? (cacheRead / promptTokens) * 100 : undefined,
+    totalTokens: input + output + cacheRead + cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costUsd ?? 0 },
   };
 }
 
@@ -348,7 +343,7 @@ export async function spawnClaudeSubagent(params: {
   signal: AbortSignal | undefined;
   progressEnabled: boolean;
   onProgress: ((result: AgentToolResult) => void) | undefined;
-  onUsage: (usage: SubagentUsage) => void;
+  onUsage: (usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   appendInstructions?: string;
   sessionId?: string;
   persistSession?: boolean;
@@ -367,7 +362,9 @@ export async function spawnClaudeSubagent(params: {
   const progress = emitter.progress;
   let latestRawUsage = emptyTokenUsage();
   let latestCostUsd: number | undefined;
-  let latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
+  let latestUsage: SubagentUsage | undefined;
+  let latestTelemetry: SubagentTelemetry | undefined;
+  let tokensKnown = false;
   let resultText = "";
   let sessionId = params.sessionId?.trim() || undefined;
   const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
@@ -380,15 +377,21 @@ export async function spawnClaudeSubagent(params: {
   const publishUsage = (usage: ClaudeTokenUsage | undefined, costUsd: number | undefined) => {
     if (usage) {
       latestRawUsage = usage;
+      tokensKnown = true;
     }
     if (costUsd !== undefined) {
       latestCostUsd = costUsd;
     }
     latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
-    if (progress) {
-      progress.usage = latestUsage;
-    }
-    params.onUsage(latestUsage);
+    const hasBillableTokens = latestUsage.totalTokens > 0;
+    latestTelemetry = {
+      tokensKnown,
+      costKnown: latestCostUsd !== undefined && (!hasBillableTokens || latestCostUsd > 0),
+      costBreakdownKnown: false,
+      costEstimated: false,
+    };
+    emitter.setUsage(latestUsage, latestTelemetry);
+    params.onUsage(latestUsage, latestTelemetry);
     emitter.emitSoon();
   };
   const handleEvent = (event: Record<string, unknown>) => {
@@ -531,12 +534,12 @@ export async function spawnClaudeSubagent(params: {
       throw new Error("claude exited without a terminal JSON event");
     }
 
-    params.onUsage(latestUsage);
+    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
     const result = resultText.trim() || "(no final text output)";
     if (progress) {
       progress.status = "done";
       progress.result = result;
-      progress.usage = latestUsage;
+      progress.telemetry = latestTelemetry;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${params.description}" (${subagentType}) completed:\n\n${result}`, {
@@ -545,21 +548,21 @@ export async function spawnClaudeSubagent(params: {
       backend: params.profile.backend,
       status: "done",
       result,
-      usage: latestUsage,
+      telemetry: latestTelemetry,
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
-    });
+    }, latestUsage);
   } catch (error) {
     if (child && !hasChildExited(child)) {
       abortChild(child);
     }
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
-    params.onUsage(latestUsage);
+    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
     if (progress) {
       progress.status = status;
       progress.error = message;
-      progress.usage = latestUsage;
+      progress.telemetry = latestTelemetry;
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
@@ -569,10 +572,10 @@ export async function spawnClaudeSubagent(params: {
       backend: params.profile.backend,
       status,
       error: message,
-      usage: latestUsage,
+      telemetry: latestTelemetry,
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
-    });
+    }, latestUsage);
   } finally {
     emitter.stop();
     if (abortHandler) {

@@ -55,9 +55,12 @@ describe("pi-subagent rendering", () => {
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
-      cost: 0,
+      totalTokens: 1000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    }, {
+      tokensKnown: true,
       costKnown: false,
-      cacheHitRate: 0,
+      costBreakdownKnown: false,
     })).toBe("↑1.0k ↓0 CH0.0% $?");
   });
 
@@ -218,6 +221,14 @@ description: Searches code without editing files.
     try {
       const result = {
         content: [{ type: "text" as const, text: "done" }],
+        usage: {
+          input: 81_000,
+          output: 4_900,
+          cacheRead: 602_000,
+          cacheWrite: 0,
+          totalTokens: 687_900,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.85 },
+        },
         details: {
           description: "Research repo",
           subagentType: "code-searcher" as const,
@@ -232,14 +243,11 @@ description: Searches code without editing files.
             startedAt: now - 2000,
             activity: ["Read src/types.ts", "Read app.py", "Read config.yaml"],
             activityCount: 5,
-            usage: {
-              input: 81_000,
-              output: 4_900,
-              cacheRead: 602_000,
-              cacheWrite: 0,
-              cacheHitRate: 94.666,
-              cost: 0.85,
-            },
+          },
+          telemetry: {
+            tokensKnown: true,
+            costKnown: true,
+            costBreakdownKnown: false,
           },
         },
       };

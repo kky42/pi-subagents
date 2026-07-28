@@ -38,6 +38,7 @@ import type {
   SubagentExtensionOptions,
   SubagentProfile,
   SubagentProgressNode,
+  SubagentTelemetry,
   SubagentToolDetails,
   SubagentType,
   SubagentUsage,
@@ -84,6 +85,7 @@ interface DelegationState {
   subagentTimeoutMs: number;
   progressEnabled: boolean;
   activeRuns: Map<string, ActiveAgentRun>;
+  usageByToolCallId: Map<string, { usage: SubagentUsage; telemetry: SubagentTelemetry }>;
   sessionBindings: Map<string, SessionKeyBinding>;
   sessionKeyLocks: SessionKeyLocks;
   frame: number;
@@ -93,17 +95,18 @@ interface DelegationState {
 interface ActiveAgentRun {
   toolCallId: string;
   progress: SubagentProgressNode;
+  usage?: SubagentUsage;
   onUpdate: ((result: AgentToolResult) => void) | undefined;
 }
 
 interface SubagentUsageStatusState {
-  calls: Map<string, SubagentUsage>;
+  calls: Map<string, { usage: SubagentUsage; telemetry: SubagentTelemetry }>;
 }
 
 interface CreateAgentToolOptions {
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
-  updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage) => void;
+  updateStatus: (ctx: ExtensionContext, toolCallId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
 }
 
 const PROGRESS_STATUSES: SubagentProgressNode["status"][] = ["queued", "running", "done", "error", "aborted"];
@@ -228,36 +231,44 @@ function createUsageStatusState(): SubagentUsageStatusState {
   };
 }
 
-function getUsageTotals(state: SubagentUsageStatusState): SubagentUsage {
-  const totals: SubagentUsage = {
+function getUsageTotals(state: SubagentUsageStatusState): { usage: SubagentUsage; telemetry: SubagentTelemetry } {
+  const usage: SubagentUsage = {
     input: 0,
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
-    cost: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
-  for (const usage of state.calls.values()) {
-    totals.input += usage.input;
-    totals.output += usage.output;
-    totals.cacheRead += usage.cacheRead;
-    totals.cacheWrite += usage.cacheWrite;
-    totals.cost += usage.cost;
-    if (usage.costKnown === false) {
-      totals.costKnown = false;
+  let reasoningReported = false;
+  let costKnown = true;
+  for (const entry of state.calls.values()) {
+    usage.input += entry.usage.input;
+    usage.output += entry.usage.output;
+    usage.cacheRead += entry.usage.cacheRead;
+    usage.cacheWrite += entry.usage.cacheWrite;
+    usage.cost.total += entry.usage.cost.total;
+    if (entry.usage.reasoning !== undefined) {
+      usage.reasoning = (usage.reasoning ?? 0) + entry.usage.reasoning;
+      reasoningReported = true;
     }
+    costKnown &&= entry.telemetry.costKnown;
   }
-  const promptTokens = totals.input + totals.cacheRead + totals.cacheWrite;
-  totals.cacheHitRate = promptTokens > 0 ? (totals.cacheRead / promptTokens) * 100 : undefined;
-  return totals;
+  if (!reasoningReported) delete usage.reasoning;
+  usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  return {
+    usage,
+    telemetry: { tokensKnown: true, costKnown, costBreakdownKnown: false },
+  };
 }
 
-function formatUsageStatus(totals: SubagentUsage, theme: Theme): string {
-  return `${theme.fg("dim", "pi-flow ")}${theme.fg("dim", formatUsage(totals))}`;
+function formatUsageStatus(totals: ReturnType<typeof getUsageTotals>, theme: Theme): string {
+  return `${theme.fg("dim", "pi-flow ")}${theme.fg("dim", formatUsage(totals.usage, totals.telemetry))}`;
 }
 
 function publishUsageStatus(ctx: ExtensionContext, state: SubagentUsageStatusState): void {
   const totals = getUsageTotals(state);
-  if (totals.input === 0 && totals.output === 0 && totals.cacheRead === 0 && totals.cacheWrite === 0 && totals.cost === 0) {
+  if (totals.usage.totalTokens === 0 && totals.usage.cost.total === 0) {
     ctx.ui.setStatus(STATUS_KEY, undefined);
     return;
   }
@@ -269,9 +280,42 @@ function updateUsageStatus(
   ctx: ExtensionContext,
   toolCallId: string,
   usage: SubagentUsage,
+  telemetry: SubagentTelemetry,
 ): void {
-  state.calls.set(toolCallId, usage);
+  state.calls.set(toolCallId, { usage, telemetry });
   publishUsageStatus(ctx, state);
+}
+
+function restoreAgentUsageForRendering(state: DelegationState, ctx: ExtensionContext): void {
+  state.usageByToolCallId.clear();
+  const entries = ctx.sessionManager.getEntries() as ReadonlyArray<{
+    type?: string;
+    message?: {
+      role?: string;
+      toolName?: string;
+      toolCallId?: string;
+      usage?: SubagentUsage;
+      details?: SubagentToolDetails;
+    };
+  }>;
+  for (const entry of entries) {
+    const message = entry.message;
+    if (
+      entry.type !== "message" ||
+      message?.role !== "toolResult" ||
+      message.toolName !== "Agent" ||
+      !message.toolCallId ||
+      !message.usage
+    ) continue;
+    state.usageByToolCallId.set(message.toolCallId, {
+      usage: message.usage,
+      telemetry: message.details?.telemetry ?? {
+        tokensKnown: true,
+        costKnown: message.usage.cost.total > 0,
+        costBreakdownKnown: false,
+      },
+    });
+  }
 }
 
 function getRunningRunCount(state: DelegationState): number {
@@ -292,11 +336,11 @@ function emitActiveRunUpdate(state: DelegationState, run: ActiveAgentRun): void 
     status: run.progress.status,
     result: run.progress.result,
     error: run.progress.error,
-    usage: run.progress.usage,
+    telemetry: run.progress.telemetry,
     progress: run.progress,
     activeCount: getRunningRunCount(state),
     frame: state.frame,
-  }));
+  }, run.usage));
 }
 
 function broadcastActiveRunUpdates(state: DelegationState): void {
@@ -372,7 +416,7 @@ function createAgentTool(
       const progress = effectiveState.progressEnabled
         ? createProgressNode(toolCallId, params.description, subagentType, "queued", profile.backend)
         : undefined;
-      const run = progress ? { toolCallId, progress, onUpdate } : undefined;
+      const run: ActiveAgentRun | undefined = progress ? { toolCallId, progress, onUpdate } : undefined;
       if (run) {
         state.activeRuns.set(toolCallId, run);
         startAgentHeartbeat(state);
@@ -438,10 +482,14 @@ function createAgentTool(
                     if (details.progress) {
                       run.progress = details.progress;
                     }
+                    run.usage = partial.usage;
                     emitActiveRunUpdate(state, run);
                   }
                 : undefined,
-              onUsage: (usage) => options.updateStatus(ctx, toolCallId, usage),
+              onUsage: (usage, telemetry) => {
+                state.usageByToolCallId.set(toolCallId, { usage, telemetry });
+                options.updateStatus(ctx, toolCallId, usage, telemetry);
+              },
               excludeTools: CHILD_EXCLUDED_TOOLS,
               sessionId: binding?.sessionId,
               persistSession: Boolean(sessionKey),
@@ -472,10 +520,22 @@ function createAgentTool(
             error: message,
           });
         }
+        const resultUsage = result.usage;
+        if (resultUsage) {
+          state.usageByToolCallId.set(toolCallId, {
+            usage: resultUsage,
+            telemetry: (result.details as SubagentToolDetails).telemetry ?? {
+              tokensKnown: true,
+              costKnown: resultUsage.cost.total > 0,
+              costBreakdownKnown: false,
+            },
+          });
+        }
         const details = { ...(result.details as SubagentToolDetails) };
         delete details.sessionId;
         if (run && details.progress) {
           run.progress = details.progress;
+          run.usage = result.usage;
         }
         if (run) {
           details.progress = run.progress;
@@ -504,18 +564,24 @@ function createAgentTool(
         0,
       );
     },
-    renderResult(result, _options, theme) {
+    renderResult(result, _options, theme, context) {
       const details = result.details as SubagentToolDetails;
+      const liveUsage = getState().usageByToolCallId.get(context.toolCallId);
+      const usage = (result as typeof result & { usage?: SubagentUsage }).usage ?? liveUsage?.usage;
+      const telemetry = details.telemetry ?? liveUsage?.telemetry;
       return renderSubagentNode(
-        details.progress ?? {
-          description: details.description,
-          subagentType: details.subagentType,
-          backend: details.backend,
-          status: details.status,
-          result: details.result,
-          error: details.error,
-          usage: details.usage,
-        },
+        details.progress
+          ? { ...details.progress, usage, telemetry: telemetry ?? details.progress.telemetry }
+          : {
+              description: details.description,
+              subagentType: details.subagentType,
+              backend: details.backend,
+              status: details.status,
+              result: details.result,
+              error: details.error,
+              usage,
+              telemetry,
+            },
         theme,
         details.frame ?? 0,
         details.activeCount ?? (details.status === "running" ? 1 : 0),
@@ -555,6 +621,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       subagentTimeoutMs: defaultSubagentTimeoutMs,
       progressEnabled: false,
       activeRuns: new Map(),
+      usageByToolCallId: new Map(),
       sessionBindings: new Map(),
       sessionKeyLocks: new SessionKeyLocks(),
       frame: 0,
@@ -580,11 +647,11 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     const toolOptions: CreateAgentToolOptions = {
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
-      updateStatus: (ctx, toolCallId, usage) => {
+      updateStatus: (ctx, toolCallId, usage, telemetry) => {
         if (!ctx.hasUI) {
           return;
         }
-        updateUsageStatus(usageStatusState, ctx, toolCallId, usage);
+        updateUsageStatus(usageStatusState, ctx, toolCallId, usage, telemetry);
       },
     };
 
@@ -595,11 +662,11 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           getLimiter: () => syncMaxConcurrentSubagents().limiter,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getSubagentTimeoutMs: () => syncMaxConcurrentSubagents().subagentTimeoutMs,
-          updateStatus: (ctx, toolCallId, usage) => {
+          updateStatus: (ctx, toolCallId, usage, telemetry) => {
             if (!ctx.hasUI) {
               return;
             }
-            updateUsageStatus(usageStatusState, ctx, toolCallId, usage);
+            updateUsageStatus(usageStatusState, ctx, toolCallId, usage, telemetry);
           },
         }),
       );
@@ -608,11 +675,16 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.on("session_start", (_event, ctx) => {
       syncMaxConcurrentSubagents();
       rootState.sessionBindings.clear();
+      restoreAgentUsageForRendering(rootState, ctx);
       rootState.sessionKeyLocks = new SessionKeyLocks();
       usageStatusState.calls.clear();
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }
+    });
+
+    pi.on("session_tree", (_event, ctx) => {
+      restoreAgentUsageForRendering(rootState, ctx);
     });
 
     pi.on("before_agent_start", (event, ctx) => {

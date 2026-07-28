@@ -14,7 +14,7 @@ import {
   MAX_STDERR_CHARS,
   MAX_STDOUT_LINE_CHARS,
 } from "./stream.ts";
-import type { SubagentProfile, SubagentUsage, ThinkingLevel } from "../types.ts";
+import type { SubagentProfile, SubagentTelemetry, SubagentUsage, ThinkingLevel } from "../types.ts";
 
 const CODEX_COMMAND = "codex";
 const FORCE_KILL_DELAY_MS = 3000;
@@ -117,6 +117,14 @@ function calculateRegistryCodexCostUsd(
   return calculateModelCostUsd(pricingModel, usage);
 }
 
+function resolveCodexCostUsd(
+  model: string | undefined,
+  usage: CodexTokenUsage,
+  modelRegistry?: ModelRegistry,
+): number | undefined {
+  return calculateRegistryCodexCostUsd(model, usage, modelRegistry) ?? estimateCodexCostUsd(model, usage);
+}
+
 export function codexUsageToSubagentUsage(
   model: string | undefined,
   usage: CodexTokenUsage,
@@ -124,18 +132,32 @@ export function codexUsageToSubagentUsage(
 ): SubagentUsage {
   const totalInputTokens = Math.max(0, usage.inputTokens);
   const cachedInputTokens = Math.min(totalInputTokens, Math.max(0, usage.cachedInputTokens));
-  const uncachedInputTokens = totalInputTokens - cachedInputTokens;
-  const cost = calculateRegistryCodexCostUsd(model, usage, modelRegistry) ?? estimateCodexCostUsd(model, usage);
-  const promptTokens = uncachedInputTokens + cachedInputTokens;
+  const input = totalInputTokens - cachedInputTokens;
+  const output = Math.max(0, usage.outputTokens);
+  const reasoning = Math.min(output, Math.max(0, usage.reasoningOutputTokens));
+  const cost = resolveCodexCostUsd(model, usage, modelRegistry);
   return {
-    input: uncachedInputTokens,
-    output: Math.max(0, usage.outputTokens),
+    input,
+    output,
     cacheRead: cachedInputTokens,
     cacheWrite: 0,
-    cost: cost ?? 0,
-    costKnown: cost !== undefined,
-    costEstimated: cost !== undefined,
-    cacheHitRate: promptTokens > 0 ? (cachedInputTokens / promptTokens) * 100 : undefined,
+    ...(reasoning > 0 ? { reasoning } : {}),
+    totalTokens: input + output + cachedInputTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost ?? 0 },
+  };
+}
+
+function codexTelemetry(
+  model: string | undefined,
+  usage: CodexTokenUsage,
+  modelRegistry?: ModelRegistry,
+): SubagentTelemetry {
+  const costKnown = resolveCodexCostUsd(model, usage, modelRegistry) !== undefined;
+  return {
+    tokensKnown: true,
+    costKnown,
+    costBreakdownKnown: false,
+    costEstimated: costKnown,
   };
 }
 
@@ -393,15 +415,6 @@ export function codexActivityFromEvent(event: Record<string, unknown>): string |
   return error ? error : undefined;
 }
 
-function emptyUsage(model: string | undefined, modelRegistry: ModelRegistry | undefined): SubagentUsage {
-  return codexUsageToSubagentUsage(model, {
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    outputTokens: 0,
-    reasoningOutputTokens: 0,
-  }, modelRegistry);
-}
-
 function hasChildExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -456,7 +469,7 @@ export async function spawnCodexSubagent(params: {
   signal: AbortSignal | undefined;
   progressEnabled: boolean;
   onProgress: ((result: AgentToolResult) => void) | undefined;
-  onUsage: (usage: SubagentUsage) => void;
+  onUsage: (usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   appendInstructions?: string;
   sessionId?: string;
   persistSession?: boolean;
@@ -473,7 +486,8 @@ export async function spawnCodexSubagent(params: {
     onProgress: params.onProgress,
   });
   const progress = emitter.progress;
-  let latestUsage = emptyUsage(params.profile.model, params.ctx.modelRegistry);
+  let latestUsage: SubagentUsage | undefined;
+  let latestTelemetry: SubagentTelemetry | undefined;
   const usageTracker: CodexUsageTrackerState = { terminalUsageSeen: false };
   let resultText = "";
   let sessionId = params.sessionId?.trim() || undefined;
@@ -502,10 +516,9 @@ export async function spawnCodexSubagent(params: {
     const usage = extractCodexRunUsage(event, usageTracker);
     if (usage) {
       latestUsage = codexUsageToSubagentUsage(params.profile.model, usage, params.ctx.modelRegistry);
-      if (progress) {
-        progress.usage = latestUsage;
-      }
-      params.onUsage(latestUsage);
+      latestTelemetry = codexTelemetry(params.profile.model, usage, params.ctx.modelRegistry);
+      emitter.setUsage(latestUsage, latestTelemetry);
+      params.onUsage(latestUsage, latestTelemetry);
       emitter.emitSoon();
     }
     const text = extractCodexFinalText(event);
@@ -637,12 +650,12 @@ export async function spawnCodexSubagent(params: {
       throw new Error(diagnosticError ?? "codex exited without a terminal JSON event");
     }
 
-    params.onUsage(latestUsage);
+    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
     const result = resultText.trim() || "(no final text output)";
     if (progress) {
       progress.status = "done";
       progress.result = result;
-      progress.usage = latestUsage;
+      progress.telemetry = latestTelemetry;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${params.description}" (${subagentType}) completed:\n\n${result}`, {
@@ -651,21 +664,21 @@ export async function spawnCodexSubagent(params: {
       backend: params.profile.backend,
       status: "done",
       result,
-      usage: latestUsage,
+      telemetry: latestTelemetry,
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
-    });
+    }, latestUsage);
   } catch (error) {
     if (child && !hasChildExited(child)) {
       abortChild(child);
     }
     const message = error instanceof Error ? error.message : String(error);
     const status = params.signal?.aborted ? "aborted" : "error";
-    params.onUsage(latestUsage);
+    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
     if (progress) {
       progress.status = status;
       progress.error = message;
-      progress.usage = latestUsage;
+      progress.telemetry = latestTelemetry;
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
@@ -675,10 +688,10 @@ export async function spawnCodexSubagent(params: {
       backend: params.profile.backend,
       status,
       error: message,
-      usage: latestUsage,
+      telemetry: latestTelemetry,
       ...(sessionId ? { sessionId } : {}),
       ...(progress ? { progress } : {}),
-    });
+    }, latestUsage);
   } finally {
     emitter.stop();
     if (abortHandler) {

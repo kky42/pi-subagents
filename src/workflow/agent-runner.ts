@@ -2,7 +2,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { assertBindingMatchesProfile, SessionKeyLocks, type SessionKeyBinding } from "../core/session-key.ts";
 import { resolveProfileModel, usesPiBackend } from "../core/model.ts";
-import type { SubagentBackend, SubagentProfile, SubagentToolDetails, SubagentUsage } from "../types.ts";
+import type { SubagentBackend, SubagentProfile, SubagentTelemetry, SubagentToolDetails, SubagentUsage } from "../types.ts";
 import type { WorkflowAgentResultEvent, WorkflowAgentRunner } from "./types.ts";
 import { createStructuredOutputTool, STRUCTURED_OUTPUT_CONTRACT, WORKFLOW_PLAIN_TEXT_OUTPUT_NOTE, type StructuredOutputCapture } from "./structured-output.ts";
 
@@ -12,8 +12,8 @@ export interface WorkflowAgentRunnerOptions {
   thinkingLevel?: string;
   timeoutMs: number;
   allowedBackends?: readonly SubagentBackend[];
-  onUsage?: (index: number, usage: SubagentUsage) => void;
-  onProgress?: (index: number, details: SubagentToolDetails) => void;
+  onUsage?: (index: number, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
+  onProgress?: (index: number, details: SubagentToolDetails, usage?: SubagentUsage) => void;
   toolCallId?: string;
 }
 
@@ -63,8 +63,8 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
       signal,
       timeoutMs: options.timeoutMs,
       progressEnabled: Boolean(options.onProgress),
-      onProgress: (partial) => options.onProgress?.(index, partial.details as SubagentToolDetails),
-      onUsage: (usage) => options.onUsage?.(index, usage),
+      onProgress: (partial) => options.onProgress?.(index, partial.details as SubagentToolDetails, partial.usage),
+      onUsage: (usage, telemetry) => options.onUsage?.(index, usage, telemetry),
       excludeTools: CHILD_EXCLUDED_TOOLS,
       appendInstructions,
       customTools,
@@ -73,7 +73,7 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
       outputSchema: externalSchema ? call.schema : undefined,
     });
     const details = result.details as SubagentToolDetails;
-    options.onProgress?.(index, details);
+    options.onProgress?.(index, details, result.usage);
     if (call.sessionKey && details.sessionId) {
       call.sessionId = details.sessionId;
       bindings.set(call.sessionKey, { key: call.sessionKey, sessionId: details.sessionId, subagentType: call.subagentType, backend: profile.backend });

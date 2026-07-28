@@ -1,3 +1,4 @@
+import type { Usage } from "@earendil-works/pi-ai";
 import type { WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
@@ -55,6 +56,7 @@ export interface WorkflowAgentSnapshot {
   result?: string;
   error?: string;
   usage?: SubagentUsage;
+  telemetry?: SubagentTelemetry;
 }
 
 export interface WorkflowToolDetails {
@@ -75,23 +77,21 @@ export interface WorkflowToolDetails {
   cachedAgentCount?: number;
   result?: unknown;
   error?: string;
+  telemetry?: SubagentTelemetry & { missingUsageAgentCount?: number };
   /** Monotonic spinner frame, advanced by the runtime heartbeat while agents run. */
   frame?: number;
 }
 
-export interface SubagentUsage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  /** Dollar cost to include in aggregate status. Unknown external costs are represented as 0. */
-  cost: number;
-  /** False when an external backend did not expose cost and no local price table entry matched. */
-  costKnown?: boolean;
-  /** True when cost was estimated locally from token usage instead of reported by the backend. */
+/** Pi's standard tool/assistant usage shape. */
+export type SubagentUsage = Usage;
+
+/** Data-quality metadata that Pi's standard Usage type cannot represent. */
+export interface SubagentTelemetry {
+  tokensKnown: boolean;
+  costKnown: boolean;
+  costBreakdownKnown: boolean;
   costEstimated?: boolean;
-  /** Cache-read share across all prompt tokens represented by this cumulative usage snapshot. */
-  cacheHitRate?: number;
+  partial?: boolean;
 }
 
 export interface SubagentProgressNode {
@@ -106,7 +106,7 @@ export interface SubagentProgressNode {
   activityCount: number;
   result?: string;
   error?: string;
-  usage?: SubagentUsage;
+  telemetry?: SubagentTelemetry;
 }
 
 export interface SubagentToolDetails {
@@ -116,7 +116,7 @@ export interface SubagentToolDetails {
   status: SubagentRunStatus;
   result?: string;
   error?: string;
-  usage?: SubagentUsage;
+  telemetry?: SubagentTelemetry;
   /** Backend-native session/thread id used internally for session_key continuation. */
   sessionId?: string;
   progress?: SubagentProgressNode;

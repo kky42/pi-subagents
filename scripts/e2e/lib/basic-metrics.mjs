@@ -144,16 +144,13 @@ function unique(values) {
 
 function normalizeCost(usage, costStatus) {
   const hasBillableTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0;
-  if (hasBillableTokens && (!Number.isFinite(usage.cost) || usage.cost <= 0)) {
-    return {
-      ...usage,
-      cost: 0,
-      costKnown: false,
-      costEstimated: false,
-      costStatus: "unknown",
-    };
-  }
-  return { ...usage, costStatus };
+  const totalCost = asFiniteNumber(asRecord(usage.cost)?.total);
+  const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+  return {
+    ...usage,
+    cacheHitRate: promptTokens > 0 ? usage.cacheRead / promptTokens * 100 : undefined,
+    costStatus: hasBillableTokens && (!Number.isFinite(totalCost) || totalCost <= 0) ? "unknown" : costStatus,
+  };
 }
 
 function summarizeClaude(events) {
@@ -244,17 +241,14 @@ function summarizePi(events) {
       if (cost > 0) totals.sawPositiveCost = true;
     }
   }
-  const promptTokens = totals.input + totals.cacheRead + totals.cacheWrite;
   const usage = totals.sawUsage
     ? normalizeCost({
       input: totals.input,
       output: totals.output,
       cacheRead: totals.cacheRead,
       cacheWrite: totals.cacheWrite,
-      cost: totals.cost,
-      costKnown: totals.sawPositiveCost,
-      costEstimated: false,
-      cacheHitRate: promptTokens > 0 ? totals.cacheRead / promptTokens * 100 : undefined,
+      totalTokens: totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: totals.cost },
     }, "reported")
     : undefined;
   const observedModels = unique(assistantMessages.map((message) => {
@@ -300,7 +294,13 @@ export function summarizeProbe({ row, events, durationMs, processResult }) {
     : row.agent === "codex"
       ? summarizeCodex(row, events)
       : summarizePi(events);
-  const usageDisplay = backend.usage ? formatUsage(backend.usage) : "";
+  const usageDisplay = backend.usage
+    ? formatUsage(backend.usage, {
+      tokensKnown: true,
+      costKnown: backend.usage.costStatus !== "unknown",
+      costBreakdownKnown: false,
+    })
+    : "";
   const errors = [];
   const warnings = [];
 
@@ -340,7 +340,7 @@ export function summarizeProbe({ row, events, durationMs, processResult }) {
     ? "fail"
     : usage.costStatus === "unknown"
       ? row.costPolicy === "required" ? "fail" : "warn"
-      : usage.cost > 0 && usageDisplay.includes("$") ? "pass" : "fail";
+      : usage.cost.total > 0 && usageDisplay.includes("$") ? "pass" : "fail";
   const checks = {
     process: !processResult.timedOut && processResult.code === 0 ? "pass" : "fail",
     completion: backend.completed ? "pass" : "fail",
@@ -372,7 +372,7 @@ export function summarizeProbe({ row, events, durationMs, processResult }) {
       cacheWrite: usage.cacheWrite,
       totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
       cacheHitRate: usage.cacheHitRate,
-      costUsd: usage.cost,
+      costUsd: usage.cost.total,
       costStatus: usage.costStatus,
     } : undefined,
     usageDisplay,

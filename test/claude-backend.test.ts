@@ -108,22 +108,21 @@ describe("pi-subagent claude backend", () => {
       cacheRead: 200,
       cacheWrite: 300,
       output: 50,
-      cost: 0.123,
-      costKnown: true,
-      costEstimated: false,
+      totalTokens: 650,
+      cost: { total: 0.123 },
     });
     expect(claudeUsageToSubagentUsage({
       inputTokens: 100,
       cacheReadInputTokens: 0,
       cacheCreationInputTokens: 0,
       outputTokens: 50,
-    }, undefined)).toMatchObject({ cost: 0, costKnown: false });
+    }, undefined)).toMatchObject({ cost: { total: 0 } });
     expect(claudeUsageToSubagentUsage({
       inputTokens: 100,
       cacheReadInputTokens: 0,
       cacheCreationInputTokens: 0,
       outputTokens: 50,
-    }, 0)).toMatchObject({ cost: 0, costKnown: false });
+    }, 0)).toMatchObject({ cost: { total: 0 } });
     const resultEvent = {
       type: "result",
       total_cost_usd: 0.3,

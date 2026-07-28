@@ -172,7 +172,8 @@ describe("pi-subagent progress and status", () => {
     expect(result.details.progress?.status).toBe("aborted");
     expect(result.details.error).toContain("Subagent aborted before prompt start");
     expect(progressUpdates).toEqual([]);
-    expect(usageUpdates).toBe(1);
+    expect(usageUpdates).toBe(0);
+    expect(result).not.toHaveProperty("usage");
     expect(registration.getPendingResponseCount()).toBe(1);
 
     disposeSession(session);
@@ -356,9 +357,9 @@ describe("pi-subagent progress and status", () => {
     expect(result.details.progress?.id).toBe("root-progress-a");
     expect(result.details.progress?.description).toBe("Same audit");
     expect(result.details.progress?.backend).toBe("pi");
-    expect(result.details.usage?.input).toBeGreaterThan(0);
-    expect(result.details.usage?.output).toBeGreaterThan(0);
-    expect(result.details.progress?.usage).toEqual(result.details.usage);
+    expect(result.usage?.input).toBeGreaterThan(0);
+    expect(result.usage?.output).toBeGreaterThan(0);
+    expect(result.details.progress).not.toHaveProperty("usage");
 
     disposeSession(session);
   });
@@ -402,11 +403,10 @@ describe("pi-subagent progress and status", () => {
 
     const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
     const usage = {
-      input: first.details.usage.input + second.details.usage.input,
-      output: first.details.usage.output + second.details.usage.output,
-      cacheRead: first.details.usage.cacheRead + second.details.usage.cacheRead,
-      cacheWrite: first.details.usage.cacheWrite + second.details.usage.cacheWrite,
-      cost: first.details.usage.cost + second.details.usage.cost,
+      input: first.usage.input + second.usage.input,
+      output: first.usage.output + second.usage.output,
+      cacheRead: first.usage.cacheRead + second.usage.cacheRead,
+      cacheWrite: first.usage.cacheWrite + second.usage.cacheWrite,
       cacheHitRate: undefined as number | undefined,
     };
     const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;

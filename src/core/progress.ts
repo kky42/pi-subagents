@@ -2,6 +2,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type {
   SubagentBackend,
   SubagentProgressNode,
+  SubagentTelemetry,
   SubagentToolDetails,
   SubagentType,
   SubagentUsage,
@@ -11,11 +12,17 @@ export const MAX_ACTIVITY_LINES = 2;
 export const PROGRESS_UPDATE_INTERVAL_MS = 250;
 export const PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
 
-export function textResult(text: string, details: SubagentToolDetails) {
-  return {
-    content: [{ type: "text" as const, text }],
+export function textResult(text: string, details: SubagentToolDetails, usage?: SubagentUsage) {
+  const result: {
+    content: [{ type: "text"; text: string }];
+    details: SubagentToolDetails;
+    usage?: SubagentUsage;
+  } = {
+    content: [{ type: "text", text }],
     details,
   };
+  if (usage) result.usage = usage;
+  return result;
 }
 
 export type AgentToolResult = ReturnType<typeof textResult>;
@@ -161,6 +168,8 @@ export interface ProgressEmitter {
   addActivity(line: string): void;
   /** Replace the latest activity line (no-op when disabled). */
   replaceLatestActivity(line: string): void;
+  /** Update the standard usage carried by subsequent progress results. */
+  setUsage(usage: SubagentUsage, telemetry: SubagentTelemetry): void;
   /** Emit a progress snapshot immediately, resetting the throttle window. */
   emit(): void;
   /** Emit a progress snapshot, throttled to PROGRESS_UPDATE_INTERVAL_MS. */
@@ -187,6 +196,7 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
   let lastProgressEmit = 0;
   let pendingProgressTimer: ReturnType<typeof setTimeout> | undefined;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let latestUsage: SubagentUsage | undefined;
 
   const emit = (): void => {
     if (!progress || !onProgress) {
@@ -205,8 +215,9 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
         status: progress.status,
         result: progress.result,
         error: progress.error,
+        telemetry: progress.telemetry,
         progress,
-      }),
+      }, latestUsage),
     );
   };
 
@@ -259,6 +270,10 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
       if (progress) {
         replaceLatestActivity(progress, line);
       }
+    },
+    setUsage: (usage, telemetry) => {
+      latestUsage = usage;
+      if (progress) progress.telemetry = telemetry;
     },
     emit,
     emitSoon,
@@ -326,16 +341,26 @@ export function getSubagentUsage(session: {
     tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
     cost: number;
   };
+  messages?: readonly unknown[];
 }): SubagentUsage {
   const stats = session.getSessionStats();
-  const promptTokens = stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite;
+  let reasoning = 0;
+  let reasoningReported = false;
+  for (const raw of session.messages ?? []) {
+    const message = raw as { role?: string; usage?: { reasoning?: number } };
+    if (message.role === "assistant" && typeof message.usage?.reasoning === "number") {
+      reasoning += message.usage.reasoning;
+      reasoningReported = true;
+    }
+  }
+  const totalTokens = stats.tokens.input + stats.tokens.output + stats.tokens.cacheRead + stats.tokens.cacheWrite;
   return {
     input: stats.tokens.input,
     output: stats.tokens.output,
     cacheRead: stats.tokens.cacheRead,
     cacheWrite: stats.tokens.cacheWrite,
-    cost: stats.cost,
-    costKnown: true,
-    cacheHitRate: promptTokens > 0 ? (stats.tokens.cacheRead / promptTokens) * 100 : undefined,
+    ...(reasoningReported ? { reasoning } : {}),
+    totalTokens,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: stats.cost },
   };
 }

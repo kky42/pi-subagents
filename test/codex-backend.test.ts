@@ -115,8 +115,13 @@ describe("pi-subagent codex backend", () => {
       input: 800,
       cacheRead: 200,
       output: 50,
-      cost: 0,
-      costKnown: false,
+      totalTokens: 1050,
+      cost: { total: 0 },
+    });
+    expect(codexUsageToSubagentUsage("unknown-model", { ...usage, reasoningOutputTokens: 100 })).toMatchObject({
+      output: 50,
+      reasoning: 50,
+      totalTokens: 1050,
     });
   });
 
@@ -335,11 +340,11 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
     });
 
     expect(result.details.status).toBe("done");
-    expect(result.details.usage).toMatchObject({
+    expect(result.usage).toMatchObject({
       input: 200,
       cacheRead: 300,
       output: 30,
-      cacheHitRate: 60,
+      totalTokens: 530,
     });
   });
 
@@ -476,14 +481,14 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
       }),
     );
 
-    expect(result.details.usage).toMatchObject({
+    expect(result.usage).toMatchObject({
       input: 271_801,
       cacheRead: 200,
       output: 50,
-      cost: expect.closeTo(2.72046),
-      costKnown: true,
-      costEstimated: true,
+      totalTokens: 272_051,
+      cost: { total: expect.closeTo(2.72046) },
     });
+    expect(result.details.telemetry).toMatchObject({ costKnown: true, costEstimated: true });
     const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
     expect(final).toContain("$2.720");
     expect(final).not.toContain("$?");
@@ -533,13 +538,14 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
       }),
     );
 
-    expect(result.details.usage).toMatchObject({
+    expect(result.usage).toMatchObject({
       input: 800,
       cacheRead: 200,
       output: 50,
-      cost: 0,
-      costKnown: false,
+      totalTokens: 1050,
+      cost: { total: 0 },
     });
+    expect(result.details.telemetry).toMatchObject({ costKnown: false });
     const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
     expect(final).toContain("pi-flow ↑800 ↓50 R200");
     expect(final).toContain("$?");

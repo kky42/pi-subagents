@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, TruncatedText } from "@earendil-works/pi-tui";
 import { getBackendAgentLabel } from "./display.ts";
 import { SPINNER_FRAMES } from "./spinner.ts";
-import type { SubagentBackend, SubagentRunStatus, SubagentUsage } from "../types.ts";
+import type { SubagentBackend, SubagentRunStatus, SubagentTelemetry, SubagentUsage } from "../types.ts";
 export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
 
 const ACTIVITY_DISPLAY_PREVIEW_CHARS = 120;
@@ -21,6 +21,7 @@ export interface RenderableSubagentNode {
   result?: string;
   error?: string;
   usage?: SubagentUsage;
+  telemetry?: SubagentTelemetry;
 }
 
 export function isActiveSubagentStatus(status: SubagentRunStatus): boolean {
@@ -62,7 +63,7 @@ export function formatTokens(count: number): string {
   return `${Math.round(count / 1000000)}M`;
 }
 
-export function formatUsage(usage: SubagentUsage): string {
+export function formatUsage(usage: SubagentUsage, telemetry?: SubagentTelemetry): string {
   const parts = [`↑${formatTokens(usage.input)}`, `↓${formatTokens(usage.output)}`];
   if (usage.cacheRead) {
     parts.push(`R${formatTokens(usage.cacheRead)}`);
@@ -74,9 +75,9 @@ export function formatUsage(usage: SubagentUsage): string {
   if (promptTokens > 0) {
     parts.push(`CH${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`);
   }
-  if (usage.cost) {
-    parts.push(`$${usage.cost.toFixed(3)}${usage.costKnown === false ? "+?" : ""}`);
-  } else if (usage.costKnown === false) {
+  if (usage.cost.total) {
+    parts.push(`$${usage.cost.total.toFixed(3)}${telemetry?.costKnown === false ? "+?" : ""}`);
+  } else if (telemetry?.costKnown === false) {
     parts.push("$?");
   }
   return parts.join(" ");
@@ -130,7 +131,7 @@ function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number): strin
     parts.push("queued");
   }
   if (node.usage) {
-    const usage = formatUsage(node.usage);
+    const usage = formatUsage(node.usage, node.telemetry);
     if (usage) {
       parts.push(usage);
     }

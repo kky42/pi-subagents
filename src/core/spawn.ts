@@ -19,7 +19,7 @@ import {
 } from "./progress.ts";
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
-import type { SubagentProfile, SubagentToolDetails, SubagentUsage } from "../types.ts";
+import type { SubagentProfile, SubagentTelemetry, SubagentToolDetails, SubagentUsage } from "../types.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
 
 /**
@@ -36,16 +36,35 @@ export function incrementalPiUsage(current: SubagentUsage, baseline: SubagentUsa
   const output = Math.max(0, current.output - baseline.output);
   const cacheRead = Math.max(0, current.cacheRead - baseline.cacheRead);
   const cacheWrite = Math.max(0, current.cacheWrite - baseline.cacheWrite);
-  const promptTokens = input + cacheRead + cacheWrite;
+  const reasoning = Math.max(0, (current.reasoning ?? 0) - (baseline.reasoning ?? 0));
   return {
     input,
     output,
     cacheRead,
     cacheWrite,
-    cost: Math.max(0, current.cost - baseline.cost),
-    costKnown: current.costKnown,
-    cacheHitRate: promptTokens > 0 ? (cacheRead / promptTokens) * 100 : undefined,
+    ...(current.reasoning !== undefined ? { reasoning } : {}),
+    totalTokens: input + output + cacheRead + cacheWrite,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: Math.max(0, current.cost.total - baseline.cost.total),
+    },
   };
+}
+
+function piTelemetry(usage: SubagentUsage): SubagentTelemetry {
+  return {
+    tokensKnown: usage.totalTokens > 0,
+    costKnown: usage.cost.total > 0,
+    costBreakdownKnown: false,
+    costEstimated: false,
+  };
+}
+
+function hasPiUsage(usage: SubagentUsage): boolean {
+  return usage.totalTokens > 0 || usage.cost.total > 0;
 }
 
 interface PiSubagentSessionResolution {
@@ -102,7 +121,7 @@ export interface SpawnSubagentParams {
   timeoutMs: number;
   progressEnabled: boolean;
   onProgress: ((result: AgentToolResult) => void) | undefined;
-  onUsage: (usage: SubagentUsage) => void;
+  onUsage: (usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   /** Tools (and the extensions that provide them) to keep out of the child session. Defaults to {@link CHILD_EXCLUDED_TOOLS}. */
   excludeTools?: readonly string[];
   /** Text appended after the task prompt (e.g. a structured-output contract). */
@@ -129,7 +148,7 @@ function rewriteTimeoutResult(
     subagentType: params.profile.name,
     backend: params.profile.backend,
     status: "aborted",
-  });
+  }, result.usage);
 }
 
 export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentToolResult> {
@@ -300,10 +319,11 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
     }
     if (event.type === "message_end" && event.message.role === "assistant") {
       const usage = getCallUsage();
-      if (progress) {
-        progress.usage = usage;
+      const telemetry = piTelemetry(usage);
+      if (hasPiUsage(usage)) {
+        emitter.setUsage(usage, telemetry);
+        onUsage(usage, telemetry);
       }
-      onUsage(usage);
     }
   });
 
@@ -336,11 +356,12 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
     }
     const result = extractFinalAssistantText(session.messages) || "(no final text output)";
     const usage = getCallUsage();
-    onUsage(usage);
+    const telemetry = piTelemetry(usage);
+    if (hasPiUsage(usage)) onUsage(usage, telemetry);
     if (progress) {
       progress.status = "done";
       progress.result = result;
-      progress.usage = usage;
+      progress.telemetry = telemetry;
       progress.endedAt = Date.now();
     }
     return textResult(`Subagent "${description}" (${subagentType}) completed:\n\n${result}`, {
@@ -349,19 +370,20 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       backend: profile.backend,
       status: "done",
       result,
-      usage,
+      telemetry,
       ...(childSession.sessionId ? { sessionId: childSession.sessionId } : {}),
       ...(progress ? { progress } : {}),
-    });
+    }, hasPiUsage(usage) ? usage : undefined);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = signal?.aborted ? "aborted" : "error";
     const usage = getCallUsage();
-    onUsage(usage);
+    const telemetry = piTelemetry(usage);
+    if (hasPiUsage(usage)) onUsage(usage, telemetry);
     if (progress) {
       progress.status = status;
       progress.error = message;
-      progress.usage = usage;
+      progress.telemetry = telemetry;
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
@@ -371,10 +393,10 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       backend: profile.backend,
       status,
       error: message,
-      usage,
+      telemetry,
       ...(childSession.sessionId ? { sessionId: childSession.sessionId } : {}),
       ...(progress ? { progress } : {}),
-    });
+    }, hasPiUsage(usage) ? usage : undefined);
   } finally {
     emitter.stop();
     unsubscribe?.();

@@ -42,19 +42,30 @@ export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOpti
     : undefined;
   const model = configuredModel ?? (await modelRegistry.getAvailable())[0];
   const ctx = { cwd: options.cwd, modelRegistry, model } as ExtensionContext;
-  const usage: HeadlessUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, childAgents: 0 };
+  const usage: HeadlessUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    childAgents: 0,
+  };
   const agentUsage = new Map<number, SubagentUsage>();
   const updateUsage = (index: number, next: SubagentUsage) => {
     agentUsage.set(index, next);
-    for (const key of ["input", "output", "cacheRead", "cacheWrite", "cost"] as const) {
-      usage[key] = [...agentUsage.values()].reduce((sum, item) => sum + (item[key] ?? 0), 0);
-    }
     const values = [...agentUsage.values()];
-    usage.costKnown = values.every((item) => item.costKnown !== false);
-    usage.costEstimated = values.some((item) => item.costEstimated === true);
-    const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-    usage.cacheHitRate = promptTokens > 0 ? (usage.cacheRead / promptTokens) * 100 : undefined;
-    options.onUsage?.({ ...usage });
+    for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+      usage[key] = values.reduce((sum, item) => sum + item[key], 0);
+    }
+    usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+      usage.cost[key] = values.reduce((sum, item) => sum + item.cost[key], 0);
+    }
+    const reasoning = values.filter((item) => item.reasoning !== undefined);
+    if (reasoning.length > 0) usage.reasoning = reasoning.reduce((sum, item) => sum + (item.reasoning ?? 0), 0);
+    else delete usage.reasoning;
+    options.onUsage?.({ ...usage, cost: { ...usage.cost } });
   };
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
