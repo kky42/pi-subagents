@@ -76,6 +76,32 @@ describe("pi-subagent workflow integration", () => {
       disposeSession(session);
     });
 
+    it("rejects invalid schemas before starting any workflow subagent", async () => {
+      const { session, registration, model, modelRegistry } = await createSession();
+      const tool = session.getToolDefinition("workflow") as any;
+      registration.setResponses([fauxAssistantMessage("must remain unused")]);
+
+      const script = `export const meta = { name: 'invalid_schema', description: 'preflight invalid schemas' };
+const schema = { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } };
+await agent('first', { label: 'first' });
+return await agent('second', { label: 'second', schema });`;
+      const result = await tool.execute(
+        "wf-invalid-schema",
+        { script },
+        undefined,
+        undefined,
+        makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      );
+
+      expect(result.details.status).toBe("error");
+      expect(result.details.agentCount).toBe(0);
+      expect(result.content[0].text).toContain("no subagents were started");
+      expect(result.content[0].text).toMatch(/schema preflight.*additionalProperties/i);
+      expect(registration.getPendingResponseCount()).toBe(1);
+
+      disposeSession(session);
+    });
+
     it("continues a pi workflow subagent when agent() reuses session_key", async () => {
       const { session, registration, model, modelRegistry } = await createSession();
       const tool = session.getToolDefinition("workflow") as any;
@@ -321,7 +347,7 @@ return [a, b];`;
       const script = `export const meta = { name: 'solve', description: 'solve a task' };
 return await agent('compute the answer', {
   label: 'solver',
-  schema: { type: 'object', properties: { answer: { type: 'string' }, confidence: { type: 'number' } }, required: ['answer'] },
+  schema: { type: 'object', additionalProperties: false, properties: { answer: { type: 'string' }, confidence: { type: 'number' } }, required: ['answer', 'confidence'] },
 });`;
       const result = await tool.execute(
         "wf-struct",
@@ -368,7 +394,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 return await agent('compute the answer', {
   label: 'solver',
   subagent_type: 'claude-struct',
-  schema: { type: 'object', properties: { answer: { type: 'string' }, confidence: { type: 'number' } }, required: ['answer'] },
+  schema: { type: 'object', additionalProperties: false, properties: { answer: { type: 'string' }, confidence: { type: 'number' } }, required: ['answer', 'confidence'] },
 });`;
       const result = await tool.execute(
         "wf-claude-struct",

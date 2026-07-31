@@ -199,7 +199,7 @@ export async function prepareWorkflowToolSource(
     plannedPhases = parsed.meta.phases?.map((phase) => ({ ...phase }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return sourceError(`Workflow script is invalid: ${message}`, {
+    return sourceError(`Workflow script is invalid; no subagents were started: ${message}`, {
       name: metaName,
       error: message,
       logs: source.warnings,

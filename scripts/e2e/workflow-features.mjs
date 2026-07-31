@@ -118,7 +118,7 @@ const analyzed = await parallel(targets.map(function (f) {
     return agent("Read the file " + f + " in this repository and analyze it. Report the file path and the number of exported symbols.", {
       label: "analyze:" + f,
       phase: "collect",
-      schema: { type: "object", required: ["file", "exportCount"], properties: { file: { type: "string" }, exportCount: { type: "number" } } }
+      schema: { type: "object", additionalProperties: false, required: ["file", "exportCount"], properties: { file: { type: "string" }, exportCount: { type: "number" } } }
     });
   };
 }));
@@ -165,7 +165,7 @@ const flags = await parallel(files.map(function (f) {
   return function () {
     return agent("Does the file " + f + " import the 'kleur' package? Answer strictly from its source.", {
       label: "flag:" + f,
-      schema: { type: "object", required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
+      schema: { type: "object", additionalProperties: false, required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
     });
   };
 }));
@@ -184,7 +184,7 @@ const flags = await parallel(files.map(function (f) {
   return function () {
     return agent("Does " + f + " import the 'kleur' package? Answer strictly from its source.", {
       label: "scan:" + f,
-      schema: { type: "object", required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
+      schema: { type: "object", additionalProperties: false, required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
     });
   };
 }));
@@ -202,7 +202,7 @@ const ROUTE_PROBE = `export const meta = { name: "route_probe", description: "Cl
 const target = args.file;
 const c = await agent("Classify " + target + " as exactly one of: entry (a CLI entry point, e.g. reads process.argv or is declared as a bin), lib (an imported helper module), or test (a test file). Judge strictly from its source and role.", {
   label: "classify",
-  schema: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } }
+  schema: { type: "object", additionalProperties: false, required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } }
 });
 let follow;
 if (c && c.kind === "entry") follow = await agent("List the command-line argument(s) " + target + " reads. Plain text only.", { label: "route:entry" });

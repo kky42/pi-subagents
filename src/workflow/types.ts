@@ -23,7 +23,7 @@ export interface WorkflowAgentCall {
   sessionKey?: string;
   /** Backend-native session/thread id captured for workflow replay bookkeeping. */
   sessionId?: string;
-  /** JSON Schema for structured output from the child subagent. */
+  /** Portable strict JSON Schema for structured output from the child subagent. */
   schema?: unknown;
 }
 

@@ -80,7 +80,47 @@ describe("parseWorkflowScript", () => {
   });
 
   it("allows Date as a deterministic data field name", () => {
-    expect(() => parseWorkflowScript(`${META}const schema = { type: 'object', properties: { Date: { type: 'string' } } };\nreturn await agent('x', { schema });`)).not.toThrow();
+    expect(() => parseWorkflowScript(`${META}const schema = { type: 'object', additionalProperties: false, required: ['Date'], properties: { Date: { type: 'string' } } };\nreturn await agent('x', { schema });`)).not.toThrow();
+  });
+
+  it("preflights static structured output schemas", () => {
+    const valid = `${META}const schema = {
+  type: 'object', additionalProperties: false, required: ['items'], properties: {
+    items: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string' } } } }
+  }
+};\nreturn await agent('x', { schema });`;
+    expect(() => parseWorkflowScript(valid)).not.toThrow();
+
+    const missingAdditionalProperties = `${META}const schema = { type: 'object', required: ['name'], properties: { name: { type: 'string' } } };\nreturn await agent('x', { schema });`;
+    expect(() => parseWorkflowScript(missingAdditionalProperties)).toThrow(/preflight.*\$\.additionalProperties.*must be false/i);
+
+    const missingRequiredProperty = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string' }, note: { type: ['string', 'null'] } } } });`;
+    expect(() => parseWorkflowScript(missingRequiredProperty)).toThrow(/\$\.required.*missing: note/i);
+
+    const invalidNestedObject = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['item'], properties: { item: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } } });`;
+    expect(() => parseWorkflowScript(invalidNestedObject)).toThrow(/\$\.properties\.item\.additionalProperties.*must be false/i);
+
+    const dataNamedProperties = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['properties', 'metadata'], properties: { properties: { type: 'string' }, metadata: { type: 'object', additionalProperties: false, required: ['value'], properties: { value: { type: 'string', enum: [{ type: 'object' }] } } } } } });`;
+    expect(() => parseWorkflowScript(dataNamedProperties)).not.toThrow();
+
+    const invalidPropertySchema = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: 42 } } });`;
+    expect(() => parseWorkflowScript(invalidPropertySchema)).toThrow(/properties\.answer.*schema object/i);
+
+    const invalidType = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: { type: 'wat' } } } });`;
+    expect(() => parseWorkflowScript(invalidType)).toThrow(/properties\.answer\.type.*valid JSON Schema type/i);
+
+    const allOfAtRoot = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, allOf: [{ type: 'object' }] } });`;
+    expect(() => parseWorkflowScript(allOfAtRoot)).toThrow(/\$\.allOf.*allOf is not supported/i);
+
+    const oneOfAtRoot = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, oneOf: [{ type: 'object', additionalProperties: false, required: [], properties: {} }] } });`;
+    expect(() => parseWorkflowScript(oneOfAtRoot)).toThrow(/\$\.oneOf.*oneOf is not supported/i);
+
+    const allOfNested = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['item'], properties: { item: { type: 'object', additionalProperties: false, required: ['val'], properties: { val: { type: 'string' } }, allOf: [] } } } });`;
+    expect(() => parseWorkflowScript(allOfNested)).toThrow(/\$\.properties\.item\.allOf.*allOf is not supported/i);
+  });
+
+  it("requires schemas to be statically available during preflight", () => {
+    expect(() => parseWorkflowScript(`${META}return await agent('x', { schema: args.schema });`)).toThrow(/static object literal|top-level const/i);
   });
 
   it("rejects non-literal meta", () => {
@@ -100,6 +140,44 @@ describe("runWorkflow", () => {
     expect(result.result).toBe("hello");
     expect(result.meta.name).toBe("wf");
     expect(result.agentCount).toBe(1);
+  });
+
+  it("rejects invalid schemas before launching any agent", async () => {
+    let calls = 0;
+    const runAgent: WorkflowAgentRunner = async () => {
+      calls += 1;
+      return {};
+    };
+    await expect(
+      runWorkflow(`${META}await agent('first');
+return await agent('second', { schema: { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } } });`, {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(4),
+        runAgent,
+      }),
+    ).rejects.toThrow(/schema preflight.*additionalProperties/i);
+    expect(calls).toBe(0);
+  });
+
+  it("validates dynamic schema options before launching the requested agent", async () => {
+    let calls = 0;
+    const runAgent: WorkflowAgentRunner = async () => {
+      calls += 1;
+      return {};
+    };
+    await expect(
+      runWorkflow(`${META}return await agent('x', args.options);`, {
+        args: {
+          options: {
+            schema: { type: "object", required: ["answer"], properties: { answer: { type: "string" } } },
+          },
+        },
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(4),
+        runAgent,
+      }),
+    ).rejects.toThrow(/schema validation failed.*additionalProperties/i);
+    expect(calls).toBe(0);
   });
 
   it("requires at least one agent call", async () => {
