@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AuthStorage,
@@ -7,54 +7,54 @@ import {
   ModelRegistry,
   SessionManager,
   SettingsManager,
-  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxProvider, type Context, type Model } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+import { getSubagentProfiles } from "../src/profiles.ts";
 import {
-  fauxAssistantMessage,
-  fauxProvider,
-  fauxToolCall,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
-import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles, loadBuiltinSubagentProfiles } from "../src/profiles.ts";
-import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
-import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
+  AGENT_USE_POLICY,
+  DIRECT_WORK_POLICY,
+  WORKFLOW_USE_POLICY,
+} from "../src/prompts.ts";
 import { installFauxProvider, packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
+function occurrenceCount(text: string, value: string): number {
+  return text.split(value).length - 1;
+}
+
 describe("pi-subagent agent contract", () => {
-  let tempDir = "";
   let cwd = "";
   let agentDir = "";
-  let originalPathEnv: string | undefined;
   let registrations: Array<{ unregister: () => void }> = [];
 
-  const {
-    trackSession,
-    disposeSession,
-    createSession,
-    delegateOnce,
-    makeMockTheme,
-    stripAnsi,
-    renderToText,
-    formatTestTokens,
-    makeExecutionContext,
-    getToolNames,
-  } = setupPiSubagentTestHarness((state) => {
-    tempDir = state.tempDir;
+  const { trackSession, disposeSession, createSession } = setupPiSubagentTestHarness((state) => {
     cwd = state.cwd;
     agentDir = state.agentDir;
-    originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
-  it("registers the Claude-style Agent tool contract", async () => {
+
+  async function captureRootPrompt(activeTools: string[], systemPrompt?: string): Promise<string> {
+    const { session, registration } = await createSession({ systemPrompt });
+    let rootContext: Context | undefined;
+    session.setActiveToolsByName(activeTools);
+    registration.setResponses([
+      (context) => {
+        rootContext = context;
+        return fauxAssistantMessage("noted");
+      },
+    ]);
+
+    await session.prompt("Just say noted.");
+    disposeSession(session);
+    return rootContext?.systemPrompt ?? "";
+  }
+
+  it("registers the Claude-style Agent tool contract without profile-specific guidance", async () => {
     const { session } = await createSession();
 
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
     expect(tool).toBeDefined();
-    const properties = (tool?.parameters as { properties: Record<string, unknown> } | undefined)?.properties;
+    const properties = (tool?.parameters as { properties: Record<string, { description?: string }> } | undefined)?.properties;
     expect(properties).toHaveProperty("description");
     expect(properties).toHaveProperty("prompt");
     expect(properties).toHaveProperty("subagent_type");
@@ -65,15 +65,15 @@ describe("pi-subagent agent contract", () => {
     expect(properties).not.toHaveProperty("thinking");
     expect(properties).not.toHaveProperty("timeout");
     expect(properties).not.toHaveProperty("subagentTimeoutMs");
-    expect(tool?.description).toContain("Available agents");
-    expect(tool?.promptGuidelines).toContain(
-      "Reach for Agent when the task matches an available agent, when you have independent work to run in parallel, or when answering would mean reading across several files.",
-    );
+    expect(properties?.subagent_type.description).toMatch(/available profiles/i);
+    expect(properties?.subagent_type.description).not.toContain("Defaults to");
+    expect(properties?.session_key.description).toContain("same logical child");
+    expect(tool?.promptGuidelines).toContain(AGENT_USE_POLICY);
 
     disposeSession(session);
   });
 
-  it("marks description and prompt required, subagent_type/session_key optional, and adds no tag/label fields", async () => {
+  it("marks description and prompt required while keeping routing fields optional", async () => {
     const { session } = await createSession();
 
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
@@ -110,64 +110,81 @@ describe("pi-subagent agent contract", () => {
     expect(extensions.extensions[0]?.flags.has("subagent-timeout-ms")).toBe(true);
   });
 
+  it("injects one profile roster and the approved routing boundary", async () => {
+    const prompt = await captureRootPrompt(["Agent", "workflow"]);
+    const profiles = getSubagentProfiles(agentDir);
 
-  it("injects the coordinator prompt into the root agent's system prompt", async () => {
-    const { session, registration } = await createSession();
-    let rootContext: Context | undefined;
-
-    registration.setResponses([
-      (context) => {
-        rootContext = context;
-        return fauxAssistantMessage("noted");
-      },
-    ]);
-
-    await session.prompt("Just say noted.");
-
-    expect(rootContext?.systemPrompt).toContain("Subagent Delegation");
-    expect(rootContext?.systemPrompt).toContain("Pi-backed subagents do not receive Agent");
-    expect(rootContext?.systemPrompt).toContain("Root-level parallel delegation is bounded");
-    expect(rootContext?.systemPrompt).not.toContain("max concurrency 4");
-    expect(rootContext?.systemPrompt).toContain("Available agents");
-    expect(rootContext?.systemPrompt).toContain("general-purpose: General-purpose agent for researching complex questions");
-    expect(rootContext?.systemPrompt).not.toContain("explorer: Fast read-only search agent");
-    expect(rootContext?.systemPrompt).toContain("Reach for Agent when the task matches an available agent");
-    expect(rootContext?.systemPrompt).toContain('User asks "explore this repo"');
-    expect(rootContext?.systemPrompt).toContain('subagent_type "general-purpose"');
-    expect(rootContext?.systemPrompt).toContain("single-fact lookup");
-    expect(rootContext?.systemPrompt).toContain("Once you delegate a search");
-
-    disposeSession(session);
+    expect(prompt).toContain("# Subagent Delegation");
+    expect(prompt).toContain(`- ${DIRECT_WORK_POLICY}`);
+    expect(prompt).toContain(`- ${AGENT_USE_POLICY}`);
+    expect(prompt).toContain(`- ${WORKFLOW_USE_POLICY}`);
+    expect(prompt).toContain("## Agent");
+    expect(prompt).toContain("## Workflow");
+    expect(prompt).toContain("same logical child stream");
+    expect(prompt).toContain("independent work, including parallel branches, stays fresh");
+    expect(prompt).toContain("schema supplied through dynamic options is validated immediately before that child launches");
+    expect(prompt).toContain("filename need not match `meta.name`");
+    expect(prompt).not.toContain("use a filename that exactly matches");
+    expect(prompt).not.toContain("Schemas must be static");
+    expect(occurrenceCount(prompt, "Available agents:")).toBe(1);
+    for (const profile of profiles.values()) {
+      expect(occurrenceCount(prompt, `- ${profile.name}: ${profile.description}`)).toBe(1);
+    }
   });
 
-  it("advertises saved workflows in the root system prompt", async () => {
+  it("retains detailed guidance with a custom base system prompt", async () => {
+    const customPrompt = "CUSTOM_SYSTEM_PROMPT_SENTINEL";
+    const prompt = await captureRootPrompt(["Agent", "workflow"], customPrompt);
+
+    expect(prompt.startsWith(customPrompt)).toBe(true);
+    expect(prompt).toContain("# Subagent Delegation");
+    expect(prompt).toContain("## Agent");
+    expect(prompt).toContain("## Workflow");
+    expect(prompt).toContain("schema supplied through dynamic options");
+  });
+
+  it("appends detailed guidance only for active pi-flow tools", async () => {
+    const both = await captureRootPrompt(["Agent", "workflow"]);
+    expect(both).toContain("## Agent");
+    expect(both).toContain("## Workflow");
+
+    const agentOnly = await captureRootPrompt(["Agent"]);
+    expect(agentOnly).toContain("## Agent");
+    expect(agentOnly).not.toContain("## Workflow");
+    expect(agentOnly).toContain(AGENT_USE_POLICY);
+    expect(agentOnly).not.toContain(WORKFLOW_USE_POLICY);
+
+    const workflowOnly = await captureRootPrompt(["workflow"]);
+    expect(workflowOnly).not.toContain("## Agent");
+    expect(workflowOnly).toContain("## Workflow");
+    expect(workflowOnly).not.toContain(AGENT_USE_POLICY);
+    expect(workflowOnly).toContain(WORKFLOW_USE_POLICY);
+
+    const neither = await captureRootPrompt([]);
+    expect(neither).not.toContain("# Subagent Delegation");
+    expect(neither).not.toContain(AGENT_USE_POLICY);
+    expect(neither).not.toContain(WORKFLOW_USE_POLICY);
+  });
+
+  it("advertises saved workflows only while workflow is active", async () => {
+    const workflowName = "saved_contract_probe";
+    const description = "Summarize generated fixture findings.";
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(
-      join(agentDir, "workflows", "audit.js"),
-      `export const meta = { name: 'audit-todos', description: 'Find TODOs and summarize debt. Use before cleanup planning.' };\nreturn await agent('audit');`,
+      join(agentDir, "workflows", "different-file-name.js"),
+      `export const meta = { name: '${workflowName}', description: '${description}' };\nreturn await agent('summarize');`,
     );
 
-    const { session, registration } = await createSession();
-    let rootContext: Context | undefined;
+    const workflowPrompt = await captureRootPrompt(["workflow"]);
+    expect(workflowPrompt).toContain("Saved workflows:");
+    expect(workflowPrompt).toContain(`- ${workflowName}: ${description}`);
 
-    registration.setResponses([
-      (context) => {
-        rootContext = context;
-        return fauxAssistantMessage("noted");
-      },
-    ]);
-
-    await session.prompt("Can you clean up technical debt?");
-
-    expect(rootContext?.systemPrompt).toContain("Saved workflows");
-    expect(rootContext?.systemPrompt).toContain("audit-todos: Find TODOs and summarize debt. Use before cleanup planning.");
-    expect(rootContext?.systemPrompt).toContain("Use `{ name: 'saved-workflow-name', args }`");
-
-    disposeSession(session);
+    const agentPrompt = await captureRootPrompt(["Agent"]);
+    expect(agentPrompt).not.toContain("Saved workflows:");
+    expect(agentPrompt).not.toContain(workflowName);
   });
 
-
-  it("registers the Agent tool when loaded via additionalExtensionPaths", async () => {
+  it("registers Agent when loaded through additionalExtensionPaths", async () => {
     const faux = fauxProvider({
       models: [{ id: "faux-thinker", name: "Faux Thinker", reasoning: true }],
     });
@@ -208,12 +225,8 @@ describe("pi-subagent agent contract", () => {
 
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
     expect(tool).toBeDefined();
-    expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty(
-      "subagent_type",
-    );
-    expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty(
-      "session_key",
-    );
+    expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty("subagent_type");
+    expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty("session_key");
 
     disposeSession(session);
   });

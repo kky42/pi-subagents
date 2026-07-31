@@ -12,8 +12,7 @@ import { Type, type Static } from "typebox";
 import {
   AGENT_PROMPT_GUIDELINES,
   AGENT_PROMPT_SNIPPET,
-  buildCoordinatorPrompt,
-  buildWorkflowPrompt,
+  buildFlowPrompt,
 } from "./prompts.ts";
 import { getSubagentProfiles } from "./profiles.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
@@ -67,12 +66,12 @@ const agentToolParameters = Type.Object({
   }),
   subagent_type: Type.Optional(
     Type.String({
-      description: "The subagent profile to use. Defaults to general-purpose. Custom profiles are loaded from ~/.pi/agent/subagents/<agent-name>.md.",
+      description: "The subagent profile to use. Available profiles are loaded from the agent configuration directory.",
     }),
   ),
   session_key: Type.Optional(
     Type.String({
-      description: "Caller-chosen key for a resumable subagent conversation. Omit for a fresh one-shot subagent; reuse the same key to continue that child context.",
+      description: "Caller-chosen key for one resumable child stream. Reuse it only to continue the same logical child stream; omit it for fresh or independent work.",
     }),
   ),
 });
@@ -374,7 +373,7 @@ function createAgentTool(
   return defineTool({
     name: "Agent",
     label: "Agent",
-    description: "Launch a subagent. Omit session_key for a fresh one-shot context; pass a caller-chosen session_key to create or continue a resumable subagent conversation. Available agents include built-ins and custom profiles from ~/.pi/agent/subagents/*.md.",
+    description: "Launch one focused subagent task. Omit session_key for a fresh child; reuse the same caller-chosen key only to continue one logical child stream. subagent_type selects an available profile.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
     promptGuidelines: AGENT_PROMPT_GUIDELINES,
     parameters: agentToolParameters,
@@ -688,24 +687,27 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     });
 
     pi.on("before_agent_start", (event, ctx) => {
-      const tools = pi.getAllTools();
-      if (!tools.some((tool) => tool.name === "Agent")) {
+      const activeTools = new Set(pi.getActiveTools());
+      const agentActive = activeTools.has("Agent");
+      const workflowActive = workflowEnabled && activeTools.has("workflow");
+      if (!agentActive && !workflowActive) {
         return;
       }
-      // No per-turn counter reset: the shared ConcurrencyLimiter is acquired
-      // immediately before a child spawn and released in the matching finally,
-      // so the in-flight count stays accurate across turns without a reset.
+
       const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-      const sections = [event.systemPrompt, buildCoordinatorPrompt(profiles)];
-      if (workflowEnabled && tools.some((tool) => tool.name === "workflow")) {
-        const savedWorkflows = listSavedWorkflows({
-          agentDir: getAgentDir(),
-          cwd: ctx.cwd,
-          projectTrusted: isProjectTrusted(ctx),
-        });
-        sections.push(buildWorkflowPrompt(profiles, savedWorkflows));
-      }
-      return { systemPrompt: sections.join("\n\n") };
+      const savedWorkflows = workflowActive
+        ? listSavedWorkflows({
+            agentDir: getAgentDir(),
+            cwd: ctx.cwd,
+            projectTrusted: isProjectTrusted(ctx),
+          })
+        : [];
+      return {
+        systemPrompt: [
+          event.systemPrompt,
+          buildFlowPrompt(profiles, { agentActive, workflowActive, savedWorkflows }),
+        ].join("\n\n"),
+      };
     });
   };
 }
