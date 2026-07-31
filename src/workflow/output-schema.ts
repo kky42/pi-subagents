@@ -100,6 +100,12 @@ function validateSchemaNode(schema: Record<string, unknown>, path: string): void
       validateSchemaNode(schemaRecord(child, childPath), childPath);
     });
   }
+  if (schema.allOf !== undefined) {
+    fail(appendPath(path, "allOf"), "allOf is not supported in the portable strict schema subset; use anyOf with nullable types instead");
+  }
+  if (schema.oneOf !== undefined) {
+    fail(appendPath(path, "oneOf"), "oneOf is not supported in the portable strict schema subset; use anyOf with nullable types instead");
+  }
   if (schema.$defs !== undefined) {
     const definitions = schemaRecord(schema.$defs, appendPath(path, "$defs"));
     for (const [name, child] of Object.entries(definitions)) {
