@@ -1,7 +1,13 @@
 import { parse, type Node } from "acorn";
+import { assertPortableOutputSchema } from "./output-schema.ts";
 import type { WorkflowMeta, WorkflowMetaPhase } from "./types.ts";
 
-type AnyNode = Node & { [key: string]: any; start: number; end: number };
+type AnyNode = Node & {
+  [key: string]: any;
+  start: number;
+  end: number;
+  loc?: { start: { line: number; column: number } };
+};
 
 const NONDETERMINISM_ERROR =
   "Workflow scripts must be deterministic: Date APIs and Math.random() (including simple aliases) are unavailable";
@@ -12,6 +18,7 @@ export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body:
     sourceType: "module",
     allowAwaitOutsideFunction: true,
     allowReturnOutsideFunction: true,
+    locations: true,
     ranges: false,
   }) as unknown as AnyNode;
 
@@ -40,6 +47,7 @@ export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body:
 
   const meta = evaluateLiteral(declarator.init, "meta");
   validateMeta(meta);
+  assertStaticWorkflowSchemas(ast);
 
   return {
     meta,
@@ -47,20 +55,27 @@ export function parseWorkflowScript(script: string): { meta: WorkflowMeta; body:
   };
 }
 
-function evaluateLiteral(node: AnyNode, path: string): unknown {
+function evaluateLiteral(
+  node: AnyNode,
+  path: string,
+  resolveIdentifier?: (name: string, path: string) => unknown,
+  allowReservedKeys = false,
+): unknown {
   switch (node.type) {
     case "ObjectExpression": {
-      const out: Record<string, unknown> = {};
+      const out: Record<string, unknown> = allowReservedKeys
+        ? Object.create(null) as Record<string, unknown>
+        : {};
       for (const prop of node.properties as AnyNode[]) {
         if (prop.type === "SpreadElement") throw new Error(`spread not allowed in ${path}`);
         if (prop.type !== "Property") throw new Error(`only plain properties allowed in ${path}`);
         if (prop.computed) throw new Error(`computed keys not allowed in ${path}`);
         if (prop.kind !== "init" || prop.method) throw new Error(`methods/accessors not allowed in ${path}`);
         const key = propertyKey(prop.key as AnyNode, path);
-        if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        if (!allowReservedKeys && (key === "__proto__" || key === "constructor" || key === "prototype")) {
           throw new Error(`reserved key name not allowed in ${path}: ${key}`);
         }
-        out[key] = evaluateLiteral(prop.value as AnyNode, `${path}.${key}`);
+        out[key] = evaluateLiteral(prop.value as AnyNode, `${path}.${key}`, resolveIdentifier, allowReservedKeys);
       }
       return out;
     }
@@ -68,7 +83,7 @@ function evaluateLiteral(node: AnyNode, path: string): unknown {
       return (node.elements as Array<AnyNode | null>).map((element, index) => {
         if (!element) throw new Error(`sparse arrays not allowed in ${path}`);
         if (element.type === "SpreadElement") throw new Error(`spread not allowed in ${path}`);
-        return evaluateLiteral(element, `${path}[${index}]`);
+        return evaluateLiteral(element, `${path}[${index}]`, resolveIdentifier, allowReservedKeys);
       });
     case "Literal":
       return node.value;
@@ -80,9 +95,92 @@ function evaluateLiteral(node: AnyNode, path: string): unknown {
         return -node.argument.value;
       }
       throw new Error(`only negative-number unary allowed in ${path}`);
+    case "Identifier":
+      if (resolveIdentifier) return resolveIdentifier(node.name, path);
+      throw new Error(`non-literal node type in ${path}: ${node.type}`);
     default:
       throw new Error(`non-literal node type in ${path}: ${node.type}`);
   }
+}
+
+function collectTopLevelConstants(ast: AnyNode): Map<string, AnyNode> {
+  const constants = new Map<string, AnyNode>();
+  for (const statement of ast.body as AnyNode[]) {
+    if (statement.type !== "VariableDeclaration" || statement.kind !== "const") continue;
+    for (const declarator of statement.declarations as AnyNode[]) {
+      if (declarator.id?.type === "Identifier" && declarator.init) {
+        constants.set(declarator.id.name, declarator.init as AnyNode);
+      }
+    }
+  }
+  return constants;
+}
+
+function resolveStaticObject(node: AnyNode, constants: Map<string, AnyNode>): AnyNode | undefined {
+  if (node.type === "ObjectExpression") return node;
+  if (node.type !== "Identifier") return undefined;
+  const value = constants.get(node.name);
+  return value?.type === "ObjectExpression" ? value : undefined;
+}
+
+function staticSchemaNode(call: AnyNode, constants: Map<string, AnyNode>): AnyNode | undefined {
+  const optionsNode = call.arguments?.[1] as AnyNode | undefined;
+  if (!optionsNode) return undefined;
+  const options = resolveStaticObject(optionsNode, constants);
+  if (!options) return undefined;
+
+  let schemaNode: AnyNode | undefined;
+  for (const prop of options.properties as AnyNode[]) {
+    if (prop.type !== "Property" || prop.kind !== "init" || prop.method) continue;
+    if (propertyNameOfPatternProperty(prop) === "schema") {
+      schemaNode = prop.value as AnyNode;
+    }
+  }
+  return schemaNode;
+}
+
+function evaluateStaticSchema(node: AnyNode, constants: Map<string, AnyNode>): unknown {
+  if (node.type !== "ObjectExpression" && node.type !== "Identifier") {
+    throw new Error("schema must be a static object literal or reference a top-level const");
+  }
+  const resolving = new Set<string>();
+  const resolveIdentifier = (name: string, path: string): unknown => {
+    const value = constants.get(name);
+    if (!value) {
+      throw new Error(`${path} must be a static object literal or reference a top-level const`);
+    }
+    if (resolving.has(name)) {
+      throw new Error(`${path} contains a circular const reference: ${name}`);
+    }
+    resolving.add(name);
+    try {
+      return evaluateLiteral(value, path, resolveIdentifier, true);
+    } finally {
+      resolving.delete(name);
+    }
+  };
+  return evaluateLiteral(node, "schema", resolveIdentifier, true);
+}
+
+function assertStaticWorkflowSchemas(ast: AnyNode): void {
+  const constants = collectTopLevelConstants(ast);
+  const visit = (node: AnyNode): void => {
+    if (node.type === "CallExpression" && node.callee?.type === "Identifier" && node.callee.name === "agent") {
+      const schemaNode = staticSchemaNode(node, constants);
+      if (schemaNode && !(schemaNode.type === "Literal" && schemaNode.value == null)) {
+        const location = schemaNode.loc?.start ?? node.loc?.start;
+        const where = location ? ` at line ${location.line}, column ${location.column + 1}` : "";
+        try {
+          assertPortableOutputSchema(evaluateStaticSchema(schemaNode, constants));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`Workflow schema preflight failed for agent()${where}: ${message}`);
+        }
+      }
+    }
+    for (const child of astChildren(node)) visit(child);
+  };
+  visit(ast);
 }
 
 function propertyKey(node: AnyNode, path: string): string {

@@ -1,3 +1,4 @@
+import { assertPortableOutputSchema } from "./output-schema.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
 import { fingerprintWorkflowAgentCall } from "./replay-cache.ts";
 import { createWorkflowScriptWorker, type ParentToWorkerMessage, type WorkerToParentMessage } from "./script-worker.ts";
@@ -151,6 +152,16 @@ export async function runWorkflow<T = unknown>(
     }
     const taskPrompt = requireString(prompt, "agent prompt");
     const opts = normalizeAgentOptions(agentOptions);
+    if (opts.schema != null) {
+      try {
+        assertPortableOutputSchema(opts.schema);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const fatal = new WorkflowFatalError(`Workflow schema validation failed before launching agent: ${detail}`);
+        abortRuntime(fatal);
+        throw fatal;
+      }
+    }
     const assignedPhase = opts.phase ?? state.currentPhase;
     const subagentType = opts.subagentType ?? defaultSubagentType;
 
