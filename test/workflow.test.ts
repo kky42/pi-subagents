@@ -108,6 +108,15 @@ describe("parseWorkflowScript", () => {
 
     const invalidType = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: { type: 'wat' } } } });`;
     expect(() => parseWorkflowScript(invalidType)).toThrow(/properties\.answer\.type.*valid JSON Schema type/i);
+
+    const allOfAtRoot = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, allOf: [{ type: 'object' }] } });`;
+    expect(() => parseWorkflowScript(allOfAtRoot)).toThrow(/\$\.allOf.*allOf is not supported/i);
+
+    const oneOfAtRoot = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, oneOf: [{ type: 'object', additionalProperties: false, required: [], properties: {} }] } });`;
+    expect(() => parseWorkflowScript(oneOfAtRoot)).toThrow(/\$\.oneOf.*oneOf is not supported/i);
+
+    const allOfNested = `${META}return await agent('x', { schema: { type: 'object', additionalProperties: false, required: ['item'], properties: { item: { type: 'object', additionalProperties: false, required: ['val'], properties: { val: { type: 'string' } }, allOf: [] } } } });`;
+    expect(() => parseWorkflowScript(allOfNested)).toThrow(/\$\.properties\.item\.allOf.*allOf is not supported/i);
   });
 
   it("requires schemas to be statically available during preflight", () => {
