@@ -1,41 +1,34 @@
 import type { SavedWorkflow } from "./workflow/registry.ts";
 import type { SubagentProfile } from "./types.ts";
 
+export const DIRECT_WORK_POLICY = "Narrow, local work can stay in the root when delegation adds no value.";
+export const AGENT_USE_POLICY =
+  "Use Agent for one focused delegated task or a small flat fan-out of independent work.";
+export const WORKFLOW_USE_POLICY =
+  "Use workflow for a saved workflow, dependent stages or control flow, structured results or branching, replay, or larger fan-out.";
+
 export const AGENT_PROMPT_SNIPPET =
-  "Launch a subagent when the task matches an available agent, can run independently, or would read across several files; pass session_key to create or continue a resumable subagent.";
+  "Delegate one focused task or a small flat fan-out; session_key continues one logical child stream.";
 
 export const AGENT_PROMPT_GUIDELINES = [
-  "Reach for Agent when the task matches an available agent, when you have independent work to run in parallel, or when answering would mean reading across several files.",
-  "Use a specialized custom agent when its description matches the task.",
-  "Use general-purpose for repository reconnaissance, complex questions, broader multi-step investigations, or independent second opinions when no custom agent is a better match.",
-  "For a single-fact lookup where you already know the file, symbol, or value, search directly instead of spawning a subagent.",
-  "Once you delegate a search, do not also run the same search yourself; wait for the result and keep the conclusion, not raw file dumps.",
-  "If the user asks to explore or survey a repo, delegate a concise read-only map before doing detailed follow-up yourself.",
-  "If the user asks for parallel work, launch multiple Agent calls in the same assistant response.",
-  "Write self-contained subagent prompts: when session_key is omitted, subagents do not inherit parent conversation, tool results, or reasoning and cannot be resumed.",
-  "Pi-backed subagents do not receive Agent; external CLI backends use their own tool surface. Coordinate follow-up delegation from the main conversation after a result returns.",
-  "Clearly tell the subagent whether you expect read-only research or code changes.",
-  "Use session_key only when you intentionally want to continue that same subagent conversation later. The Agent final message is returned to you as the tool result and is not shown to the user; relay what matters.",
+  AGENT_USE_POLICY,
+  "Reuse the same Agent session_key only for the same logical child stream. Omit it for independent work, including parallel branches.",
+  "Give each fresh Agent call a self-contained task because it does not inherit parent messages, tool results, or reasoning.",
 ];
 
 export const WORKFLOW_PROMPT_SNIPPET =
-  "Run a saved or ad-hoc trusted JavaScript workflow that fans subagents out and synthesizes their results, when the user asks for a workflow or multi-agent orchestration.";
+  "Run a saved or ad-hoc trusted workflow for staged, structured, replayable, or larger orchestration.";
 
 export const WORKFLOW_PROMPT_GUIDELINES = [
-  "Use workflow only when the user explicitly asks for a workflow, fan-out, or multi-agent orchestration, when a saved workflow matches the user's request, or when a task decomposes into many independent subagent runs that you then synthesize.",
-  "Prefer `workflow({ name, args })` when an available saved workflow matches the request. Use `workflow({ scriptPath, resumeFromRunId, args })` to rerun or resume an edited persisted script. Use inline `script` only for ad-hoc orchestration.",
-  "If the user asks to save a reusable workflow, copy or write a `.js` file directly to `~/.pi/agent/workflows/` for global scope or `.pi/workflows/` for project scope. Project workflows are ignored unless the project is trusted. The file must start with `export const meta = { name, description }`; use a filename that exactly matches the workflow name. After saving, invoke it with `workflow({ name, args })`.",
-  "For inline scripts, pass one raw JavaScript string in the `script` parameter. No Markdown fences, no prose around it. Inline runs in persisted sessions return `scriptPath` and `runId` for later editing/resume; in-memory runs may only return `runId`.",
-  "The script's first statement must be `export const meta = { name: 'short_name', description: 'non-empty description' }`. meta must be a plain literal.",
-  "Available globals: agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Every workflow must call agent() at least once and return a JSON-serializable value (use null if there is no synthesized result). Results are canonicalized to JSON; non-plain objects are rejected.",
-  "Write plain JavaScript only. Do not use TypeScript syntax, import/require, fs, Date APIs, or Math.random(). Simple Date/Math.random aliases and destructuring are rejected too. Scripts are trusted code; the determinism check is a cooperative lint, not a sandbox.",
-  "parallel() takes functions, not promises: `await parallel(items.map(item => () => agent('...', { label: '...' })))`. Results come back in input order.",
-  "pipeline(items, ...stages) runs each item through the stages in order while different items run concurrently; each stage receives (previousValue, originalItem, index). Prefer pipeline() for multi-stage work — there is no barrier between stages. Reach for parallel() only when you genuinely need all results together, e.g. dedup or a zero-count early exit.",
-  "Give each agent() a unique short `label` and pick a `subagent_type` (defaults to general-purpose) so it uses that profile's configured backend, model, thinking level, prompt, and pi-backend tool allowlist. Pass `session_key` only when you intentionally want to continue a prior subagent conversation.",
-  "Pass a portable strict JSON Schema as agent()'s `schema` option whenever the script must branch, route, filter, or aggregate on a result: every object must set `additionalProperties: false`, every property must be listed in `required`, and optional values must use a nullable type. Schemas must be static object literals or top-level consts so workflow preflight can validate all of them before any subagent starts. Omit `schema` for prose findings you only read or synthesize.",
-  "When `session_key` is omitted, subagents are fresh one-shot sessions with no parent context. Pi-backed subagents do not receive Agent/workflow; external CLI backends use their own tool surface. Include all needed context and paths in each fresh agent() prompt.",
-  "Failed agent()/parallel()/pipeline() branches resolve to null and are logged unless the workflow is aborted; check for nulls before synthesizing.",
+  WORKFLOW_USE_POLICY,
+  "Treat workflow scripts as trusted local code, not sandboxed input.",
 ];
+
+export interface FlowPromptOptions {
+  agentActive: boolean;
+  workflowActive: boolean;
+  savedWorkflows?: SavedWorkflow[];
+}
 
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
   return [...profiles.values()]
@@ -59,52 +52,62 @@ function formatSavedWorkflows(workflows: SavedWorkflow[], maxItems = 20): string
   return `\n\nSaved workflows:\n${lines.join("\n")}`;
 }
 
-export function buildWorkflowPrompt(profiles: Map<string, SubagentProfile>, savedWorkflows: SavedWorkflow[] = []): string {
-  return `# Dynamic Workflows
+function buildAgentSection(): string {
+  return `## Agent
 
-The \`workflow\` tool runs a saved or ad-hoc trusted JavaScript script that orchestrates many subagents and synthesizes their results. Reach for it when the user asks for a workflow or fan-out, when a saved workflow matches the request, or when a task splits into many independent subagent runs.
+Consider Agent for one focused task that can run independently or would keep substantial search output out of the root context. For a small flat fan-out, issue independent Agent calls in the same assistant response.
 
-Tool input:
-- Use \`{ name: 'saved-workflow-name', args }\` for a saved workflow listed below.
-- Use \`{ scriptPath, args }\` to run a persisted script file. Add \`resumeFromRunId\` to reuse cached agent results from a previous run's unchanged prefix.
-- Use \`{ script, args }\` for ad-hoc orchestration. Inline runs in persisted sessions return \`scriptPath\` and \`runId\` for later editing/resume; in-memory runs may only return \`runId\`. Provide exactly one of \`name\`, \`scriptPath\`, or \`script\`.
-
-Inline script contract:
-- First statement: \`export const meta = { name: 'short_name', description: 'non-empty' }\` (a plain literal; \`phases\` optional).
-- Globals: agent(prompt, opts), parallel(thunks), pipeline(items, ...stages), phase(title), log(message), args, cwd. Call agent() at least once and return a JSON-serializable value (use \`null\` if there is no synthesized result). Results are canonicalized to JSON; non-plain objects are rejected.
-- Plain JavaScript only; no imports, no Date APIs, no Math.random(). Simple Date/Math.random aliases and destructuring are rejected too. Scripts are trusted code; the determinism check is cooperative lint, not a sandbox.
-- parallel() takes thunks: \`await parallel(items.map(i => () => agent('...', { label: '...' })))\`. pipeline(items, ...stages) pipelines each item through stages while items run concurrently — prefer it for multi-stage work (no barrier between stages); use parallel() only when you need all results together.
-
-Each agent() spawns a fresh one-shot subagent unless you pass \`session_key\` to create or continue a resumable child conversation. Set \`subagent_type\` to use a profile's backend, model, thinking, prompt, and pi-backend tool allowlist:
-${formatAvailableAgents(profiles)}
-
-agent() options: \`label\` (short unique id), \`phase\` (progress group), \`subagent_type\` (profile above), \`session_key\` (caller-chosen key for a resumable child conversation), and \`schema\` (a portable strict JSON Schema). Pass \`schema\` when the script must branch, route, filter, or aggregate on the result: the subagent is forced to return one validated object and agent() resolves to that object instead of free text. Every object schema must set \`additionalProperties: false\`, list every property in \`required\`, and represent optional values with nullable types. Define schemas as static object literals or top-level consts so preflight can reject invalid schemas before any subagent starts. Omit \`schema\` for prose findings you only synthesize. Example — classify, then dispatch:
-\`\`\`
-const r = await agent("Classify " + file, { label: "classify", schema: { type: "object", additionalProperties: false, required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } } });
-if (r.kind === "entry") { /* ... */ }
-\`\`\`
-
-Subagents do not inherit parent context unless you continue them with \`session_key\` — brief fresh agent() prompts fully. Pi-backed subagents do not receive Agent/workflow; external CLI backends use their own tool surface. Subagent fan-out is bounded by the same global concurrency cap as the Agent tool; the workflow queues excess agents and drains them as slots free.${formatSavedWorkflows(savedWorkflows)}`;
+- Give each call a short description and a self-contained prompt. Select a \`subagent_type\` from the available-agent roster when its description fits.
+- Omit \`session_key\` for a fresh one-shot child. Reuse the same caller-chosen key only to continue the same logical child stream; independent work, including parallel branches, stays fresh.
+- Once a search is delegated, do not repeat the same search in the root. The child result is returned to you; relay the useful conclusion to the user.`;
 }
 
-export function buildCoordinatorPrompt(profiles: Map<string, SubagentProfile>): string {
-  return `# Subagent Delegation
+function buildWorkflowSection(savedWorkflows: SavedWorkflow[]): string {
+  return `## Workflow
+
+Use workflow when the request matches a saved workflow or needs dependent stages, control flow, structured results or decisions, replay, or larger fan-out. After a workflow completes, synthesize its result instead of repeating completed branches through another delegation path.
+
+Source:
+- Provide exactly one of \`name\`, \`scriptPath\`, or raw \`script\`. Use \`resumeFromRunId\` with \`scriptPath\` to replay the longest unchanged prefix.
+- Reusable \`.js\` files live in the global workflow directory or a trusted project's workflow directory. The filename need not match \`meta.name\`; \`meta.name\` is the saved-workflow identity and must match \`[a-z0-9][a-z0-9_-]*\`. Saved files are parsed before each run and never run on discovery.
+
+Script contract:
+- Start with the plain literal \`export const meta = { name: 'short_name', description: 'non-empty' }\` (optional \`phases\`), call \`agent()\` at least once, and return a JSON-serializable value.
+- Globals are \`agent(prompt, opts)\`, \`parallel(thunks)\`, \`pipeline(items, ...stages)\`, \`phase(title)\`, \`log(message)\`, \`args\`, and \`cwd\`.
+- Write plain JavaScript without imports, filesystem APIs, Date APIs, or Math.random(). Scripts are trusted code; the determinism check is not a security sandbox.
+- \`parallel()\` takes functions, not promises. Each \`pipeline(items, ...stages)\` stage receives \`(previousValue, originalItem, index)\`; stage order is preserved per item while different items progress concurrently. For dependent per-item work, use separate stages such as \`await pipeline(items, (item) => agent('classify ' + item, classifyOpts), (classification, item) => agent('follow up ' + item + ': ' + classification, followupOpts))\`.
+
+Workflow agent calls:
+- Options are \`label\`, \`phase\`, \`subagent_type\`, \`session_key\`, and \`schema\`. Give each call a unique short label. Reuse a session key only within the same logical child stream; independent branches omit it.
+- A schema forces one validated object. Every object schema sets \`additionalProperties: false\`, lists every property in \`required\`, and represents optional values with nullable types.
+- Prefer a schema literal or top-level const: statically visible schemas are preflighted before any child starts. A schema supplied through dynamic options is validated immediately before that child launches, so earlier calls may already have run.
+- Failed branches resolve to \`null\` unless the workflow is aborted; handle nulls before synthesis.${formatSavedWorkflows(savedWorkflows)}`;
+}
+
+export function buildFlowPrompt(profiles: Map<string, SubagentProfile>, options: FlowPromptOptions): string {
+  const routing = [
+    DIRECT_WORK_POLICY,
+    ...(options.agentActive ? [AGENT_USE_POLICY] : []),
+    ...(options.workflowActive ? [WORKFLOW_USE_POLICY] : []),
+  ];
+  const sections = [
+    `# Subagent Delegation
 
 Available agents:
 ${formatAvailableAgents(profiles)}
 
-Use Agent when a specialized agent matches the task, the work can run independently, or delegating would keep large search/read output out of the main context.
+Routing boundary:
+${routing.map((policy) => `- ${policy}`).join("\n")}
 
-Guidelines:
-- Do not use subagents excessively; direct lookup is better when the target file, symbol, or value is already known.
-- If the user asks for parallel work, launch independent Agent calls in the same assistant response.
-- Subagents start fresh and do not inherit parent messages, tool results, or reasoning unless you pass the same caller-chosen session_key to continue that child conversation. Brief fresh subagents with all needed context.
-- Pi-backed subagents do not receive Agent; external CLI backends use their own tool surface. Coordinate follow-up delegation from the main conversation after each result returns.
-- Use session_key only when continuation is desired; otherwise omit it for a one-shot child. The Agent final message is returned to you as the tool result. Relay what matters to the user.
+Children start with fresh context unless a caller-chosen session key continues the same logical stream. Pi-backed children cannot invoke pi-flow delegation tools; external backends use their own tool surface. All fan-out is bounded and queued.`,
+  ];
 
-Example usage:
-- User asks "explore this repo": use Agent with subagent_type "general-purpose" and ask it to map the project purpose, key directories, important files, scripts, tests, and caveats without editing files.
-- User asks for a second opinion on a risky change: use Agent with subagent_type "general-purpose" and give it enough context to review independently.
+  if (options.agentActive) {
+    sections.push(buildAgentSection());
+  }
+  if (options.workflowActive) {
+    sections.push(buildWorkflowSection(options.savedWorkflows ?? []));
+  }
 
-Root-level parallel delegation is bounded by the extension. If the running limit is reached, extra Agent calls queue and drain as slots free.`;
+  return sections.join("\n\n");
 }

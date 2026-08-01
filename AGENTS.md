@@ -32,7 +32,7 @@
 - Custom profiles may set `backend: pi` (default), `backend: codex`, or `backend: claude`. Codex-backed profiles run external `codex exec --json --dangerously-bypass-approvals-and-sandbox --ephemeral -- -` for one-shot calls, omit `--ephemeral` for keyed first calls, and use `codex exec resume --json ... <session_id> -` for keyed continuation; they send the task prompt on stdin, pass the profile body as `developer_instructions`, pass profile `model`/`thinking` through Codex CLI, parse `thread.started.thread_id`, token usage from Codex JSONL events, and estimate cost for listed models. Claude-backed profiles run external `claude -p --output-format stream-json --verbose --dangerously-skip-permissions --no-session-persistence` for one-shot calls, omit `--no-session-persistence` for keyed first calls, add `--resume <session_id>` for keyed continuation, send the task prompt on stdin, pass the profile body as `--append-system-prompt`, pass profile `model`/`thinking` through Claude Code, parse `system/init.session_id`, parse token usage from stream JSON, and use Claude Code's reported `total_cost_usd` when available. External CLI backends intentionally run in yolo/no-approval mode; only use them in trusted repositories.
 - `tools` frontmatter is a pi-backend child-session allowlist only. External CLI profiles use their CLI's own tool and permission surface.
 - There is no pi-flow permissions system in v1. Profiles are ordinary agents with optional prompts and tool allow-lists; external backends are explicit user dependencies.
-- Pi-backed child sessions cannot launch other pi subagents. Do not give pi child sessions the `Agent` or `workflow` tool, or the coordinator prompt.
+- Pi-backed child sessions cannot launch other pi subagents. Do not give pi child sessions the `Agent` or `workflow` tool, or the flow prompt (`buildFlowPrompt`).
 - External CLI backends are not given pi `Agent`/`workflow` tools, but their own CLIs may expose nested/delegation features; do not try to block that from this extension.
 - Parallel delegation is allowed and bounded by a global `maxConcurrentSubagents` limit (default `12`), which caps how many subagents run concurrently across the whole agent run. A slot is taken on launch and released on completion/failure/abort. In v2 this same cap is shared with the `workflow` tool.
 - Do not put exact concurrency values in the model-facing coordinator prompt. The prompt should say parallel delegation is bounded and queued.
@@ -74,7 +74,7 @@
 ## CI and release workflow
 
 - CI lives in `.github/workflows/ci.yml` and runs on pull requests plus pushes to `main`. It installs with `npm ci` and runs `npm run check` on Node 22.x and 24.x.
-- E2E scripts are intentionally not part of required CI because they use real models and can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
+- E2E scripts are intentionally not part of required CI because they use real models and can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, `npm run e2e:prompt-routing` when prompt or routing guidance changes, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
 - Every real-model E2E driver must install the guard from `scripts/e2e/lib/deepseek-claude-env.mjs` so any Claude Code process routes through DeepSeek's Anthropic-compatible endpoint with isolated settings. Drivers must fail fast without `DEEPSEEK_API_KEY`/`DEEPSEEK_API_TOKEN` (or `--deepseek-api-key-env`) and must not fall back to Anthropic login or another Claude Code provider.
 - There is intentionally no automated npm publish workflow right now; do not create tags expecting GitHub Actions to publish, and do not add an `NPM_TOKEN`-based workflow unless the user asks.
 - Normal version-prep steps for agents:
@@ -98,12 +98,16 @@
 Interactive tmux TUI runs use `deepseek/deepseek-v4-flash` with high thinking and isolated `--no-*` resource flags.
 
 - `width`: validates eight parallel foreground delegations.
-- `proactive-multirepo-v3`: validates proactive parallel delegation for a two-repo auth comparison.
-- `proactive-fanout-v3`: validates proactive multi-lane delegation for TODO/FIXME/skipped-test search.
-- `proactive-migration-v2`: validates proactive second-opinion delegation for a risky migration review.
+- `proactive-multirepo-v3`: validated two-repo parallel Agent fan-out under the previous routing contract.
+- `proactive-fanout-v3`: validated three-lane TODO/FIXME/skipped-test Agent fan-out under the previous routing contract.
+- `proactive-migration-v2`: validated second-opinion Agent delegation under the previous routing contract.
 - `max-concurrent-queue`: validates `--max-concurrent-subagents 1` with two parallel normal `Agent` calls; both completed (`FIRST_OK`, `SECOND_OK`) and no max-concurrency rejection was emitted.
 
-Do not count `proactive-ship-v3` as proactive-pass evidence: the model handled that tiny ship-readiness fixture directly. This is acceptable as a behavioral limitation, but future prompt/tool tuning should continue improving this case.
+Root-direct handling of narrow or small fixtures is intentional: `DIRECT_WORK_POLICY` explicitly permits staying in the root when delegation adds no value.
+
+### Prompt routing behavior (current contract)
+
+`scripts/e2e/prompt-routing-evidence.md` records the before/after comparison for the prompt consolidation. It covers the accepted routing boundary (root-direct, flat Agent fan-out, workflow for staged/structured/replay/large), privacy and isolation guarantees, prompt-size measurements, real-model routing outcomes, and variance limitations. The committed deterministic suite in `test/agent-contract.test.ts` and `test/delegation-scenarios.test.ts` covers the active-tool-gated sections, profile-roster deduplication, and session-key continuation contract without a real model.
 
 ### Workflow tool (v2)
 

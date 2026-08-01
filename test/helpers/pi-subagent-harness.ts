@@ -38,6 +38,7 @@ type CreateSessionOptions = {
   models?: FauxModelDef[];
   defaultModelId?: string;
   thinkingLevel?: ThinkingLevel;
+  systemPrompt?: string;
 };
 
 export type HarnessState = {
@@ -167,6 +168,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       models: modelDefs = DEFAULT_MODEL_DEFS,
       defaultModelId,
       thinkingLevel = "high",
+      systemPrompt,
     } = options;
     const faux = fauxProvider({ models: modelDefs });
     const models = modelDefs.map((def) => faux.getModel(def.id) as Model<string>);
@@ -194,6 +196,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
+      systemPrompt,
     });
     await resourceLoader.reload();
     if (maxConcurrentSubagentsFlag !== undefined) {

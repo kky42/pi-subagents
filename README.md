@@ -20,8 +20,8 @@ Pi stays in control while `pi-flow` gives it two new ways to delegate:
 
 | Primitive | Best for |
 | --- | --- |
-| **`Agent`** | One focused task: explore a repository, review a diff, investigate a bug, or draft a solution. |
-| **`workflow`** | Several independent tasks: parallel research, multi-model review, staged pipelines, and synthesized results. |
+| **`Agent`** | One focused delegated task or a small flat fan-out of independent work. |
+| **`workflow`** | Saved workflows, dependent stages, control flow, structured results or branching, replay, or larger fan-out. |
 
 Each subagent can run through a different harness and model. Route fast searches to Codex, UI review to Claude Code, local analysis to Pi—or define your own mix.
 
@@ -58,10 +58,10 @@ Then ask Pi to delegate naturally:
 Use a subagent to map this repository without changing files, then summarize the important entry points.
 ```
 
-Or ask for a wider workflow:
+Or ask for staged orchestration:
 
 ```text
-Review this PR from three independent angles—correctness, security, and test coverage—and synthesize the findings.
+Use a workflow to classify each changed file by risk, run a risk-specific review, and return structured results.
 ```
 
 Pi decides how to invoke `Agent` or `workflow`, shows live progress, and returns the combined result in the same conversation.
@@ -102,7 +102,7 @@ The lower-level `@kky42/pi-flow/runtime` export remains available for consumers 
 
 ## Define your agent team
 
-`pi-flow` includes one profile, `general-purpose`. Add specialists as Markdown files under:
+`pi-flow` includes a minimal built-in profile and loads arbitrary custom profiles from Markdown files under:
 
 ```text
 ~/.pi/agent/subagents/<name>.md
@@ -130,7 +130,6 @@ Map the repository without modifying files. Return concise findings with paths a
 ---
 description: Reviews implementation changes for correctness and missed edge cases.
 backend: codex
-model: gpt-5.5
 thinking: high
 ---
 
@@ -143,7 +142,6 @@ Review the current diff. Lead with concrete findings and identify missing tests.
 ---
 description: Reviews frontend work for UX, accessibility, and visual quality.
 backend: claude
-model: sonnet
 thinking: high
 ---
 
@@ -168,7 +166,6 @@ A fresh call starts a clean child conversation in the same working directory. Pa
 ```ts
 Agent({
   description: "Map the authentication flow",
-  subagent_type: "explorer",
   prompt: "Trace login from the HTTP entry point to session creation. Do not edit files.",
 });
 ```
@@ -178,14 +175,12 @@ For follow-up work, reuse a stable `session_key`:
 ```ts
 Agent({
   description: "Draft the migration",
-  subagent_type: "implementation-expert",
   session_key: "auth-migration",
   prompt: "Propose a migration plan based on the current implementation.",
 });
 
 Agent({
   description: "Revise the migration",
-  subagent_type: "implementation-expert",
   session_key: "auth-migration",
   prompt: "Revise the plan using the review feedback. Address rollback and compatibility.",
 });
@@ -193,15 +188,15 @@ Agent({
 
 `pi-flow` maps that key to the backend-native session or thread and keeps the continuation explicit.
 
-## Fan out with workflows
+## Choose Agent or workflow by task shape
 
-Use `workflow` when several lanes can run independently or when work benefits from multiple perspectives.
+Use parallel `Agent` calls for a small flat set of independent investigations. Use `workflow` when orchestration matches a saved workflow or needs dependent stages, control flow, structured results or decisions, replay, or larger fan-out.
 
 ```text
-Run a workflow that asks one agent to inspect the API, one to inspect persistence, and one to inspect tests. Synthesize the highest-risk gaps.
+Use a workflow to classify each module with a strict risk result, then run the matching follow-up review for each classification.
 ```
 
-You usually do not need to write workflow code yourself. Pi can generate and run a small trusted JavaScript workflow, then present the result.
+You usually do not need to write workflow code yourself. Pi can generate and run a trusted JavaScript workflow, then present the result.
 
 Ask Pi to save repeatable orchestration:
 
