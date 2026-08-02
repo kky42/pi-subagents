@@ -9,11 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
-import {
-  AGENT_PROMPT_GUIDELINES,
-  AGENT_PROMPT_SNIPPET,
-  buildFlowPrompt,
-} from "./prompts.ts";
+import { buildFlowPrompt } from "./prompts.ts";
 import { getSubagentProfiles } from "./profiles.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
@@ -57,21 +53,26 @@ function isProjectTrusted(ctx: ExtensionContext): boolean {
   }
 }
 
+const AGENT_PROMPT_SNIPPET = "Delegate one focused task to an isolated foreground subagent";
+
 const agentToolParameters = Type.Object({
   description: Type.String({
-    description: "A short 3-5 word description of the task, used for UI display and routing context.",
+    description: "Short UI/progress label, ideally 3-5 words; not sent as the child task.",
   }),
   prompt: Type.String({
-    description: "The self-contained task briefing to send to the subagent.",
+    description:
+      "Complete task briefing sent to the child. Include needed paths, constraints, and expected result because fresh calls do not inherit the parent conversation.",
   }),
   subagent_type: Type.Optional(
     Type.String({
-      description: "The subagent profile to use. Available profiles are loaded from the agent configuration directory.",
+      description:
+        "Registered profile name. Defaults to general-purpose; selects the backend, model, thinking level, role prompt, and Pi tool allowlist.",
     }),
   ),
   session_key: Type.Optional(
     Type.String({
-      description: "Caller-chosen key for one resumable child stream. Reuse it only to continue the same logical child stream; omit it for fresh or independent work.",
+      description:
+        "Caller-chosen continuation key. Omit for fresh or independent work; reuse only for the same profile/backend child. Calls with the same key are serialized.",
     }),
   ),
 });
@@ -373,9 +374,9 @@ function createAgentTool(
   return defineTool({
     name: "Agent",
     label: "Agent",
-    description: "Launch one focused subagent task. Omit session_key for a fresh child; reuse the same caller-chosen key only to continue one logical child stream. subagent_type selects an available profile.",
+    description:
+      "Launch one foreground subagent in the current working directory. Calls without `session_key` start an isolated conversation. Independent calls issued together run concurrently under PiFlow's bounded shared limit and queue when full. Pi-backed children cannot invoke PiFlow delegation tools. External-backend profiles use their CLI permission surface and should run only in trusted repositories.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
-    promptGuidelines: AGENT_PROMPT_GUIDELINES,
     parameters: agentToolParameters,
     executionMode: "parallel",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -687,26 +688,14 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     });
 
     pi.on("before_agent_start", (event, ctx) => {
-      const activeTools = new Set(pi.getActiveTools());
-      const agentActive = activeTools.has("Agent");
-      const workflowActive = workflowEnabled && activeTools.has("workflow");
-      if (!agentActive && !workflowActive) {
-        return;
-      }
-
       const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-      const savedWorkflows = workflowActive
-        ? listSavedWorkflows({
-            agentDir: getAgentDir(),
-            cwd: ctx.cwd,
-            projectTrusted: isProjectTrusted(ctx),
-          })
-        : [];
+      const savedWorkflows = listSavedWorkflows({
+        agentDir: getAgentDir(),
+        cwd: ctx.cwd,
+        projectTrusted: isProjectTrusted(ctx),
+      });
       return {
-        systemPrompt: [
-          event.systemPrompt,
-          buildFlowPrompt(profiles, { agentActive, workflowActive, savedWorkflows }),
-        ].join("\n\n"),
+        systemPrompt: [event.systemPrompt, buildFlowPrompt(profiles, savedWorkflows)].join("\n\n"),
       };
     });
   };

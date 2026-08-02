@@ -1,123 +1,103 @@
-# Prompt-routing behavior evidence
+# Prompt-routing behavior observations
 
-This document records the bounded real-model comparison for the prompt consolidation based on commit `8954ab8` (`v2.1.5`). It is maintainer evidence, not a claim that stochastic routing is deterministic.
+This document describes the observation protocol in `scripts/e2e/prompt-routing.mjs`. The driver is intentionally not a routing test oracle: model choices are stochastic, so Agent, session continuation, workflow, tool-count, and fixture-change observations never pass or fail the run.
 
-## Accepted behavior boundary
+## Fixed model
 
-- Narrow local work may stay in the root.
-- One focused delegation or a small flat fan-out uses direct `Agent` calls.
-- Saved workflows, dependent stages, control flow, structured results or branching, replay, and larger fan-out use `workflow`.
-- One logical child stream may reuse a `session_key`; independent work stays fresh.
-- Routing expectations do not name or assert any profile, child model, specialist, or default.
+Every scenario uses the same foreground configuration:
 
-## Privacy and isolation
+- Model: `openai-codex/gpt-5.6-luna`
+- Thinking: `xhigh`
+- Tools: `read`, `bash`, `Agent`, `workflow`
+- Current worktree extension
 
-`scripts/e2e/prompt-routing.mjs` creates a five-file report-CLI fixture and an isolated Pi agent directory. It disables discovered extensions, skills, templates, themes, context files, and session persistence, then loads only the extension under test. It checks that every fixture file remains byte-for-byte unchanged.
+The model and thinking level are pinned in the driver and cannot be overridden through CLI flags. This keeps observations comparable across prompt revisions.
 
-The driver does not read normal Pi session history or copy local profiles. The Pi process receives a minimal environment containing basic process settings plus one resolved DeepSeek credential; unrelated and alternate credential variables are not forwarded. Only terminal JSON events needed to assess tool calls, results, and usage are retained, high-volume streaming updates are discarded, and every discovered DeepSeek credential value plus local root paths are redacted before artifacts are analyzed or written. The driver always removes its isolated child-session directory and Claude runtime directory, even when other sanitized artifacts are retained.
+## Scenarios
 
-## Reproduction
+The driver runs five small, read-oriented scenarios:
 
-Prerequisites for the recorded run:
+- `direct`: narrow package lookup
+- `focused`: context-heavy repository exploration
+- `flat`: three independent review lanes
+- `continuation`: two sequential calls intended to continue one child context
+- `staged`: dependent classification and structured follow-up work
 
-- Node `v22.23.1`
-- npm `10.9.8`
-- Pi `0.83.0`
-- `DEEPSEEK_API_KEY` or `DEEPSEEK_API_TOKEN`
+Each run records root tool calls, Agent call groups, session-key usage, workflow source and script-shape signals, child results, model identity, usage, duration, process status, and changed fixture files.
 
-The driver intentionally requires the root model and thinking level instead of encoding defaults:
+These values are observations only. For example, direct root work, one Agent, several Agents, or workflow are all recorded without an expected routing assertion.
 
-```bash
-npm run e2e:prompt-routing -- \
-  --model deepseek/deepseek-v4-flash \
-  --thinking high \
-  --repetitions 2
-```
+## Full-scenario sample before the pipeline example
 
-Useful scoped form:
+One repetition per scenario was observed on 2026-08-02 against the modified working tree based on `325ad60`, before the dependent-pipeline example was added:
 
-```bash
-npm run e2e:prompt-routing -- \
-  --model deepseek/deepseek-v4-flash \
-  --thinking high \
-  --repetitions 2 \
-  --only flat,continuation,staged
-```
+| Scenario | Observed route |
+| --- | --- |
+| `direct` | One root `read`; no Agent or workflow call |
+| `focused` | Two fresh Agent calls issued together, plus root `bash`/`read` exploration |
+| `flat` | Three fresh Agent calls issued together |
+| `continuation` | Two sequential Agent calls using the same non-empty session key |
+| `staged` | One six-child structured pipeline ended with a script error, then one six-child structured parallel workflow completed |
 
-The run installs the repository's DeepSeek Claude-provider guard even though these scenarios use Pi-backed children. `--extension <entry>` can compare another checkout or archived baseline. `--run-root` must identify a new or empty real directory; the driver marks ownership before writing and refuses to remove an unmarked root. An explicit `--agent-dir` must stay outside that root, while omitting it uses a driver-owned isolated directory. `--keep` retains sanitized fixture artifacts and `report.json`, while driver-owned session/runtime directories are always removed. The default removes the marked artifact root after a passing run.
+All five Pi processes exited successfully, reported `openai-codex/gpt-5.6-luna`, produced terminal responses, and left the fixture unchanged. The focused run still performed root exploration after delegation. The staged retry followed `TypeError: Cannot read properties of undefined (reading 'file')` in the first generated workflow. Both are intentionally preserved as observations rather than classified as failures. This single sample does not establish deterministic routing.
 
-## Prompt size
+## Dependent-pipeline example comparison
 
-The same built-in-only profile map and the same counting method were used before and after. “Native” is the concatenated tool snippets/guidelines; “appended” is the `before_agent_start` pi-flow section.
+A focused comparison ran the `staged` scenario three times without a dependent-pipeline example and three times after adding one to the workflow `script` parameter description. Both variants used the same fixture, driver, `openai-codex/gpt-5.6-luna` model, and `xhigh` thinking. The example demonstrates a static schema, concurrent pipeline items, explicit stage returns, null handling, and two calls that continue the same per-item child through `session_key`. The separate `parallel()` rule retains a minimal thunk example. Generated scripts and child result details were inspected to confirm that each with-example workflow reused one key across the two calls for each item.
 
-| Prompt contribution | Before | After |
+| Observation | Without example | With example |
 | --- | ---: | ---: |
-| Tool-native metadata | 5,438 chars | 734 chars |
-| Appended contract | 5,224 chars | 3,893 chars |
-| Combined | 10,662 chars / 1,587 words | 4,627 chars / 675 words |
-| Roster entry occurrences | 2 | 1 |
+| Root runs | 3 | 3 |
+| First workflow call completed | 2/3 | 3/3 |
+| Generated workflow calls | 6 | 5 |
+| Workflow script errors | 2 | 0 |
+| Scripts using `pipeline()` | 1/6 | 5/5 |
+| Scripts using per-item `session_key` continuation | 0/6 | 5/5 |
+| Runs repeating a completed workflow | 1/3 | 2/3 |
+| Completed child-agent calls | 24 | 30 |
+| Reported tokens, root plus children | 137,238 | 128,684 |
+| Reported cost | $0.147169 | $0.137406 |
+| Summed wall time | 209.5s | 181.2s |
 
-The combined contract shrank 56.6% by characters and 57.5% by words. The detailed appended contract remains because custom Pi system prompts omit normal tool-native snippets and guidelines.
+Without the example, one run first produced a dynamically constructed schema enum rejected by static preflight, then a script with mismatched parentheses. The other generated scripts completed, including one valid pipeline. With the example, every generated script parsed, passed preflight, used a pipeline, reused one session key per file across its two stages, and completed all six children. Two with-example runs still repeated a successful workflow after initially misclassifying `package.json`, so the example improved orchestration shape and script validity in this sample but did not eliminate semantic mistakes or redundant self-correction. The small stochastic sample is not performance or reliability proof.
 
-## Real-model comparison
+After correcting the dynamic-schema wording and adding direct session-key observations to the driver, one final run against the resulting prompt completed one six-child pipeline on its first workflow call. Its script contained two `session_key` expressions, and the child details reported six keyed calls across three keys, each reused once. No workflow error or fixture change occurred.
 
-Setup for both sides:
+## Infrastructure failures
 
-- Root model: `deepseek/deepseek-v4-flash`
-- Thinking: `high`
-- Two repetitions per scenario
-- Active tools: `read`, `bash`, `Agent`, `workflow`
-- Ephemeral root session and isolated agent directory
-- Same generated fixture, prompts, driver, process timeout, and checks
-- Baseline extension: archived `8954ab8`
-- Modified extension: this change
+The driver exits nonzero only when it cannot produce a trustworthy observation, including:
 
-### Routing outcomes
+- Pi exits unsuccessfully or times out
+- retained output exceeds safety bounds
+- retained JSONL is malformed
+- no terminal root response is produced
+- the observed root model is not the pinned model
+- setup, credential, artifact, or cleanup operations fail
 
-| Scenario | Baseline | Modified | Accepted result |
-| --- | --- | --- | --- |
-| Narrow package lookup | root direct in 2/2 | root direct in 2/2 | yes |
-| Focused repository map | root direct in 2/2 | root direct in 2/2 | yes; focused delegation is deliberately soft |
-| Small flat three-lane review | three parallel Agent calls in 2/2 | three parallel Agent calls in 2/2 | yes; all calls fresh and completed |
-| Same-child follow-up | two sequential Agent calls sharing one non-empty key in 2/2 | same in 2/2 | yes |
-| Structured classify-then-follow-up | a pipeline workflow with at least two agent expressions and six completed children in 2/2 | same in 2/2 | yes |
+A successful run prints `[OBSERVED]`. `[INFRA FAILURE]` means the harness failed, not that the model selected an unexpected route.
 
-All hard checks passed on both sides. The focused-map delegation observation was inconclusive in all four runs because the root handled the tiny fixture directly without workflow. Under the committed driver, the modified run's duplicate successful staged execution is also reported as inconclusive rather than hidden or treated as deterministic proof.
+## Privacy and authentication
 
-### Usage and cost
+The driver creates a five-file fixture and an isolated Pi agent directory. Discovered extensions, skills, prompt templates, themes, context files, and session persistence are disabled. It copies only the `openai-codex` credential entry into a mode-0600 isolated auth file, so the pinned subscription can authenticate without exposing other provider credentials or mutating the operator's live auth store. The isolated directory is removed after every normal run, including retained-observation runs.
 
-Usage sums root assistant usage plus nested usage from `Agent` and `workflow` tool results. Tokens include cache reads/writes as reported by Pi; costs are provider-reported.
+The repository-wide Claude safety guard remains installed. A DeepSeek credential is therefore still required so any accidental Claude Code process cannot fall back to Anthropic login or another provider. DeepSeek values, initial and refreshed isolated OpenAI Codex credential values, and machine-specific paths are redacted from retained output.
 
-| Side | Runs | Reported tokens | Reported cost | Summed wall time |
-| --- | ---: | ---: | ---: | ---: |
-| Baseline | 10 | 622,059 | $0.014483 | 267.3s |
-| Modified | 10 | 710,465 | $0.014233 | 256.0s |
+## Running observations
 
-Modified-run tokens were 14.2% higher, while reported cost was 1.7% lower and summed wall time was 4.2% lower. These small mixed differences are not evidence of an execution-cost improvement: child output and root search behavior dominated this stochastic sample despite the much smaller static prompt.
-
-## Variance and limitations
-
-- Two repetitions expose obvious route variance but cannot prove deterministic behavior or generalize to other root models.
-- The focused scenario is intentionally soft. Direct investigation of this tiny fixture is acceptable.
-- Both prompt versions sometimes inspected files in the root before delegating. The modified flat scenario did this in one repetition; prompt wording does not reliably eliminate duplicate search.
-- An intermediate modified-prompt trial exposed a staged-authoring regression: one run compressed classification and follow-up into three children. Restoring the `pipeline()` stage argument contract and a concise dependent-stage example produced six-child pipeline workflows in the final 2/2 rerun.
-- In the final modified sample, one staged run retried an invalid workflow before succeeding, while the other ran two successful six-child workflows despite guidance not to repeat completed branches. The driver reports duplicate successful execution as inconclusive; it accepts the route only when the terminal script contains a schema-bearing pipeline with at least two agent expressions and completes at least six children.
-- The driver tests entry-point and continuation behavior only. It neither selects nor grades profile names, child models, or specialist roles.
-- Saved-name and replay behavior remain covered by `npm run e2e:workflow-features`; this driver focuses on root prompt routing.
-- After artifact-safety hardening, the final driver was rerun once each for flat fan-out, continuation, and staged orchestration: all three passed with 294,296 reported tokens, $0.007482 reported cost, and 107.2s summed wall time.
-
-## Deterministic validation
-
-The committed suite separately covers:
-
-- active Agent/workflow prompt sections for both, either, and neither tool;
-- detailed contract retention with a custom Pi base system prompt;
-- one dynamic profile roster occurrence;
-- same-stream continuation and fresh parallel Agent execution;
-- dynamic-schema and saved-workflow filename guidance matching runtime behavior.
-
-Run all required checks with:
+Run every scenario twice:
 
 ```bash
-npm run check
+npm run e2e:prompt-routing
 ```
+
+Run selected scenarios or change repetition count:
+
+```bash
+npm run e2e:prompt-routing -- \
+  --only focused,flat,staged \
+  --repetitions 3
+```
+
+Use `--keep` to retain sanitized `stdout.jsonl`, `stderr.log`, and `report.json`. Use `--auth-agent-dir` when the OpenAI Codex login is stored outside the normal Pi agent directory.
+
+The report states explicitly that routing choices and fixture changes do not affect exit status. Compare reports across prompt revisions rather than treating one sample as deterministic evidence.

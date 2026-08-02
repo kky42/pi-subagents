@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -12,7 +13,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -26,6 +27,8 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const extensionPath = path.join(repoRoot, "index.ts");
+const ROOT_MODEL = "openai-codex/gpt-5.6-luna";
+const ROOT_THINKING = "xhigh";
 const MAX_CAPTURE_CHARS = 16 * 1024 * 1024;
 const MAX_STDOUT_LINE_CHARS = 8 * 1024 * 1024;
 const SCENARIO_KEYS = ["direct", "focused", "flat", "continuation", "staged"];
@@ -55,13 +58,12 @@ loadDotEnv(path.join(repoRoot, ".env"));
 
 function parseArgs(argv) {
   const options = {
-    model: undefined,
-    thinking: undefined,
     repetitions: 2,
     timeoutMs: 300_000,
     deepseekApiKeyEnv: "DEEPSEEK_API_KEY",
     runRoot: path.join(tmpdir(), `pi-flow-prompt-routing-${Date.now()}`),
     agentDir: undefined,
+    authAgentDir: path.resolve(process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent")),
     piCommand: process.env.PI_E2E_COMMAND || "pi",
     extension: extensionPath,
     only: undefined,
@@ -76,22 +78,18 @@ function parseArgs(argv) {
       index += 1;
       return next;
     };
-    if (arg === "--model") options.model = value();
-    else if (arg === "--thinking") options.thinking = value();
-    else if (arg === "--repetitions") options.repetitions = Number(value());
+    if (arg === "--repetitions") options.repetitions = Number(value());
     else if (arg === "--timeout-ms") options.timeoutMs = Number(value());
     else if (arg === "--deepseek-api-key-env") options.deepseekApiKeyEnv = value();
     else if (arg === "--run-root") options.runRoot = path.resolve(value());
     else if (arg === "--agent-dir") options.agentDir = path.resolve(value());
+    else if (arg === "--auth-agent-dir") options.authAgentDir = path.resolve(value());
     else if (arg === "--pi-command") options.piCommand = value();
     else if (arg === "--extension") options.extension = path.resolve(value());
     else if (arg === "--only") options.only = value().split(",").map((item) => item.trim()).filter(Boolean);
     else if (arg === "--keep") options.keep = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
-  }
-  if (!options.help && (!options.model || !options.thinking)) {
-    throw new Error("--model and --thinking are required; this E2E intentionally has no encoded model defaults");
   }
   if (!Number.isInteger(options.repetitions) || options.repetitions < 1 || options.repetitions > 5) {
     throw new Error("--repetitions must be an integer from 1 to 5");
@@ -107,23 +105,22 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/e2e/prompt-routing.mjs --model <provider/model> --thinking <level> [options]
+  console.log(`Usage: node scripts/e2e/prompt-routing.mjs [options]
 
-Runs privacy-safe real-Pi routing scenarios against the current extension prompt.
-No profile name, child model, or specialist choice is asserted.
+Runs observation-only real-Pi routing scenarios against the current extension prompt.
+The root is pinned to ${ROOT_MODEL} with ${ROOT_THINKING} thinking. Routing choices are recorded, never asserted.
 
 Options:
-  --model <provider/model>        required root model
-  --thinking <level>              required root thinking level
   --repetitions <1-5>             repetitions per scenario (default: 2)
   --only <key,...>                direct, focused, flat, continuation, staged
   --timeout-ms <ms>               timeout per root run (default: 300000)
-  --deepseek-api-key-env <name>   preferred DeepSeek credential variable
+  --deepseek-api-key-env <name>   preferred DeepSeek credential variable for the Claude safety guard
   --run-root <dir>                artifact root
-  --agent-dir <dir>               isolated Pi agent directory (default: under run root)
+  --agent-dir <dir>               preconfigured isolated Pi agent directory (default: under run root)
+  --auth-agent-dir <dir>          Pi agent directory supplying openai-codex auth to the isolated default
   --pi-command <path>             Pi executable (default: PI_E2E_COMMAND or pi)
   --extension <path>              extension entry to evaluate (default: current worktree)
-  --keep                          keep artifacts after a passing run
+  --keep                          keep sanitized observation artifacts
 `);
 }
 
@@ -155,6 +152,51 @@ function assertAgentDirOwnership(options) {
   if (isInside(runRoot, agentDir)) {
     throw new Error("an explicit --agent-dir must be outside --run-root; omit it to use the isolated default");
   }
+}
+
+function readAuthFile(authPath) {
+  if (!existsSync(authPath)) {
+    throw new Error(`auth file not found: ${authPath}`);
+  }
+  try {
+    const auth = JSON.parse(readFileSync(authPath, "utf8"));
+    if (!auth || typeof auth !== "object" || Array.isArray(auth)) throw new Error("root value must be an object");
+    return auth;
+  } catch (error) {
+    throw new Error(`could not read auth file ${authPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function credentialValues(value, key = "") {
+  if (typeof value === "string") return key !== "type" && value.length > 0 ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap((item) => credentialValues(item));
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([childKey, child]) => credentialValues(child, childKey));
+}
+
+function agentCredentialValues(agentDir) {
+  return credentialValues(readAuthFile(path.join(agentDir, "auth.json")));
+}
+
+function prepareAgentDirectory(options) {
+  ensureDir(options.agentDir);
+  const sourceAuthPath = path.join(options.ownsAgentDir ? options.authAgentDir : options.agentDir, "auth.json");
+  const sourceAuth = readAuthFile(sourceAuthPath);
+  const openaiCodexAuth = sourceAuth["openai-codex"];
+  if (!openaiCodexAuth || typeof openaiCodexAuth !== "object" || Array.isArray(openaiCodexAuth)) {
+    throw new Error(`openai-codex auth is missing from ${sourceAuthPath}; run /login for ChatGPT Plus/Pro first`);
+  }
+
+  if (!options.ownsAgentDir) return credentialValues(sourceAuth);
+
+  chmodSync(options.agentDir, 0o700);
+  const isolatedAuth = { "openai-codex": openaiCodexAuth };
+  writeFileSync(
+    path.join(options.agentDir, "auth.json"),
+    `${JSON.stringify(isolatedAuth, null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600, flag: "wx" },
+  );
+  return credentialValues(isolatedAuth);
 }
 
 function findPackageRoot(entry) {
@@ -242,6 +284,19 @@ function addUsage(total, usage) {
   if (typeof usage?.cost?.total === "number") total.cost = (total.cost ?? 0) + usage.cost.total;
 }
 
+function summarizeChildSessionKeys(agents) {
+  const counts = new Map();
+  for (const agent of agents) {
+    if (typeof agent?.sessionKey !== "string" || !agent.sessionKey) continue;
+    counts.set(agent.sessionKey, (counts.get(agent.sessionKey) ?? 0) + 1);
+  }
+  return {
+    keyedChildCount: [...counts.values()].reduce((total, count) => total + count, 0),
+    distinctKeyCount: counts.size,
+    reusedKeyCount: [...counts.values()].filter((count) => count > 1).length,
+  };
+}
+
 function analyzeJsonl(text) {
   const analysis = {
     malformedLines: 0,
@@ -252,6 +307,7 @@ function analyzeJsonl(text) {
     workflowResults: [],
     rootUsage: {},
     childUsage: {},
+    rootModels: [],
     finalStop: false,
   };
   let group = 0;
@@ -274,6 +330,10 @@ function analyzeJsonl(text) {
     const message = event.message ?? {};
     if (message.role === "assistant") {
       addUsage(analysis.rootUsage, message.usage);
+      const rootModel = typeof message.provider === "string" && typeof message.model === "string"
+        ? `${message.provider}/${message.model}`
+        : undefined;
+      if (rootModel && !analysis.rootModels.includes(rootModel)) analysis.rootModels.push(rootModel);
       const calls = (message.content ?? []).filter((item) => item?.type === "toolCall");
       if (calls.length > 0) group += 1;
       for (const call of calls) {
@@ -289,6 +349,7 @@ function analyzeJsonl(text) {
             pipeline: script.includes("pipeline("),
             parallel: script.includes("parallel("),
             schema: /\bschema\s*:/.test(script),
+            sessionKeyExpressions: (script.match(/\bsession_key\s*:/g) ?? []).length,
             agentExpressions: (script.match(/\bagent\s*\(/g) ?? []).length,
           });
         }
@@ -300,10 +361,13 @@ function analyzeJsonl(text) {
       if (message.toolName === "Agent") {
         analysis.agentResults.push({ status: details.status });
       } else {
+        const agents = Array.isArray(details.agents) ? details.agents : [];
         analysis.workflowResults.push({
           status: details.status,
+          error: typeof details.error === "string" ? details.error : null,
           agentCount: details.agentCount,
-          childStatuses: Array.isArray(details.agents) ? details.agents.map((agent) => agent.status) : [],
+          childStatuses: agents.map((agent) => agent.status),
+          childSessionKeys: summarizeChildSessionKeys(agents),
         });
       }
     }
@@ -311,112 +375,40 @@ function analyzeJsonl(text) {
   return analysis;
 }
 
-function check(label, ok, info = "", soft = false) {
-  return { label, status: ok ? "PASS" : soft ? "INCONCLUSIVE" : "FAIL", info };
-}
-
-function commonChecks(run, analysis) {
-  return [
-    check("Pi process completed", run.code === 0 && !run.timedOut, `code=${run.code} timedOut=${run.timedOut}`),
-    check("output stayed within capture bounds", run.captureError === undefined, run.captureError ?? ""),
-    check("JSON event stream parsed", analysis.malformedLines === 0, `malformed=${analysis.malformedLines}`),
-    check("root produced a final response", analysis.finalStop),
-    check("fixture stayed unchanged", run.changed.length === 0, run.changed.join(",")),
-  ];
-}
-
-function validateDirect(run, analysis) {
-  const delegated = analysis.agentCalls.length + analysis.workflowCalls.length;
-  const inspected = (analysis.toolCounts.read ?? 0) + (analysis.toolCounts.bash ?? 0);
-  return [
-    ...commonChecks(run, analysis),
-    check("narrow lookup stayed in the root", delegated === 0, `Agent=${analysis.agentCalls.length} workflow=${analysis.workflowCalls.length}`),
-    check("root inspected the fixture", inspected > 0, `readOrBash=${inspected}`),
-  ];
-}
-
-function validateFocused(run, analysis) {
-  const routeAllowed = analysis.workflowCalls.length === 0 && analysis.agentCalls.length <= 1;
-  const didWork = analysis.agentCalls.length === 1 || (analysis.toolCounts.read ?? 0) + (analysis.toolCounts.bash ?? 0) > 0;
-  return [
-    ...commonChecks(run, analysis),
-    check("focused map used root or one Agent, never workflow", routeAllowed, `Agent=${analysis.agentCalls.length} workflow=${analysis.workflowCalls.length}`),
-    check("focused map performed an investigation", didWork),
-    check("focused map delegated once", analysis.agentCalls.length === 1, `Agent=${analysis.agentCalls.length}`, true),
-  ];
-}
-
-function validateFlat(run, analysis) {
-  const callsByGroup = new Map();
-  for (const call of analysis.agentCalls) callsByGroup.set(call.group, (callsByGroup.get(call.group) ?? 0) + 1);
-  const maxParallelGroup = Math.max(0, ...callsByGroup.values());
-  const fresh = analysis.agentCalls.every((call) => call.sessionKey === "");
-  const done = analysis.agentResults.length === analysis.agentCalls.length && analysis.agentResults.every((result) => result.status === "done");
-  return [
-    ...commonChecks(run, analysis),
-    check("small flat fan-out used direct Agent calls", analysis.agentCalls.length >= 2 && analysis.workflowCalls.length === 0, `Agent=${analysis.agentCalls.length} workflow=${analysis.workflowCalls.length}`),
-    check("independent Agent calls were issued together", maxParallelGroup >= 2, `maxGroup=${maxParallelGroup}`),
-    check("independent work stayed fresh", fresh),
-    check("all direct Agent calls completed", done),
-  ];
-}
-
-function validateContinuation(run, analysis) {
-  const keys = analysis.agentCalls.map((call) => call.sessionKey);
-  const groups = new Set(analysis.agentCalls.map((call) => call.group));
-  const sameNonEmptyKey = keys.length === 2 && keys[0].length > 0 && keys[0] === keys[1];
-  const done = analysis.agentResults.length === 2 && analysis.agentResults.every((result) => result.status === "done");
-  return [
-    ...commonChecks(run, analysis),
-    check("continuation used exactly two Agent calls", analysis.agentCalls.length === 2 && analysis.workflowCalls.length === 0, `Agent=${analysis.agentCalls.length} workflow=${analysis.workflowCalls.length}`),
-    check("same logical child reused one non-empty session key", sameNonEmptyKey),
-    check("continuation calls were sequential", groups.size === 2, `groups=${groups.size}`),
-    check("both continuation calls completed", done),
-  ];
-}
-
-function validateStaged(run, analysis) {
-  const workflow = analysis.workflowCalls.at(-1);
-  const result = analysis.workflowResults.at(-1);
-  const completedResults = analysis.workflowResults.filter((item) => item.status === "completed");
-  const childrenDone = result?.childStatuses.length >= 6 && result.childStatuses.every((status) => status === "done");
-  return [
-    ...commonChecks(run, analysis),
-    check("staged structured task used workflow", analysis.workflowCalls.length >= 1 && analysis.agentCalls.length === 0, `workflow=${analysis.workflowCalls.length} Agent=${analysis.agentCalls.length}`),
-    check("successful workflow encoded dependent pipeline stages and schemas", Boolean(workflow?.pipeline && workflow?.schema && workflow?.agentExpressions >= 2), JSON.stringify(workflow ?? {})),
-    check("workflow completed at least six child calls", result?.status === "completed" && result?.agentCount >= 6, JSON.stringify(result ?? {})),
-    check("all staged children completed", childrenDone),
-    check("workflow avoided duplicate successful execution", completedResults.length === 1, `completed=${completedResults.length}`, true),
-  ];
-}
-
 const SCENARIOS = [
   {
     key: "direct",
     prompt: "Read package.json directly with the root file tools and report only the package name. This is a narrow local lookup; do not delegate it and do not modify files.",
-    validate: validateDirect,
   },
   {
     key: "focused",
     prompt: "Map this repository's purpose, key files, runtime flow, and tests. Keep the investigation read-only and give a concise evidence-based summary.",
-    validate: validateFocused,
   },
   {
     key: "flat",
     prompt: "Review this repository across three independent dimensions: source correctness, tests and coverage, and documentation and package configuration. Keep this as a small flat fan-out, make no file changes, and synthesize a concise final assessment.",
-    validate: validateFlat,
   },
   {
     key: "continuation",
     prompt: "Use one subagent in two sequential turns. First ask it to read src/cli.js and src/report.js, remember the exported function and command-line argument flow, and reply with STEP1_DONE. Then ask that same continuing child, without re-reading files and without copying its first result into the second prompt, to recall the function and flow. Use pi-flow's child-conversation continuation feature, report the second result, and do not modify files.",
-    validate: validateContinuation,
   },
   {
     key: "staged",
     prompt: "For each of package.json, src/cli.js, and test/report.test.js, first classify it as config, entry, or test using a strict machine-readable result. Then dispatch a classification-specific follow-up that states its role in one sentence. Different files may proceed concurrently, but each file's classify step must precede its follow-up. Return one object containing all classifications and follow-ups. Keep this read-only.",
-    validate: validateStaged,
   },
 ];
+
+function infrastructureIssues(run, analysis) {
+  const issues = [];
+  if (run.code !== 0 || run.timedOut) issues.push(`Pi process code=${run.code} timedOut=${run.timedOut}`);
+  if (run.captureError) issues.push(run.captureError);
+  if (analysis.malformedLines > 0) issues.push(`retained JSONL has ${analysis.malformedLines} malformed line(s)`);
+  if (!analysis.finalStop) issues.push("root produced no terminal assistant response");
+  if (!analysis.rootModels.includes(ROOT_MODEL)) {
+    issues.push(`expected root model ${ROOT_MODEL}; observed ${analysis.rootModels.join(", ") || "none"}`);
+  }
+  return issues;
+}
 
 function runPi({ options, fixture, scenario, repetition, environment, redactions }) {
   const runDir = path.join(options.runRoot, "runs", `${scenario.key}-${repetition}`);
@@ -424,8 +416,8 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
   const args = [
     "-p",
     "--mode", "json",
-    "--model", options.model,
-    "--thinking", options.thinking,
+    "--model", ROOT_MODEL,
+    "--thinking", ROOT_THINKING,
     "--no-session",
     "--no-extensions",
     "--extension", options.extension,
@@ -517,8 +509,9 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
       try {
         if (stdoutPending && !captureError) retainStdoutLine(stdoutPending);
         const after = snapshotFiles(fixture);
-        stdout = redactSecrets(stdout, redactions);
-        stderr = redactSecrets(stderr, redactions);
+        const currentRedactions = [...redactions, ...agentCredentialValues(options.agentDir)];
+        stdout = redactSecrets(stdout, currentRedactions);
+        stderr = redactSecrets(stderr, currentRedactions);
         writeFileSync(path.join(runDir, "stdout.jsonl"), stdout, "utf8");
         writeFileSync(path.join(runDir, "stderr.log"), stderr, "utf8");
         resolve({
@@ -539,12 +532,29 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
 }
 
 function summarizedAnalysis(analysis) {
-  const keys = analysis.agentCalls.map((call) => call.sessionKey).filter(Boolean);
+  const keyIds = new Map();
+  const sessionKeyPattern = analysis.agentCalls.map((call) => {
+    if (!call.sessionKey) return "fresh";
+    if (!keyIds.has(call.sessionKey)) keyIds.set(call.sessionKey, `key-${keyIds.size + 1}`);
+    return keyIds.get(call.sessionKey);
+  });
+  const keyedCallCount = sessionKeyPattern.filter((value) => value !== "fresh").length;
+  const sessionKeyState = analysis.agentCalls.length === 0
+    ? "no-agent-calls"
+    : keyedCallCount === 0
+      ? "all-fresh"
+      : keyedCallCount < analysis.agentCalls.length
+        ? "mixed"
+        : keyIds.size === 1
+          ? "same"
+          : "different";
   return {
+    rootModels: analysis.rootModels,
     toolCounts: analysis.toolCounts,
     agentCallCount: analysis.agentCalls.length,
     agentCallGroups: analysis.agentCalls.map((call) => call.group),
-    sessionKeyState: keys.length === 0 ? "none" : new Set(keys).size === 1 ? "same" : "different",
+    sessionKeyState,
+    sessionKeyPattern,
     workflowCalls: analysis.workflowCalls,
     agentResults: analysis.agentResults,
     workflowResults: analysis.workflowResults,
@@ -554,16 +564,11 @@ function summarizedAnalysis(analysis) {
 }
 
 function printRun(result) {
-  const failed = result.checks.filter((item) => item.status === "FAIL").length;
-  const inconclusive = result.checks.filter((item) => item.status === "INCONCLUSIVE").length;
-  const status = failed > 0 ? "FAIL" : inconclusive > 0 ? "INCONCLUSIVE" : "PASS";
+  const status = result.infrastructureIssues.length > 0 ? "INFRA FAILURE" : "OBSERVED";
   console.log(`\n[${status}] ${result.scenario} repetition ${result.repetition} (${(result.durationMs / 1000).toFixed(1)}s)`);
-  for (const item of result.checks) {
-    const marker = item.status === "PASS" ? "✓" : item.status === "FAIL" ? "✗" : "•";
-    console.log(`  ${marker} ${item.label}${item.info ? ` (${item.info})` : ""}`);
-  }
-  console.log(`  tools=${JSON.stringify(result.analysis.toolCounts)} usage=${JSON.stringify({ root: result.analysis.rootUsage, child: result.analysis.childUsage })}`);
-  return { failed, inconclusive };
+  for (const issue of result.infrastructureIssues) console.log(`  infrastructure: ${issue}`);
+  console.log(`  process=${JSON.stringify(result.process)} changedFiles=${JSON.stringify(result.changedFiles)}`);
+  console.log(`  observations=${JSON.stringify(result.analysis)}`);
 }
 
 async function main() {
@@ -584,7 +589,7 @@ async function main() {
     prepareRunRoot(options.runRoot);
     runRootPrepared = true;
     assertAgentDirOwnership(options);
-    ensureDir(options.agentDir);
+    const openaiCredentialValues = prepareAgentDirectory(options);
     const fixture = createFixture(options.runRoot);
     const environment = prepareDeepseekClaudeE2EEnv(
       minimalE2EEnvironment(process.env, credential),
@@ -593,16 +598,19 @@ async function main() {
         runtimeDir: path.join(options.runRoot, "claude-runtime"),
       },
     );
-    const credentialValues = deepseekCredentialEnvNames(options.deepseekApiKeyEnv)
+    const deepseekCredentialValues = deepseekCredentialEnvNames(options.deepseekApiKeyEnv)
       .map((name) => process.env[name])
       .filter((value) => typeof value === "string" && value.length > 0);
     const redactions = [...new Set([
       credential,
-      ...credentialValues,
+      ...deepseekCredentialValues,
+      ...openaiCredentialValues,
       options.runRoot,
       canonicalPotentialPath(options.runRoot),
       options.agentDir,
       canonicalPotentialPath(options.agentDir),
+      options.authAgentDir,
+      canonicalPotentialPath(options.authAgentDir),
       options.extension,
       realpathSync(options.extension),
       findPackageRoot(options.extension),
@@ -610,9 +618,9 @@ async function main() {
       process.env.HOME,
     ].filter((value) => typeof value === "string" && value.length > 0))];
     const selected = SCENARIOS.filter((scenario) => !options.only || options.only.includes(scenario.key));
-    console.log("pi-flow prompt-routing E2E");
-    console.log(`  model: ${options.model}`);
-    console.log(`  thinking: ${options.thinking}`);
+    console.log("pi-flow prompt-routing E2E observations");
+    console.log(`  model: ${ROOT_MODEL}`);
+    console.log(`  thinking: ${ROOT_THINKING}`);
     console.log(`  repetitions: ${options.repetitions}`);
     console.log(`  Claude Code provider guard: DeepSeek (${DEEPSEEK_ANTHROPIC_BASE_URL})`);
 
@@ -628,32 +636,37 @@ async function main() {
           redactions,
         });
         const analysis = analyzeJsonl(run.stdout);
-        const checks = scenario.validate(run, analysis);
         const result = {
           scenario: scenario.key,
           repetition,
           durationMs: run.durationMs,
-          checks,
+          infrastructureIssues: infrastructureIssues(run, analysis),
+          process: {
+            code: run.code,
+            signal: run.signal,
+            timedOut: run.timedOut,
+            captureError: run.captureError,
+          },
+          changedFiles: run.changed,
           analysis: summarizedAnalysis(analysis),
         };
         results.push(result);
         printRun(result);
       }
     }
-    const failedChecks = results.flatMap((result) => result.checks).filter((item) => item.status === "FAIL").length;
-    const inconclusiveChecks = results.flatMap((result) => result.checks).filter((item) => item.status === "INCONCLUSIVE").length;
+    const infrastructureFailureCount = results.filter((result) => result.infrastructureIssues.length > 0).length;
     const report = {
-      model: options.model,
-      thinking: options.thinking,
+      purpose: "Observation only. Routing choices and fixture changes do not affect exit status.",
+      model: ROOT_MODEL,
+      thinking: ROOT_THINKING,
       repetitions: options.repetitions,
       scenarios: selected.map((scenario) => scenario.key),
-      failedChecks,
-      inconclusiveChecks,
+      infrastructureFailureCount,
       results,
     };
     writeFileSync(path.join(options.runRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
-    console.log(`\nSummary: ${results.length} run(s), ${failedChecks} failed check(s), ${inconclusiveChecks} inconclusive check(s).`);
-    if (failedChecks > 0) throw new Error("prompt-routing E2E failed");
+    console.log(`\nSummary: ${results.length} observation(s), ${infrastructureFailureCount} infrastructure failure(s).`);
+    if (infrastructureFailureCount > 0) throw new Error("prompt-routing E2E infrastructure failed");
     completedSuccessfully = true;
   } finally {
     if (runRootPrepared) {
@@ -668,6 +681,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`FAIL prompt-routing E2E: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`prompt-routing E2E error: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });

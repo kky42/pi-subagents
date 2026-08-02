@@ -110,11 +110,12 @@ describe("DeepSeek-backed Claude Code E2E environment", () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe(path.join(runtimeDir, "config"));
     expect(existsSync(env.CLAUDE_CONFIG_DIR!)).toBe(true);
     expect(env.PATH?.startsWith(path.join(runtimeDir, "bin"))).toBe(true);
-  });
+  }, 15_000);
 
   it("requires every real-model E2E driver to install the provider guard", () => {
     const drivers = [
       "basic-metrics.mjs",
+      "prompt-routing.mjs",
       "session-key-resume.mjs",
       "workflow-features.mjs",
     ];

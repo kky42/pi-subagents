@@ -87,7 +87,7 @@ tools: read, grep, find, ls, bash
     expect(childModel?.id).toBe("faux-thinker");
     expect((childOptions as { reasoning?: string } | undefined)?.reasoning).toBe("high");
     expect(childContext?.systemPrompt).toContain("Custom Code Searcher Role");
-    expect(childContext?.systemPrompt).not.toContain("Subagent Delegation");
+    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
     expect(getToolNames(childContext)).toEqual(["bash", "find", "grep", "ls", "read"]);
     expect(JSON.stringify(childContext?.messages)).toContain("Search for the auth flow");
     expect(JSON.stringify(childContext?.messages)).not.toContain("Please delegate the auth search");
@@ -179,7 +179,7 @@ tools: read
 
     expect(childContext?.systemPrompt).toContain("Project append marker must survive into subagents.");
     expect(childContext?.systemPrompt).toContain("Custom Context Checker Role");
-    expect(childContext?.systemPrompt).not.toContain("Subagent Delegation");
+    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
 
     disposeSession(session);
   });
@@ -202,7 +202,7 @@ tools: read
 
     await session.prompt("Delegate config research.");
 
-    expect(childContext?.systemPrompt).not.toContain("Subagent Delegation");
+    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
     expect(JSON.stringify(childContext?.messages)).toContain("Inspect config loading.");
 
     disposeSession(session);

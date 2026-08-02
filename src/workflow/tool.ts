@@ -13,10 +13,14 @@ import { isActiveSubagentStatus, isCompletedSubagentStatus, renderSubagentNode }
 import { SPINNER_INTERVAL_MS } from "../core/spinner.ts";
 import { filterProfilesForModelRegistry } from "../core/model.ts";
 import { getSubagentProfiles } from "../profiles.ts";
-import { WORKFLOW_PROMPT_GUIDELINES, WORKFLOW_PROMPT_SNIPPET } from "../prompts.ts";
 import type { SubagentTelemetry, SubagentToolDetails, SubagentUsage, WorkflowAgentSnapshot, WorkflowToolDetails } from "../types.ts";
 import { isWorkflowAbortError, runWorkflow } from "./runtime.ts";
-import { prepareWorkflowToolSource, workflowToolParameters } from "./source.ts";
+import {
+  prepareWorkflowToolSource,
+  WORKFLOW_PROMPT_SNIPPET,
+  WORKFLOW_TOOL_DESCRIPTION,
+  workflowToolParameters,
+} from "./source.ts";
 import { createWorkflowAgentRunner } from "./agent-runner.ts";
 
 export interface CreateWorkflowToolOptions {
@@ -140,10 +144,8 @@ export function createWorkflowTool(
   return defineTool({
     name: "workflow",
     label: "Workflow",
-    description:
-      "Run a saved, session-persisted, or ad-hoc trusted JavaScript workflow that orchestrates multiple subagents with agent(), parallel(), and pipeline(), then synthesizes their results. Provide exactly one of `name` (saved workflow), `scriptPath` (persisted script), or `script` (raw JavaScript starting with `export const meta = { name, description }`). Use `resumeFromRunId` with `scriptPath` to reuse cached agent results for the longest unchanged prefix. Every workflow must call agent() at least once.",
+    description: WORKFLOW_TOOL_DESCRIPTION,
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
-    promptGuidelines: WORKFLOW_PROMPT_GUIDELINES,
     parameters: workflowToolParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const prepared = await prepareWorkflowToolSource(params, ctx);

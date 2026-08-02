@@ -13,6 +13,7 @@ import {
   type WorkflowAgentRunner,
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
+import { INLINE_WORKFLOW_EXAMPLE } from "../src/workflow/source.ts";
 import { createWorkflowTool } from "../src/workflow/tool.ts";
 import { loadWorkflowJournal } from "../src/workflow/journal.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
@@ -140,6 +141,32 @@ describe("runWorkflow", () => {
     expect(result.result).toBe("hello");
     expect(result.meta.name).toBe("wf");
     expect(result.agentCount).toBe(1);
+  });
+
+  it("keeps the inline workflow example executable", async () => {
+    const calls: Array<{ label: string; sessionKey?: string; subagentType: string }> = [];
+    const result = await runWorkflow(INLINE_WORKFLOW_EXAMPLE, {
+      args: { items: ["source", "tests"] },
+      cwd: "/tmp",
+      limiter: new ConcurrencyLimiter(4),
+      runAgent: async (call) => {
+        calls.push({ label: call.label, sessionKey: call.sessionKey, subagentType: call.subagentType });
+        return { text: call.label };
+      },
+    });
+
+    expect(calls.map((call) => `${call.label}:${call.sessionKey}:${call.subagentType}`).sort()).toEqual([
+      "followup-0:item-0:general-purpose",
+      "followup-1:item-1:general-purpose",
+      "inspect-0:item-0:general-purpose",
+      "inspect-1:item-1:general-purpose",
+    ]);
+    expect(result.result).toEqual({
+      results: [
+        { item: "source", first: "inspect-0", followup: "followup-0" },
+        { item: "tests", first: "inspect-1", followup: "followup-1" },
+      ],
+    });
   });
 
   it("rejects invalid schemas before launching any agent", async () => {

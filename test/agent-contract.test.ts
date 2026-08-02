@@ -11,15 +11,17 @@ import {
 import { fauxAssistantMessage, fauxProvider, type Context, type Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { getSubagentProfiles } from "../src/profiles.ts";
-import {
-  AGENT_USE_POLICY,
-  DIRECT_WORK_POLICY,
-  WORKFLOW_USE_POLICY,
-} from "../src/prompts.ts";
+import { buildFlowPrompt } from "../src/prompts.ts";
 import { installFauxProvider, packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 function occurrenceCount(text: string, value: string): number {
   return text.split(value).length - 1;
+}
+
+function expectDescribedProperties(properties: Record<string, { description?: string }>): void {
+  for (const property of Object.values(properties)) {
+    expect(property.description?.trim().length).toBeGreaterThan(0);
+  }
 }
 
 describe("pi-subagent agent contract", () => {
@@ -49,41 +51,38 @@ describe("pi-subagent agent contract", () => {
     return rootContext?.systemPrompt ?? "";
   }
 
-  it("registers the Claude-style Agent tool contract without profile-specific guidance", async () => {
+  it("registers the Agent API shape without duplicate prompt guidelines", async () => {
     const { session } = await createSession();
-
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
-    expect(tool).toBeDefined();
-    const properties = (tool?.parameters as { properties: Record<string, { description?: string }> } | undefined)?.properties;
-    expect(properties).toHaveProperty("description");
-    expect(properties).toHaveProperty("prompt");
-    expect(properties).toHaveProperty("subagent_type");
-    expect(properties).toHaveProperty("session_key");
-    expect(properties).not.toHaveProperty("run_in_background");
-    expect(properties).not.toHaveProperty("resume");
-    expect(properties).not.toHaveProperty("model");
-    expect(properties).not.toHaveProperty("thinking");
-    expect(properties).not.toHaveProperty("timeout");
-    expect(properties).not.toHaveProperty("subagentTimeoutMs");
-    expect(properties?.subagent_type.description).toMatch(/available profiles/i);
-    expect(properties?.subagent_type.description).not.toContain("Defaults to");
-    expect(properties?.session_key.description).toContain("same logical child");
-    expect(tool?.promptGuidelines).toContain(AGENT_USE_POLICY);
+    const schema = tool?.parameters as {
+      required?: string[];
+      properties: Record<string, { description?: string }>;
+    } | undefined;
+    const properties = schema?.properties ?? {};
+
+    expect(tool?.description.trim().length).toBeGreaterThan(0);
+    expect(tool?.promptGuidelines).toBeUndefined();
+    expect(schema?.required).toEqual(["description", "prompt"]);
+    expect(Object.keys(properties).sort()).toEqual(["description", "prompt", "session_key", "subagent_type"]);
+    expectDescribedProperties(properties);
 
     disposeSession(session);
   });
 
-  it("marks description and prompt required while keeping routing fields optional", async () => {
+  it("registers the workflow API shape without duplicate prompt guidelines", async () => {
     const { session } = await createSession();
+    const tool = session.getAllTools().find((candidate) => candidate.name === "workflow");
+    const schema = tool?.parameters as {
+      required?: string[];
+      properties: Record<string, { description?: string }>;
+    } | undefined;
+    const properties = schema?.properties ?? {};
 
-    const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
-    const schema = tool?.parameters as { required?: string[]; properties: Record<string, unknown> } | undefined;
-    expect(schema?.required).toContain("description");
-    expect(schema?.required).toContain("prompt");
-    expect(schema?.required ?? []).not.toContain("subagent_type");
-    expect(schema?.required ?? []).not.toContain("session_key");
-    expect(schema?.properties).not.toHaveProperty("tag");
-    expect(schema?.properties).not.toHaveProperty("label");
+    expect(tool?.description.trim().length).toBeGreaterThan(0);
+    expect(tool?.promptGuidelines).toBeUndefined();
+    expect(schema?.required ?? []).toEqual([]);
+    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resumeFromRunId", "script", "scriptPath"]);
+    expectDescribedProperties(properties);
 
     disposeSession(session);
   });
@@ -110,78 +109,87 @@ describe("pi-subagent agent contract", () => {
     expect(extensions.extensions[0]?.flags.has("subagent-timeout-ms")).toBe(true);
   });
 
-  it("injects one profile roster and the approved routing boundary", async () => {
+  it("injects every registered profile and workflow without their bodies", async () => {
+    const profileBodySentinel = "PROFILE_BODY_SENTINEL";
+    const workflowBodySentinel = "WORKFLOW_BODY_SENTINEL";
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "subagents", "reviewer.md"),
+      `---\ndescription: Reviews source changes.\n---\n${profileBodySentinel}\n`,
+    );
+    mkdirSync(join(agentDir, "workflows"), { recursive: true });
+    writeFileSync(
+      join(agentDir, "workflows", "review.js"),
+      `export const meta = { name: 'review_flow', description: 'Review source and tests.' };\nreturn await agent('${workflowBodySentinel}');`,
+    );
+
     const prompt = await captureRootPrompt(["Agent", "workflow"]);
     const profiles = getSubagentProfiles(agentDir);
 
-    expect(prompt).toContain("# Subagent Delegation");
-    expect(prompt).toContain(`- ${DIRECT_WORK_POLICY}`);
-    expect(prompt).toContain(`- ${AGENT_USE_POLICY}`);
-    expect(prompt).toContain(`- ${WORKFLOW_USE_POLICY}`);
-    expect(prompt).toContain("## Agent");
-    expect(prompt).toContain("## Workflow");
-    expect(prompt).toContain("same logical child stream");
-    expect(prompt).toContain("independent work, including parallel branches, stays fresh");
-    expect(prompt).toContain("schema supplied through dynamic options is validated immediately before that child launches");
-    expect(prompt).toContain("filename need not match `meta.name`");
-    expect(prompt).not.toContain("use a filename that exactly matches");
-    expect(prompt).not.toContain("Schemas must be static");
-    expect(occurrenceCount(prompt, "Available agents:")).toBe(1);
+    expect(occurrenceCount(prompt, "- reviewer: Reviews source changes.")).toBe(1);
+    expect(occurrenceCount(prompt, "- review_flow: Review source and tests.")).toBe(1);
+    expect(prompt).not.toContain(profileBodySentinel);
+    expect(prompt).not.toContain(workflowBodySentinel);
     for (const profile of profiles.values()) {
       expect(occurrenceCount(prompt, `- ${profile.name}: ${profile.description}`)).toBe(1);
     }
   });
 
-  it("retains detailed guidance with a custom base system prompt", async () => {
+  it("uses the same PiFlow prompt regardless of the active tool subset", async () => {
+    const expectedFlowPrompt = buildFlowPrompt(getSubagentProfiles(agentDir), []);
+    for (const activeTools of [["Agent", "workflow"], ["Agent"], ["workflow"], []]) {
+      const prompt = await captureRootPrompt(activeTools);
+      expect(prompt.endsWith(expectedFlowPrompt)).toBe(true);
+    }
+  });
+
+  it("uses Pi active-tool snippets for canonical tool discovery", async () => {
+    const agentEntry = "- Agent:";
+    const workflowEntry = "- workflow:";
+    const both = await captureRootPrompt(["Agent", "workflow"]);
+    const agentOnly = await captureRootPrompt(["Agent"]);
+    const workflowOnly = await captureRootPrompt(["workflow"]);
+    const neither = await captureRootPrompt([]);
+
+    expect(both).toContain(agentEntry);
+    expect(both).toContain(workflowEntry);
+    expect(agentOnly).toContain(agentEntry);
+    expect(agentOnly).not.toContain(workflowEntry);
+    expect(workflowOnly).not.toContain(agentEntry);
+    expect(workflowOnly).toContain(workflowEntry);
+    expect(neither).not.toContain(agentEntry);
+    expect(neither).not.toContain(workflowEntry);
+  });
+
+  it("retains a custom base system prompt", async () => {
     const customPrompt = "CUSTOM_SYSTEM_PROMPT_SENTINEL";
-    const prompt = await captureRootPrompt(["Agent", "workflow"], customPrompt);
+    const prompt = await captureRootPrompt([], customPrompt);
+    const expectedFlowPrompt = buildFlowPrompt(getSubagentProfiles(agentDir), []);
 
     expect(prompt.startsWith(customPrompt)).toBe(true);
-    expect(prompt).toContain("# Subagent Delegation");
-    expect(prompt).toContain("## Agent");
-    expect(prompt).toContain("## Workflow");
-    expect(prompt).toContain("schema supplied through dynamic options");
+    expect(prompt.endsWith(expectedFlowPrompt)).toBe(true);
   });
 
-  it("appends detailed guidance only for active pi-flow tools", async () => {
-    const both = await captureRootPrompt(["Agent", "workflow"]);
-    expect(both).toContain("## Agent");
-    expect(both).toContain("## Workflow");
+  it("lists every workflow without count or description truncation", async () => {
+    const workflowsDir = join(agentDir, "workflows");
+    const longDescription = `Complete description ${"x".repeat(220)}`;
+    mkdirSync(workflowsDir, { recursive: true });
+    for (let index = 1; index <= 25; index += 1) {
+      const name = `workflow_${String(index).padStart(2, "0")}`;
+      const description = index === 25 ? longDescription : `Description ${index}`;
+      writeFileSync(
+        join(workflowsDir, `${name}.js`),
+        `export const meta = { name: '${name}', description: '${description}' };\nreturn await agent('run');`,
+      );
+    }
 
-    const agentOnly = await captureRootPrompt(["Agent"]);
-    expect(agentOnly).toContain("## Agent");
-    expect(agentOnly).not.toContain("## Workflow");
-    expect(agentOnly).toContain(AGENT_USE_POLICY);
-    expect(agentOnly).not.toContain(WORKFLOW_USE_POLICY);
+    const prompt = await captureRootPrompt([]);
 
-    const workflowOnly = await captureRootPrompt(["workflow"]);
-    expect(workflowOnly).not.toContain("## Agent");
-    expect(workflowOnly).toContain("## Workflow");
-    expect(workflowOnly).not.toContain(AGENT_USE_POLICY);
-    expect(workflowOnly).toContain(WORKFLOW_USE_POLICY);
-
-    const neither = await captureRootPrompt([]);
-    expect(neither).not.toContain("# Subagent Delegation");
-    expect(neither).not.toContain(AGENT_USE_POLICY);
-    expect(neither).not.toContain(WORKFLOW_USE_POLICY);
-  });
-
-  it("advertises saved workflows only while workflow is active", async () => {
-    const workflowName = "saved_contract_probe";
-    const description = "Summarize generated fixture findings.";
-    mkdirSync(join(agentDir, "workflows"), { recursive: true });
-    writeFileSync(
-      join(agentDir, "workflows", "different-file-name.js"),
-      `export const meta = { name: '${workflowName}', description: '${description}' };\nreturn await agent('summarize');`,
-    );
-
-    const workflowPrompt = await captureRootPrompt(["workflow"]);
-    expect(workflowPrompt).toContain("Saved workflows:");
-    expect(workflowPrompt).toContain(`- ${workflowName}: ${description}`);
-
-    const agentPrompt = await captureRootPrompt(["Agent"]);
-    expect(agentPrompt).not.toContain("Saved workflows:");
-    expect(agentPrompt).not.toContain(workflowName);
+    for (let index = 1; index <= 25; index += 1) {
+      const name = `workflow_${String(index).padStart(2, "0")}`;
+      expect(occurrenceCount(prompt, `- ${name}:`)).toBe(1);
+    }
+    expect(prompt).toContain(longDescription);
   });
 
   it("registers Agent when loaded through additionalExtensionPaths", async () => {

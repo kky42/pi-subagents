@@ -20,7 +20,7 @@ Pi stays in control while `pi-flow` gives it two new ways to delegate:
 
 | Primitive | Best for |
 | --- | --- |
-| **`Agent`** | One focused delegated task or a small flat fan-out of independent work. |
+| **`Agent`** | Independent parallel work or context-heavy exploration where only the result needs to return. |
 | **`workflow`** | Saved workflows, dependent stages, control flow, structured results or branching, replay, or larger fan-out. |
 
 Each subagent can run through a different harness and model. Route fast searches to Codex, UI review to Claude Code, local analysis to Pi—or define your own mix.
@@ -190,7 +190,7 @@ Agent({
 
 ## Choose Agent or workflow by task shape
 
-Use parallel `Agent` calls for a small flat set of independent investigations. Use `workflow` when orchestration matches a saved workflow or needs dependent stages, control flow, structured results or decisions, replay, or larger fan-out.
+Keep narrow local work in the foreground when delegation adds no value. Use `Agent` for independent parallel work or focused exploration whose intermediate context does not need to remain in the foreground. Use `workflow` for more complex multi-agent coordination, including saved workflows, dependent stages, control flow, structured decisions, replay, or larger fan-out.
 
 ```text
 Use a workflow to classify each module with a strict risk result, then run the matching follow-up review for each classification.
