@@ -79,6 +79,7 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
       bindings.set(call.sessionKey, { key: call.sessionKey, sessionId: details.sessionId, subagentType: call.subagentType, backend: profile.backend });
     }
     if (details.status !== "done") throw new Error(details.error ?? "subagent failed");
+    if (call.sessionKey && !details.sessionId) throw new Error("subagent completed without a resumable session ID");
     if (externalSchema) {
       try { return JSON.parse(details.result ?? "null"); } catch { throw new Error("external subagent structured output was not valid JSON"); }
     }

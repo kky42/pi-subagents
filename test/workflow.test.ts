@@ -5,8 +5,8 @@ import { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { SessionKeyLocks } from "../src/core/session-key.ts";
+import { BackgroundTaskManager } from "../src/core/task-manager.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import type { WorkflowToolDetails } from "../src/types.ts";
 import {
   parseWorkflowScript,
   runWorkflow,
@@ -439,6 +439,29 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
     ).rejects.toThrow(/abort/i);
   });
 
+  it("does not settle an aborted workflow before active agents release limiter slots", async () => {
+    const controller = new AbortController();
+    const limiter = new ConcurrencyLimiter(1);
+    let childSettled = false;
+    await expect(
+      runWorkflow(`${META}return await agent('x', { label: 'a' });`, {
+        cwd: "/tmp",
+        limiter,
+        runAgent: async () => {
+          controller.abort();
+          await delay(40);
+          childSettled = true;
+          return "late";
+        },
+        signal: controller.signal,
+        limits: { abortGraceMs: 5 },
+      }),
+    ).rejects.toThrow(/abort/i);
+
+    expect(childSettled).toBe(true);
+    expect(limiter.activeCount).toBe(0);
+  });
+
   it("does not let scripts swallow abort and report success", async () => {
     const controller = new AbortController();
     await expect(
@@ -803,19 +826,20 @@ describe("saved workflow registry", () => {
   it("loads a resume journal up to a malformed trailing line", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-subagent-workflows-"));
     try {
-      const runId = "wf_resume_test";
+      const taskId = "task_resume_test";
       writeFileSync(
-        join(dir, `run-${runId}.jsonl`),
+        join(dir, `task-${taskId}.jsonl`),
         [
-          JSON.stringify({ type: "run_start", runId }),
+          JSON.stringify({ type: "task_start", taskId }),
           JSON.stringify({ type: "agent_result", index: 1, fingerprint: "a", result: "one" }),
           "{ truncated",
           JSON.stringify({ type: "agent_result", index: 2, fingerprint: "b", result: "two" }),
         ].join("\n"),
       );
 
-      const journal = await loadWorkflowJournal(dir, runId);
+      const journal = await loadWorkflowJournal(dir, taskId);
 
+      expect(journal?.status).toBe("running");
       expect(journal?.agentResults).toEqual([{ index: 1, fingerprint: "a", result: "one", failed: false }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -825,6 +849,7 @@ describe("saved workflow registry", () => {
 
 describe("workflow tool rendering", () => {
   const tool = createWorkflowTool({
+    taskManager: new BackgroundTaskManager({ notify: () => {} }),
     getLimiter: () => new ConcurrencyLimiter(4),
     getThinkingLevel: () => "high",
     getSubagentTimeoutMs: () => 0,
@@ -842,292 +867,31 @@ describe("workflow tool rendering", () => {
     expect(after.trim()).toBe("");
   });
 
-  it("renders a phase-grouped tree with per-agent marks and counts", () => {
+  it("renders the compact accepted workflow envelope", () => {
     const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
+    const details = {
+      task_id: "task_123",
+      task_type: "workflow",
+      status: "accepted",
       name: "audit",
-      status: "running",
-      agentCount: 3,
-      phases: ["scan"],
-      agents: [
-        { index: 1, label: "alpha", subagentType: "custom-agent", backend: "pi", status: "running" },
-        { index: 2, label: "beta", phase: "scan", subagentType: "codex-reviewer", backend: "codex", status: "done" },
-        { index: 3, label: "gamma", subagentType: "claude-reviewer", backend: "claude", status: "error" },
-      ],
-      logs: [],
     };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("Workflow(audit)");
-    expect(text).toContain("running");
-    expect(text).toContain("running · 1/3");
-    expect(text).toContain("✓ scan done · 1/1");
-    expect(text).toContain("✓ Codex Agent(codex-reviewer, beta)");
-    expect(text).toContain("▶ unphased running · 0/2");
-    expect(text).toContain("Pi Agent(custom-agent: alpha)");
-    expect(text).toContain("✗ Claude Agent(claude-reviewer, gamma)");
-    expect(text.indexOf("scan")).toBeLessThan(text.indexOf("unphased"));
+    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: JSON.stringify(details) }], details }, {}, theme));
+    expect(text).toContain("Workflow audit");
+    expect(text).toContain("accepted task_123");
+    expect(text).not.toContain("agent");
   });
 
-  it("shows an entered phase header before its first agent starts", () => {
+  it("renders accepted envelopes without exposing extra result content", () => {
     const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
-      name: "setup",
-      status: "running",
-      agentCount: 0,
-      phases: ["scan"],
-      currentPhase: "scan",
-      agents: [],
-      logs: [],
+    const details = {
+      task_id: "task_secret",
+      task_type: "workflow",
+      status: "accepted",
+      name: "review",
     };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("▶ scan running · 0/0");
-  });
-
-  it("does not keep the final current phase running after workflow completion", () => {
-    const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
-      name: "done-phase",
-      status: "completed",
-      agentCount: 1,
-      phases: ["review"],
-      currentPhase: "review",
-      agents: [{ index: 1, label: "review-a", phase: "review", status: "done" }],
-      logs: [],
-    };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("✓ review done · 1/1");
-    expect(text).not.toContain("▶ review running · 1/1");
-  });
-
-  it("marks wholly failed phases as failed and mixed failures as partial", () => {
-    const theme = makeMockTheme();
-    const failedAgent: WorkflowToolDetails = {
-      name: "failed-phase",
-      status: "running",
-      agentCount: 1,
-      phases: ["verify"],
-      currentPhase: "verify",
-      agents: [{ index: 1, label: "verify-a", phase: "verify", status: "error" }],
-      logs: [],
-    };
-    const partialAgent: WorkflowToolDetails = {
-      name: "partial-phase",
-      status: "completed",
-      agentCount: 2,
-      phases: ["verify"],
-      currentPhase: "verify",
-      agents: [
-        { index: 1, label: "verify-a", phase: "verify", status: "done" },
-        { index: 2, label: "verify-b", phase: "verify", status: "error" },
-      ],
-      logs: [],
-    };
-    const failedEmpty: WorkflowToolDetails = {
-      name: "failed-empty",
-      status: "error",
-      agentCount: 0,
-      phases: ["verify"],
-      currentPhase: "verify",
-      agents: [],
-      logs: [],
-      error: "script blew up",
-    };
-    const failedAgentText = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: failedAgent }, {}, theme));
-    const partialAgentText = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: partialAgent }, {}, theme));
-    const failedEmptyText = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: failedEmpty }, {}, theme));
-    expect(failedAgentText).toContain("✗ verify failed · 0/1");
-    expect(partialAgentText).toContain("⚠ verify partial · 1/2");
-    expect(failedEmptyText).toContain("✗ verify failed · 0/0");
-  });
-
-  it("shows planned meta phases before they are reached", () => {
-    const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
-      name: "planned",
-      status: "running",
-      agentCount: 1,
-      phases: ["scan"],
-      plannedPhases: [{ title: "scan" }, { title: "review" }, { title: "fix" }],
-      currentPhase: "scan",
-      agents: [{ index: 1, label: "scan-a", phase: "scan", status: "running" }],
-      logs: [],
-    };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("▶ scan running · 0/1");
-    expect(text).toContain("· review planned · 0/0");
-    expect(text).toContain("· fix planned · 0/0");
-    expect(text.indexOf("scan")).toBeLessThan(text.indexOf("review"));
-    expect(text.indexOf("review")).toBeLessThan(text.indexOf("fix"));
-    expect(text).toContain("Agent(agent: scan-a)");
-  });
-
-  it("keeps a flat list when no agent has a phase", () => {
-    const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
-      name: "flat",
-      status: "running",
-      agentCount: 2,
-      phases: [],
-      agents: [
-        { index: 1, label: "alpha", status: "running" },
-        { index: 2, label: "beta", status: "done" },
-      ],
-      logs: [],
-    };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("Agent(agent: alpha)");
-    expect(text).toContain("✓ Agent(agent, beta)");
-    expect(text).not.toContain("unphased");
-  });
-
-  it("renders the over-cap flat list with the hidden marker after the visible rows", () => {
-    const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
-      name: "flat",
-      status: "running",
-      agentCount: 8,
-      phases: [],
-      agents: Array.from({ length: 8 }, (_, i) => ({
-        index: i + 1,
-        label: `a${i + 1}`,
-        status: "running" as const,
-      })),
-      logs: [],
-    };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("Agent(agent, a1)");
-    expect(text).toContain("... 2 agent(s) not shown");
-    expect(text.indexOf("a1")).toBeLessThan(text.indexOf("not shown"));
-    expect(text).not.toContain("a8");
-  });
-
-  it("advances the spinner glyph from the snapshot frame counter", () => {
-    const theme = makeMockTheme();
-    const make = (frame: number): WorkflowToolDetails => ({
-      name: "spin",
-      status: "running",
-      agentCount: 1,
-      phases: [],
-      frame,
-      agents: [{ index: 1, label: "alpha", status: "running" }],
-      logs: [],
-    });
-    const f0 = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: make(0) }, {}, theme));
-    const f1 = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details: make(1) }, {}, theme));
-    expect(f0).toContain("⠋ Agent(agent: alpha)");
-    expect(f1).toContain("⠙ Agent(agent: alpha)");
-  });
-
-  it("keeps rich activity rows when queued backlog exceeds the rich threshold", () => {
-    const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
-      name: "queued-rich",
-      status: "running",
-      agentCount: 8,
-      phases: [],
-      agents: [
-        ...Array.from({ length: 4 }, (_, i) => ({
-          index: i + 1,
-          label: `r${i + 1}`,
-          status: "running" as const,
-          activity: [`activity-${i + 1}`],
-          activityCount: 1,
-        })),
-        ...Array.from({ length: 4 }, (_, i) => ({
-          index: i + 5,
-          label: `q${i + 1}`,
-          status: "queued" as const,
-        })),
-      ],
-      logs: [],
-    };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("Agent(agent: r1)");
-    expect(text).toContain("activity-1");
-    expect(text).toContain("◌ Agent(agent, q1) queued");
-  });
-
-  it("groups multi-phase (loop-style) waves in declaration order and caps per phase", () => {
-    const theme = makeMockTheme();
-    const agents = [
-      { index: 1, label: "t1", phase: "loop1:opt", status: "done" as const },
-      { index: 2, label: "t2", phase: "loop1:opt", status: "done" as const },
-      ...Array.from({ length: 8 }, (_, i) => ({
-        index: 3 + i,
-        label: `u${i + 1}`,
-        phase: "loop2:opt",
-        status: "running" as const,
-      })),
-    ];
-    const details: WorkflowToolDetails = {
-      name: "loop",
-      status: "running",
-      agentCount: agents.length,
-      phases: ["loop1:opt", "loop2:opt"],
-      agents,
-      logs: [],
-    };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("✓ loop1:opt done · 2/2");
-    expect(text).toContain("▶ loop2:opt running · 0/8");
-    expect(text).toContain("... 2 more");
-    expect(text.indexOf("loop1:opt")).toBeLessThan(text.indexOf("loop2:opt"));
-  });
-
-  it("shows the earliest agents in an over-cap running wave and hides the rest", () => {
-    const theme = makeMockTheme();
-    const details: WorkflowToolDetails = {
-      name: "ceiling_opt",
-      status: "running",
-      agentCount: 12,
-      phases: ["ceiling optimization workers"],
-      agents: Array.from({ length: 12 }, (_, i) => ({
-        index: i + 1,
-        label: `t${i + 1}`,
-        phase: "ceiling optimization workers",
-        status: "running" as const,
-      })),
-      logs: [],
-    };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "x" }], details }, {}, theme));
-    expect(text).toContain("Agent(agent, t1)");
-    expect(text).toContain("Agent(agent, t6)");
-    expect(text).toContain("... 6 more");
-    expect(text).not.toContain("t7");
-    expect(text).not.toContain("t12");
-  });
-
-  it("renders a completed snapshot and surfaces a failure message", () => {
-    const theme = makeMockTheme();
-    const completed: WorkflowToolDetails = {
-      name: "done-flow",
-      status: "completed",
-      agentCount: 1,
-      phases: [],
-      agents: [{ index: 1, label: "only", status: "done" }],
-      logs: [],
-    };
-    const completedText = renderToText(
-      tool.renderResult({ content: [{ type: "text", text: "x" }], details: completed }, {}, theme),
-    );
-    expect(completedText).toContain("Workflow(done-flow)");
-    expect(completedText).toContain("completed");
-    expect(completedText).toContain("completed · 1/1");
-
-    const failed: WorkflowToolDetails = {
-      name: "broke",
-      status: "error",
-      agentCount: 0,
-      phases: [],
-      agents: [],
-      logs: [],
-      error: "script blew up",
-    };
-    const failedText = renderToText(
-      tool.renderResult({ content: [{ type: "text", text: "x" }], details: failed }, {}, theme),
-    );
-    expect(failedText).toContain("error");
-    expect(failedText).toContain("script blew up");
+    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "hidden workflow result" }], details }, {}, theme));
+    expect(text).toContain("Workflow review accepted task_secret");
+    expect(text).not.toContain("hidden workflow result");
   });
 });
 
@@ -1136,6 +900,8 @@ describe("workflow tool registration", () => {
     const flags = new Map<string, boolean | string>();
     return {
       registerTool: (tool: { name: string }) => names.push(tool.name),
+      registerMessageRenderer: () => {},
+      sendMessage: () => {},
       registerFlag: (name: string, options: { default?: boolean | string }) => {
         if (options.default !== undefined) flags.set(name, options.default);
       },

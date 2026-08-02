@@ -1,54 +1,39 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  AuthStorage,
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry,
-  SessionManager,
-  SettingsManager,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import {
-  fauxAssistantMessage,
-  fauxToolCall,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles, loadBuiltinSubagentProfiles } from "../src/profiles.ts";
-import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
-import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
 import { formatUsage } from "../src/core/subagent-render.ts";
-import { packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 describe("pi-subagent rendering", () => {
-  let tempDir = "";
-  let cwd = "";
   let agentDir = "";
-  let originalPathEnv: string | undefined;
-  let registrations: Array<{ unregister: () => void }> = [];
-
-  const {
-    trackSession,
-    disposeSession,
-    createSession,
-    delegateOnce,
-    makeMockTheme,
-    stripAnsi,
-    renderToText,
-    formatTestTokens,
-    makeExecutionContext,
-    getToolNames,
-  } = setupPiSubagentTestHarness((state) => {
-    tempDir = state.tempDir;
-    cwd = state.cwd;
+  const { makeMockTheme, renderToText } = setupPiSubagentTestHarness((state) => {
     agentDir = state.agentDir;
-    originalPathEnv = state.originalPathEnv;
-    registrations = state.registrations;
   });
+
+  function captureRenderers() {
+    let agentTool: any;
+    let notificationRenderer: any;
+    const flags = new Map<string, boolean | string>();
+    const mockApi: any = {
+      registerTool: (tool: any) => {
+        if (tool.name === "Agent") agentTool = tool;
+      },
+      registerMessageRenderer: (customType: string, renderer: unknown) => {
+        if (customType === "pi-flow-task-notification") notificationRenderer = renderer;
+      },
+      registerFlag: (name: string, options: { default?: boolean | string }) => {
+        if (options.default !== undefined) flags.set(name, options.default);
+      },
+      getFlag: (name: string) => flags.get(name),
+      sendMessage: () => {},
+      on: () => {},
+      getThinkingLevel: () => "high",
+    };
+    createSubagentExtension()(mockApi);
+    return { agentTool, notificationRenderer };
+  }
+
   it("renders zero cache hits and unknown cost explicitly", () => {
     expect(formatUsage({
       input: 1000,
@@ -64,260 +49,69 @@ describe("pi-subagent rendering", () => {
     })).toBe("↑1.0k ↓0 CH0.0% $?");
   });
 
-  it("renders renderCall and renderResult with subagent type, description, and status", async () => {
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "code-searcher.md"), `---
-description: Searches code without editing files.
----
-`);
-
-    let captured: any;
-    const flags = new Map<string, boolean | string>();
-    const mockApi: any = {
-      registerTool: (tool: any) => {
-        if (tool.name === "Agent") {
-          captured = tool;
-        }
-      },
-      registerFlag: (name: string, options: { default?: boolean | string }) => {
-        if (options.default !== undefined) flags.set(name, options.default);
-      },
-      getFlag: (name: string) => flags.get(name),
-      on: () => {},
-      getThinkingLevel: () => "high",
-    };
-    const factory = createSubagentExtension();
-    await factory(mockApi);
-    expect(captured).toBeDefined();
-    expect(captured.renderCall).toBeDefined();
-    expect(captured.renderResult).toBeDefined();
-
+  it("renders an Agent launch as a compact accepted task", () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(join(agentDir, "subagents", "code-searcher.md"), "---\ndescription: Searches code.\n---\n");
+    const { agentTool } = captureRenderers();
     const theme = makeMockTheme();
 
-    const callText = renderToText(
-      captured.renderCall(
-        { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
-        theme,
-        { executionStarted: false },
-      ),
-    );
-    expect(callText).toContain("Pi Agent");
-    expect(callText).toContain("code-searcher");
-    expect(callText).toContain("Find auth files");
-
-    const partialCallText = renderToText(
-      captured.renderCall(
-        { prompt: "..." },
-        theme,
-        { executionStarted: false },
-      ),
-    );
-    expect(partialCallText).toContain("Pi Agent");
-    expect(partialCallText).not.toContain("undefined");
-
-    const buildResult = (status: "done" | "error") => ({
-      content: [{ type: "text" as const, text: "x" }],
+    const call = renderToText(agentTool.renderCall(
+      { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
+      theme,
+      { executionStarted: false },
+    ));
+    const runningCall = renderToText(agentTool.renderCall(
+      { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
+      theme,
+      { executionStarted: true },
+    ));
+    const result = renderToText(agentTool.renderResult({
+      content: [{ type: "text", text: "accepted" }],
       details: {
-        description: "Find auth files",
-        subagentType: "code-searcher" as const,
-        backend: "pi" as const,
-        status,
-        ...(status === "done" ? { result: "ok" } : { error: "fail" }),
-      },
-    });
-
-    const completedText = renderToText(captured.renderResult(buildResult("done"), {}, theme, {}));
-    expect(completedText).toContain("Pi Agent");
-    expect(completedText).toContain("code-searcher");
-    expect(completedText).toContain("Find auth files");
-    expect(completedText).toContain("✓");
-
-    const errorText = renderToText(captured.renderResult(buildResult("error"), {}, theme, {}));
-    expect(errorText).toContain("error: fail");
-
-    const queuedText = renderToText(captured.renderResult({
-      content: [{ type: "text" as const, text: "x" }],
-      details: {
-        description: "Wait turn",
-        subagentType: "general-purpose" as const,
-        backend: "pi" as const,
-        status: "queued" as const,
-        progress: {
-          id: "queued-agent",
-          description: "Wait turn",
-          subagentType: "general-purpose" as const,
-          backend: "pi" as const,
-          status: "queued" as const,
-          startedAt: Date.now(),
-          activity: [],
-          activityCount: 0,
-        },
+        task_id: "task_123",
+        task_type: "agent",
+        status: "accepted",
+        session_key: "session_123",
+        name: "Find auth files",
       },
     }, {}, theme, {}));
-    expect(queuedText).toContain("◌ Pi Agent(general-purpose, Wait turn) queued");
 
-    const abortedText = renderToText(captured.renderResult({
-      content: [{ type: "text" as const, text: "x" }],
-      details: {
-        description: "Stop task",
-        subagentType: "general-purpose" as const,
-        backend: "pi" as const,
-        status: "aborted" as const,
-        error: "User aborted",
-      },
-    }, {}, theme, {}));
-    expect(abortedText).toContain("⊘");
-    expect(abortedText).toContain("aborted: User aborted");
-
-    const unknownCallText = renderToText(
-      captured.renderCall(
-        { description: "Bad", subagent_type: "ghost", prompt: "..." },
-        theme,
-        { executionStarted: false },
-      ),
-    );
-    expect(unknownCallText).toContain("ghost");
-
-    const executingCallText = renderToText(
-      captured.renderCall(
-        { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
-        theme,
-        { executionStarted: true },
-      ),
-    );
-    expect(executingCallText).toBe("");
+    expect(call).toContain("Pi Agent");
+    expect(call).toContain("code-searcher");
+    expect(call).toContain("Find auth files");
+    expect(runningCall).toBe("");
+    expect(result.trimEnd()).toBe("Agent Find auth files accepted task_123");
+    expect(result).not.toContain("session_123");
   });
 
-  it("renders compact progress with rolling activity and descriptions", async () => {
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "code-searcher.md"), `---
-description: Searches code without editing files.
----
-`);
-
-    let captured: any;
-    const flags = new Map<string, boolean | string>();
-    const mockApi: any = {
-      registerTool: (tool: any) => {
-        if (tool.name === "Agent") {
-          captured = tool;
-        }
-      },
-      registerFlag: (name: string, options: { default?: boolean | string }) => {
-        if (options.default !== undefined) flags.set(name, options.default);
-      },
-      getFlag: (name: string) => flags.get(name),
-      on: () => {},
-      getThinkingLevel: () => "high",
-    };
-    const factory = createSubagentExtension();
-    await factory(mockApi);
-
+  it("renders terminal custom notifications compactly and expands content", () => {
+    const { notificationRenderer } = captureRenderers();
     const theme = makeMockTheme();
-    const now = 1_700_000_000_000;
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(now);
-    try {
-      const result = {
-        content: [{ type: "text" as const, text: "done" }],
-        usage: {
-          input: 81_000,
-          output: 4_900,
-          cacheRead: 602_000,
-          cacheWrite: 0,
-          totalTokens: 687_900,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.85 },
-        },
-        details: {
-          description: "Research repo",
-          subagentType: "code-searcher" as const,
-          backend: "pi" as const,
-          status: "running" as const,
-          progress: {
-            id: "root-progress",
-            description: "Research repo",
-            subagentType: "code-searcher" as const,
-            backend: "pi" as const,
-            status: "running" as const,
-            startedAt: now - 2000,
-            activity: ["Read src/types.ts", "Read app.py", "Read config.yaml"],
-            activityCount: 5,
-          },
-          telemetry: {
-            tokensKnown: true,
-            costKnown: true,
-            costBreakdownKnown: false,
-          },
-        },
-      };
-
-      const text = renderToText(captured.renderResult(result, {}, theme, {}));
-
-      expect(text).toContain("Pi Agent(code-searcher: Research repo)");
-      expect(text).toContain("2s ↑81k ↓4.9k R602k CH88.1% $0.850");
-      expect(text).toContain("... +2 earlier events");
-      expect(text).toContain("Read src/types.ts");
-      expect(text).toContain("Read app.py");
-      expect(text).toContain("Read config.yaml");
-    } finally {
-      dateNow.mockRestore();
-    }
-  });
-
-  it("folds long progress activity lines only in the rendered subagent window", async () => {
-    let captured: any;
-    const flags = new Map<string, boolean | string>();
-    const mockApi: any = {
-      registerTool: (tool: any) => {
-        if (tool.name === "Agent") {
-          captured = tool;
-        }
-      },
-      registerFlag: (name: string, options: { default?: boolean | string }) => {
-        if (options.default !== undefined) flags.set(name, options.default);
-      },
-      getFlag: (name: string) => flags.get(name),
-      on: () => {},
-      getThinkingLevel: () => "high",
+    const completed = {
+      task_id: "task_done",
+      task_type: "agent",
+      status: "completed",
+      session_key: "session_done",
+      name: "Inspect auth",
+      content: "Detailed child result",
     };
-    const factory = createSubagentExtension();
-    await factory(mockApi);
-
-    const theme = makeMockTheme();
-    const hiddenTail = "TAIL_MARKER_SHOULD_STAY_OUT_OF_RENDERED_PREVIEW";
-    const longCommand = `bash uv run python - <<'PY' ${"print('long progress payload') ".repeat(30)}${hiddenTail} PY`;
-    const result = {
-      content: [{ type: "text" as const, text: "running" }],
-      details: {
-        description: "Long tool call",
-        subagentType: "general-purpose" as const,
-        status: "running" as const,
-        progress: {
-          id: "long-progress",
-          description: "Long tool call",
-          subagentType: "general-purpose" as const,
-          status: "running" as const,
-          startedAt: Date.now(),
-          activity: [longCommand],
-          activityCount: 1,
-        },
-      },
+    const failed = {
+      task_id: "task_failed",
+      task_type: "agent",
+      status: "failed",
+      session_key: "session_failed",
+      name: "Inspect tests",
+      content: "Provider failed",
     };
 
-    const text = renderToText(captured.renderResult(result, {}, theme, {}));
+    const compact = renderToText(notificationRenderer({ details: completed }, { expanded: false }, theme));
+    const expanded = renderToText(notificationRenderer({ details: completed }, { expanded: true }, theme));
+    const failure = renderToText(notificationRenderer({ details: failed }, { expanded: false }, theme));
 
-    expect(text).toContain("bash uv run python");
-    expect(text).toContain("... (+");
-    expect(text).toContain("chars)");
-    expect(text).not.toContain(hiddenTail);
-    expect(result.details.progress.activity[0]).toBe(longCommand);
-
-    const narrowLines = captured
-      .renderResult(result, {}, theme, {})
-      .render(80)
-      .map((line: string) => stripAnsi(line))
-      .filter((line: string) => line.trim());
-    expect(narrowLines).toHaveLength(2);
+    expect(compact.trimEnd()).toBe("✓ Agent Inspect auth task_done");
+    expect(compact).not.toContain("Detailed child result");
+    expect(expanded).toContain("Detailed child result");
+    expect(failure).toContain("✗ Agent Inspect tests task_failed");
+    expect(failure).toContain("Provider failed");
   });
 });

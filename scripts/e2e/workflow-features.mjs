@@ -234,6 +234,8 @@ function runPi({ model, thinking, deepseekApiKeyEnv, agentDir, cwd, sessionDir, 
   writeFileSync(promptPath, `${prompt}\n`);
   const args = [
     "-p",
+    "--mode",
+    "json",
     "--model",
     model,
     "--thinking",
@@ -314,13 +316,24 @@ function readJsonlRecords(filePath) {
 
 const EDIT_TOOLS = new Set(["edit", "write", "apply_patch", "multiedit"]);
 
+function parseEnvelope(value) {
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string") return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function analyzeSession(sessionDir) {
   const file = findNewestJsonl(sessionDir);
   const toolCalls = {};
   let fileEdits = 0;
-  const workflowResults = [];
+  const accepted = [];
+  const notifications = [];
   for (const r of readJsonlRecords(file)) {
-    const m = r.message;
+    const m = r.message ?? (r.type === "custom_message" ? { role: "custom", ...r } : undefined);
     const content = Array.isArray(m?.content) ? m.content : [];
     for (const it of content) {
       if (it?.type === "toolCall" && typeof it.name === "string") {
@@ -329,41 +342,88 @@ function analyzeSession(sessionDir) {
       }
     }
     if (m?.role === "toolResult" && m.toolName === "workflow") {
-      workflowResults.push({ details: m.details ?? {}, text: m.content?.[0]?.text ?? "" });
+      const envelope = parseEnvelope(m.details) ?? parseEnvelope(m.content?.[0]?.text);
+      if (envelope?.task_type === "workflow" && envelope.status === "accepted") accepted.push(envelope);
+    }
+    if (m?.role === "custom" && m.customType === "pi-flow-task-notification") {
+      const envelope = parseEnvelope(m.details) ?? parseEnvelope(m.content);
+      if (envelope?.task_type === "workflow") notifications.push(envelope);
     }
   }
-  return { sessionFile: file, toolCalls, fileEdits, workflow: workflowResults.at(-1) };
+  const launch = accepted.at(-1);
+  const terminal = launch && notifications.find((item) => item.task_id === launch.task_id);
+  return { sessionFile: file, toolCalls, fileEdits, workflow: launch ? { accepted: launch, terminal } : undefined };
 }
 
-function readJournal(journalPath) {
+function workflowDirForSessionFile(sessionFile) {
+  if (!sessionFile) return undefined;
+  return path.join(path.dirname(sessionFile), `${path.basename(sessionFile, path.extname(sessionFile))}.workflows`);
+}
+
+function journalPathFor(sessionFile, taskId) {
+  const dir = workflowDirForSessionFile(sessionFile);
+  return dir && taskId ? path.join(dir, `task-${taskId}.jsonl`) : undefined;
+}
+
+function readJournal(sessionFile, taskId) {
+  const journalPath = journalPathFor(sessionFile, taskId);
   if (!journalPath || !existsSync(journalPath)) return undefined;
   const agentResults = [];
-  let runComplete;
-  let runStart;
+  let taskComplete;
+  let taskError;
+  let taskStart;
   for (const entry of readJsonlRecords(journalPath)) {
-    if (entry.type === "run_start") runStart = entry;
+    if (entry.type === "task_start") taskStart = entry;
     else if (entry.type === "agent_result") agentResults[entry.index - 1] = entry;
-    else if (entry.type === "run_complete") runComplete = entry;
+    else if (entry.type === "task_complete") taskComplete = entry;
+    else if (entry.type === "task_error") taskError = entry;
   }
-  return { runStart, agentResults: agentResults.filter(Boolean), runComplete };
+  return { path: journalPath, taskStart, agentResults: agentResults.filter(Boolean), taskComplete, taskError };
 }
 
-// Workflow return value is dropped from persisted details; recover it from the
-// tool-result text ("Result:\n<json>") as a fallback to the journal.
-function parseResultFromText(text) {
-  const marker = "\nResult:\n";
-  const idx = text.indexOf(marker);
-  if (idx === -1) return undefined;
+function resultFromNotification(notification) {
+  if (!notification || typeof notification.content !== "string") return undefined;
   try {
-    return JSON.parse(text.slice(idx + marker.length));
+    return JSON.parse(notification.content);
   } catch {
+    return notification.content;
+  }
+}
+
+function observeWorkflow(s, session) {
+  const accepted = session.workflow?.accepted;
+  const terminal = session.workflow?.terminal;
+  if (!accepted) {
+    s.check("workflow accepted result present", false, "no accepted workflow toolResult");
     return undefined;
   }
+  s.check(
+    "accepted envelope is compact",
+    JSON.stringify(Object.keys(accepted).sort()) === JSON.stringify(["name", "status", "task_id", "task_type"]),
+    JSON.stringify(accepted),
+  );
+  s.check("status === accepted", accepted.status === "accepted", `status=${accepted.status}`);
+  s.check(
+    "terminal notification correlates by task_id",
+    terminal?.task_id === accepted.task_id && terminal?.task_type === "workflow",
+    JSON.stringify(terminal),
+  );
+  s.check(
+    "terminal envelope is compact",
+    JSON.stringify(Object.keys(terminal ?? {}).sort()) === JSON.stringify(["content", "name", "status", "task_id", "task_type"]),
+    JSON.stringify(terminal),
+  );
+  return {
+    accepted,
+    terminal,
+    journal: readJournal(session.sessionFile, accepted.task_id),
+    result: resultFromNotification(terminal),
+  };
 }
 
 function inlinePrompt(script, args) {
   return [
-    "Use the workflow tool now. Call it with the `script` parameter set to EXACTLY the following JavaScript, verbatim — do not modify it, do not wrap it in markdown fences.",
+    "Use the workflow tool now. Call it with the `script` parameter set to EXACTLY the following JavaScript, verbatim - do not modify it, do not wrap it in markdown fences.",
     args ? `Also set the tool's \`args\` parameter to this JSON value: ${JSON.stringify(args)}` : "",
     "Do not change any files in the repository.",
     "",
@@ -382,14 +442,13 @@ function savedNamePrompt(name) {
   ].join("\n");
 }
 
-function resumePrompt(scriptPath, runId, args) {
+function resumePrompt(taskId, args) {
   return [
-    "Re-run the feature_probe workflow from its persisted script and resume its cached results.",
-    "Call the workflow tool with these exact parameters:",
-    `- scriptPath: "${scriptPath}"`,
-    `- resumeFromRunId: "${runId}"`,
+    "Replay the feature_probe workflow from its persisted task journal and reuse its cached results.",
+    "Call the workflow tool with these exact parameters and no scriptPath:",
+    `- resumeFromTaskId: "${taskId}"`,
     `- args: ${JSON.stringify(args)}`,
-    "Report the result it returns.",
+    "Wait for the matching terminal task notification, then report its result.",
   ].join("\n");
 }
 
@@ -423,48 +482,34 @@ async function scenarioKitchenSink(ctx) {
     extension: extensionPath,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details;
   s.check("model invoked the workflow tool", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
   s.check("no files were edited", a.fileEdits === 0, `edits=${a.fileEdits}`);
-  if (!wf) {
-    s.check("workflow result present", false, "no workflow toolResult");
-    return { scenario: s };
-  }
-  s.check("meta.name === feature_probe (script ran verbatim)", wf.name === "feature_probe", `name=${wf.name}`);
-  s.check("status === completed", wf.status === "completed", `status=${wf.status} error=${wf.error ?? ""}`);
-  s.check("agentCount === 4 (2 parallel + 2 pipeline stage-1)", wf.agentCount === 4, `agentCount=${wf.agentCount}`);
-  s.check(
-    "phases include collect + refine",
-    Array.isArray(wf.phases) && wf.phases.includes("collect") && wf.phases.includes("refine"),
-    JSON.stringify(wf.phases),
-  );
-  const logs = Array.isArray(wf.logs) ? wf.logs : [];
-  s.check(
-    "log() captured args (probe-args includes repo)",
-    logs.some((l) => l.startsWith("probe-args:") && l.includes("widget-cli")),
-    logs.find((l) => l.startsWith("probe-args:")) ?? "missing",
-  );
-  s.check(
-    "cwd global is the fixture dir",
-    logs.some((l) => l.startsWith("probe-cwd:") && l.includes(path.basename(ctx.fixture))),
-    logs.find((l) => l.startsWith("probe-cwd:")) ?? "missing",
-  );
-  s.check("scriptPath persisted + exists", isNonEmptyString(wf.scriptPath) && existsSync(wf.scriptPath), wf.scriptPath ?? "");
-  s.check("runId present", isNonEmptyString(wf.runId), wf.runId ?? "");
-  s.check("journalPath persisted + exists", isNonEmptyString(wf.journalPath) && existsSync(wf.journalPath), wf.journalPath ?? "");
+  const wf = observeWorkflow(s, a);
+  if (!wf) return { scenario: s };
+  s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
+  s.check("terminal name === feature_probe (script ran verbatim)", wf.terminal?.name === "feature_probe", `name=${wf.terminal?.name}`);
+  s.check("task journal exists", Boolean(wf.journal), wf.journal?.path ?? "missing");
+  s.check("journal task_start correlates with accepted task", wf.journal?.taskStart?.taskId === wf.accepted.task_id, JSON.stringify(wf.journal?.taskStart));
+  s.check("persisted script exists", isNonEmptyString(wf.journal?.taskStart?.scriptPath) && existsSync(wf.journal.taskStart.scriptPath), wf.journal?.taskStart?.scriptPath ?? "");
+  s.check("journal records task_complete", Boolean(wf.journal?.taskComplete) && !wf.journal?.taskError, JSON.stringify(wf.journal?.taskError));
+  s.check("journal records 4 agent results", wf.journal?.agentResults.length === 4, `agentResults=${wf.journal?.agentResults.length}`);
 
-  const journal = readJournal(wf.journalPath);
-  const collect = (journal?.agentResults ?? []).filter((r) => r.phase === "collect");
+  const collect = (wf.journal?.agentResults ?? []).filter((r) => r.phase === "collect");
   const structuredOk = collect.some(
     (r) => r.result && typeof r.result === "object" && typeof r.result.exportCount === "number",
   );
   s.check("structured output validated + captured (numeric exportCount)", structuredOk, JSON.stringify(collect.map((r) => r.result)));
-  const result = journal?.runComplete?.result ?? parseResultFromText(a.workflow?.text ?? "");
+  const result = wf.result;
   const items = Array.isArray(result?.items) ? result.items : [];
+  s.check(
+    "terminal result preserves args and cwd globals",
+    result?.repo === "widget-cli" && path.basename(result?.cwd ?? "") === path.basename(ctx.fixture),
+    JSON.stringify({ repo: result?.repo, cwd: result?.cwd }),
+  );
   s.check("pipeline produced items with plain-text sentences", items.length >= 1 && items.every((it) => isNonEmptyString(it.sentence)), JSON.stringify(items));
   s.check("return value synthesized (count matches items)", result?.count === items.length && items.length >= 1, JSON.stringify({ count: result?.count, items: items.length }));
 
-  ctx.kitchen = { sessionDir, sessionId: `${ctx.idBase}-kitchen`, scriptPath: wf.scriptPath, runId: wf.runId, result, agentCount: wf.agentCount };
+  ctx.kitchen = { sessionDir, sessionId: `${ctx.idBase}-kitchen`, taskId: wf.accepted.task_id, result };
   return { scenario: s };
 }
 
@@ -486,18 +531,13 @@ async function scenarioConcurrency(ctx) {
     extension: wrapper,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details;
   s.check("model invoked the workflow tool", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
-  if (!wf) {
-    s.check("workflow result present", false, "no workflow toolResult");
-    return { scenario: s };
-  }
-  s.check("status === completed", wf.status === "completed", `status=${wf.status} error=${wf.error ?? ""}`);
-  s.check("agentCount === 4 (all queued agents drained)", wf.agentCount === 4, `agentCount=${wf.agentCount}`);
-  const agents = Array.isArray(wf.agents) ? wf.agents : [];
-  s.check("every agent reached done", agents.length === 4 && agents.every((ag) => ag.status === "done"), JSON.stringify(agents.map((ag) => ag.status)));
-  const result = readJournal(wf.journalPath)?.runComplete?.result ?? parseResultFromText(a.workflow?.text ?? "");
-  s.check("result.count === 4", result?.count === 4, JSON.stringify(result));
+  const wf = observeWorkflow(s, a);
+  if (!wf) return { scenario: s };
+  s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
+  s.check("journal records all 4 queued agents", wf.journal?.agentResults.length === 4, `agentResults=${wf.journal?.agentResults.length}`);
+  s.check("journal records task_complete", Boolean(wf.journal?.taskComplete), JSON.stringify(wf.journal?.taskError));
+  s.check("terminal result.count === 4", wf.result?.count === 4, JSON.stringify(wf.result));
   return { scenario: s };
 }
 
@@ -513,18 +553,19 @@ async function scenarioDeterminism(ctx) {
     extension: extensionPath,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details;
-  if (!wf) {
+  if (!a.workflow) {
     s.soft("workflow tool was invoked with the verbatim script", false, "model may have refused to run a nondeterministic script");
     return { scenario: s };
   }
-  if (wf.status === "completed") {
+  const wf = observeWorkflow(s, a);
+  if (!wf) return { scenario: s };
+  if (wf.terminal?.status === "completed") {
     s.soft("script ran verbatim (Date.now preserved)", false, "model likely sanitized Date.now(); cannot assert rejection");
     return { scenario: s };
   }
-  s.check("status === error", wf.status === "error", `status=${wf.status}`);
-  s.check("error names determinism", /deterministic|Date\.now|Math\.random/i.test(wf.error ?? ""), wf.error ?? "");
-  s.check("no subagents ran (agentCount === 0)", (wf.agentCount ?? 0) === 0, `agentCount=${wf.agentCount}`);
+  s.check("status === failed", wf.terminal?.status === "failed", `status=${wf.terminal?.status}`);
+  s.check("failure content names determinism", /deterministic|Date\.now|Math\.random/i.test(wf.terminal?.content ?? ""), wf.terminal?.content ?? "");
+  s.check("no task journal was started before parse rejection", wf.journal === undefined, wf.journal?.path ?? "unexpected journal");
   return { scenario: s };
 }
 
@@ -551,18 +592,14 @@ async function scenarioSavedName(ctx) {
       extension: extensionPath,
     });
     const a = analyzeSession(sessionDir);
-    const wf = a.workflow?.details;
     s.check("model invoked the workflow tool", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
-    if (!wf) {
-      s.check("workflow result present", false, "no workflow toolResult");
-      return { scenario: s };
-    }
-    s.check("status === completed", wf.status === "completed", `status=${wf.status} error=${wf.error ?? ""}`);
-    s.check("source === saved (loaded from registry)", wf.source === "saved", `source=${wf.source}`);
-    s.check("name === zz_e2e_saved_probe", wf.name === SAVED_WORKFLOW_NAME, `name=${wf.name}`);
-    s.check("agentCount === 1", wf.agentCount === 1, `agentCount=${wf.agentCount}`);
-    const result = readJournal(wf.journalPath)?.runComplete?.result ?? parseResultFromText(a.workflow?.text ?? "");
-    s.check("result.reply echoes saved-workflow-ok", isNonEmptyString(result?.reply) && result.reply.includes("saved-workflow-ok"), JSON.stringify(result));
+    const wf = observeWorkflow(s, a);
+    if (!wf) return { scenario: s };
+    s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
+    s.check("journal source === saved (loaded from registry)", wf.journal?.taskStart?.source === "saved", `source=${wf.journal?.taskStart?.source}`);
+    s.check("name === zz_e2e_saved_probe", wf.terminal?.name === SAVED_WORKFLOW_NAME, `name=${wf.terminal?.name}`);
+    s.check("journal records one agent result", wf.journal?.agentResults.length === 1, `agentResults=${wf.journal?.agentResults.length}`);
+    s.check("result.reply echoes saved-workflow-ok", isNonEmptyString(wf.result?.reply) && wf.result.reply.includes("saved-workflow-ok"), JSON.stringify(wf.result));
     return { scenario: s };
   } finally {
     rmSync(savedFile, { force: true });
@@ -571,54 +608,34 @@ async function scenarioSavedName(ctx) {
 }
 
 async function scenarioResume(ctx) {
-  const s = makeScenario("resume-by-replay via { scriptPath, resumeFromRunId }");
+  const s = makeScenario("resume-by-replay via { resumeFromTaskId }");
   if (!ctx.kitchen) {
-    s.check("kitchen-sink run available to resume", false, "kitchen-sink scenario did not persist a run");
+    s.check("kitchen-sink task available to resume", false, "kitchen-sink scenario did not persist a task");
     return { scenario: s };
   }
-  // Continue the SAME session so the persisted scriptPath + journal are in-root.
   const sessionDir = ctx.kitchen.sessionDir;
   await runPi({
     ...ctx.run,
     sessionDir,
     sessionId: ctx.kitchen.sessionId,
     cwd: ctx.fixture,
-    prompt: resumePrompt(ctx.kitchen.scriptPath, ctx.kitchen.runId, KITCHEN_SINK_ARGS),
+    prompt: resumePrompt(ctx.kitchen.taskId, KITCHEN_SINK_ARGS),
     extension: extensionPath,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details;
   s.check("model invoked the workflow tool for resume", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
-  if (!wf) {
-    s.check("resume workflow result present", false, "no workflow toolResult");
-    return { scenario: s };
-  }
-  s.check("status === completed", wf.status === "completed", `status=${wf.status} error=${wf.error ?? ""}`);
-  s.check("resumeFromRunId echoed", wf.resumeFromRunId === ctx.kitchen.runId, `resumeFromRunId=${wf.resumeFromRunId}`);
-  s.check("agentCount === 4", wf.agentCount === 4, `agentCount=${wf.agentCount}`);
+  const wf = observeWorkflow(s, a);
+  if (!wf) return { scenario: s };
+  s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
+  s.check("journal links resumeFromTaskId", wf.journal?.taskStart?.resumeFromTaskId === ctx.kitchen.taskId, JSON.stringify(wf.journal?.taskStart));
+  const cachedAll = (wf.journal?.agentResults ?? []).length === 4 && wf.journal.agentResults.every((r) => r.cached === true);
+  s.check("journal marks every agent_result cached", cachedAll, JSON.stringify((wf.journal?.agentResults ?? []).map((r) => r.cached)));
   s.check(
-    "cachedAgentCount === 4 (full prefix replayed, 0 new spawns)",
-    wf.cachedAgentCount === 4,
-    `cachedAgentCount=${wf.cachedAgentCount}`,
-  );
-  const journal = readJournal(wf.journalPath);
-  const cachedAll = (journal?.agentResults ?? []).length === 4 && journal.agentResults.every((r) => r.cached === true);
-  s.check("journal marks every agent_result cached", cachedAll, JSON.stringify((journal?.agentResults ?? []).map((r) => r.cached)));
-  const replayed = journal?.runComplete?.result ?? parseResultFromText(a.workflow?.text ?? "");
-  s.check(
-    "replayed result equals original run",
-    JSON.stringify(replayed) === JSON.stringify(ctx.kitchen.result),
-    `replayed=${JSON.stringify(replayed)?.slice(0, 160)}`,
+    "replayed terminal result equals original run",
+    JSON.stringify(wf.result) === JSON.stringify(ctx.kitchen.result),
+    `replayed=${JSON.stringify(wf.result)?.slice(0, 160)}`,
   );
   return { scenario: s };
-}
-
-function journalFor(wf, session) {
-  return readJournal(wf.journalPath) ?? { agentResults: [], runComplete: undefined };
-}
-
-function resultOf(wf, session) {
-  return readJournal(wf.journalPath)?.runComplete?.result ?? parseResultFromText(session.workflow?.text ?? "");
 }
 
 // Conditional branch: a structured boolean per file gates a deep-dive subagent.
@@ -637,16 +654,12 @@ async function scenarioBranch(ctx) {
     extension: extensionPath,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details;
   s.check("model invoked the workflow tool", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
-  if (!wf) {
-    s.check("workflow result present", false, "no workflow toolResult");
-    return { scenario: s };
-  }
-  s.check("status === completed", wf.status === "completed", `status=${wf.status} error=${wf.error ?? ""}`);
-  const journal = journalFor(wf, a);
-  const labels = journal.agentResults.map((r) => r.label);
-  const result = resultOf(wf, a);
+  const wf = observeWorkflow(s, a);
+  if (!wf) return { scenario: s };
+  s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
+  const labels = (wf.journal?.agentResults ?? []).map((r) => r.label);
+  const result = wf.result;
   const flags = Array.isArray(result?.flags) ? result.flags : [];
   s.check("per-file results are schema objects with boolean importsKleur", flags.length === 2 && flags.every((f) => f && typeof f.importsKleur === "boolean"), JSON.stringify(flags));
   const expectedDeep = flags.filter((f) => f && f.importsKleur === true).map((f) => f.file);
@@ -657,9 +670,9 @@ async function scenarioBranch(ctx) {
     JSON.stringify({ deepDived, expectedDeep }),
   );
   s.check(
-    "agentCount === 2 scans + 1-per-true-flag deep-dive",
-    wf.agentCount === 2 + expectedDeep.length,
-    `agentCount=${wf.agentCount} expected=${2 + expectedDeep.length}`,
+    "journal count === 2 scans + 1-per-true-flag deep-dive",
+    wf.journal?.agentResults.length === 2 + expectedDeep.length,
+    `agentResults=${wf.journal?.agentResults.length} expected=${2 + expectedDeep.length}`,
   );
   s.check(
     "deep-dive labels exist only for flagged files",
@@ -686,12 +699,10 @@ async function scenarioGate(ctx) {
     extension: extensionPath,
   });
   const a = analyzeSession(sessionA);
-  const wfA = a.workflow?.details;
-  if (!wfA) {
-    s.check("[survivors] workflow result present", false, "no workflow toolResult");
-  } else {
-    s.check("[survivors] status === completed", wfA.status === "completed", `status=${wfA.status} error=${wfA.error ?? ""}`);
-    const resA = resultOf(wfA, a);
+  const wfA = observeWorkflow(s, a);
+  if (wfA) {
+    s.check("[survivors] status === completed", wfA.terminal?.status === "completed", `status=${wfA.terminal?.status}`);
+    const resA = wfA.result;
     const survivors = Array.isArray(resA?.survivors) ? resA.survivors : [];
     s.check(
       "[survivors] gate kept exactly the flagged files; summarized count matches",
@@ -699,9 +710,9 @@ async function scenarioGate(ctx) {
       JSON.stringify(resA),
     );
     s.check(
-      "[survivors] agentCount === 3 scans + 1 per survivor",
-      wfA.agentCount === 3 + survivors.length,
-      `agentCount=${wfA.agentCount} survivors=${survivors.length}`,
+      "[survivors] journal count === 3 scans + 1 per survivor",
+      wfA.journal?.agentResults.length === 3 + survivors.length,
+      `agentResults=${wfA.journal?.agentResults.length} survivors=${survivors.length}`,
     );
     s.soft("[survivors] survivor set includes report.js", survivors.some((f) => String(f).includes("report.js")), JSON.stringify(survivors));
   }
@@ -716,15 +727,12 @@ async function scenarioGate(ctx) {
     extension: extensionPath,
   });
   const b = analyzeSession(sessionB);
-  const wfB = b.workflow?.details;
-  if (!wfB) {
-    s.check("[empty] workflow result present", false, "no workflow toolResult");
-  } else {
-    s.check("[empty] status === completed", wfB.status === "completed", `status=${wfB.status} error=${wfB.error ?? ""}`);
-    const resB = resultOf(wfB, b);
+  const wfB = observeWorkflow(s, b);
+  if (wfB) {
+    s.check("[empty] status === completed", wfB.terminal?.status === "completed", `status=${wfB.terminal?.status}`);
+    const resB = wfB.result;
     if (resB?.earlyExit === true) {
-      s.check("[empty] early-exit path: 0 summarized, only the scan agent ran", resB.summarized === 0 && wfB.agentCount === 1, JSON.stringify({ res: resB, agentCount: wfB.agentCount }));
-      s.check("[empty] log records the early exit", (wfB.logs ?? []).some((l) => l.includes("zero survivors")), JSON.stringify(wfB.logs));
+      s.check("[empty] early-exit path: 0 summarized, only the scan agent ran", resB.summarized === 0 && wfB.journal?.agentResults.length === 1, JSON.stringify({ res: resB, agentResults: wfB.journal?.agentResults.length }));
     } else {
       s.soft("[empty] expected zero survivors but model flagged store.js as importing kleur", false, JSON.stringify(resB));
     }
@@ -744,15 +752,12 @@ async function scenarioRoute(ctx) {
     extension: extensionPath,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details;
   s.check("model invoked the workflow tool", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
-  if (!wf) {
-    s.check("workflow result present", false, "no workflow toolResult");
-    return { scenario: s };
-  }
-  s.check("status === completed", wf.status === "completed", `status=${wf.status} error=${wf.error ?? ""}`);
-  const labels = journalFor(wf, a).agentResults.map((r) => r.label);
-  const result = resultOf(wf, a);
+  const wf = observeWorkflow(s, a);
+  if (!wf) return { scenario: s };
+  s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
+  const labels = (wf.journal?.agentResults ?? []).map((r) => r.label);
+  const result = wf.result;
   s.check("classified kind is in the enum", ["entry", "lib", "test"].includes(result?.kind), `kind=${result?.kind}`);
   const ranRoutes = labels.filter((l) => l.startsWith("route:"));
   s.check(
@@ -760,7 +765,7 @@ async function scenarioRoute(ctx) {
     ranRoutes.length === 1 && ranRoutes[0] === `route:${result?.kind}`,
     JSON.stringify({ kind: result?.kind, ranRoutes }),
   );
-  s.check("agentCount === 2 (classify + one follow-up)", wf.agentCount === 2, `agentCount=${wf.agentCount}`);
+  s.check("journal records classify + one follow-up", wf.journal?.agentResults.length === 2, `agentResults=${wf.journal?.agentResults.length}`);
   s.soft("classified src/cli.js as entry", result?.kind === "entry", `kind=${result?.kind}`);
   return { scenario: s };
 }
@@ -780,13 +785,13 @@ async function scenarioDiscoverability(ctx) {
     extension: extensionPath,
   });
   const a = analyzeSession(sessionDir);
-  const wf = a.workflow?.details;
   s.check("model invoked the workflow tool", (a.toolCalls.workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
-  if (!wf || wf.status !== "completed") {
-    s.soft("workflow completed", false, `status=${wf?.status ?? "none"} error=${wf?.error ?? ""}`);
+  const wf = observeWorkflow(s, a);
+  if (!wf || wf.terminal?.status !== "completed") {
+    s.soft("workflow completed", false, `status=${wf?.terminal?.status ?? "none"} content=${wf?.terminal?.content ?? ""}`);
     return { scenario: s };
   }
-  const agentResults = journalFor(wf, a).agentResults;
+  const agentResults = wf.journal?.agentResults ?? [];
   const usedSchema = agentResults.some((r) => r.result && typeof r.result === "object" && !Array.isArray(r.result));
   s.soft(
     "model reached for agent({ schema }) on its own (structured result objects in journal)",

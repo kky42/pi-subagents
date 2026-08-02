@@ -1,5 +1,4 @@
 import type { Usage } from "@earendil-works/pi-ai";
-import type { WorkflowMetaPhase } from "./workflow/types.ts";
 
 export type SubagentType = string;
 export type SubagentBackend = "pi" | "codex" | "claude";
@@ -40,46 +39,6 @@ export interface SubagentExtensionOptions {
 export type FlowExtensionOptions = SubagentExtensionOptions;
 
 export type SubagentRunStatus = "queued" | "running" | "done" | "error" | "aborted";
-
-export interface WorkflowAgentSnapshot {
-  index: number;
-  label: string;
-  phase?: string;
-  subagentType?: string;
-  backend?: SubagentBackend;
-  sessionKey?: string;
-  status: SubagentRunStatus;
-  startedAt?: number;
-  endedAt?: number;
-  activity?: string[];
-  activityCount?: number;
-  result?: string;
-  error?: string;
-  usage?: SubagentUsage;
-  telemetry?: SubagentTelemetry;
-}
-
-export interface WorkflowToolDetails {
-  name: string;
-  status: "running" | "completed" | "error" | "aborted";
-  agentCount: number;
-  phases: string[];
-  plannedPhases?: WorkflowMetaPhase[];
-  currentPhase?: string;
-  agents: WorkflowAgentSnapshot[];
-  logs: string[];
-  source?: "inline" | "saved" | "path";
-  sourcePath?: string;
-  scriptPath?: string;
-  runId?: string;
-  journalPath?: string;
-  resumeFromRunId?: string;
-  cachedAgentCount?: number;
-  result?: unknown;
-  error?: string;
-  telemetry?: SubagentTelemetry & { missingUsageAgentCount?: number };
-  frame?: number;
-}
 
 export type SubagentUsage = Usage;
 

@@ -255,15 +255,18 @@ export async function runWorkflow<T = unknown>(
       worker.removeAllListeners();
     };
 
+    const drainRuntime = async () => {
+      cleanup();
+      await Promise.allSettled([worker.terminate(), ...activeAgentTasks]);
+    };
+
     const finishReject = (error: Error) => {
       if (finished) {
         return;
       }
       finished = true;
       abortRuntime(isWorkflowFatalError(error) ? error : new WorkflowFatalError(error.message));
-      cleanup();
-      void worker.terminate();
-      reject(error);
+      void drainRuntime().then(() => reject(error));
     };
 
     const finishResolve = (result: unknown) => {
@@ -286,15 +289,13 @@ export async function runWorkflow<T = unknown>(
       }
 
       finished = true;
-      cleanup();
-      void worker.terminate();
-      resolve({
+      void drainRuntime().then(() => resolve({
         meta,
         result: normalizedResult as T,
         logs: state.logs,
         phases: state.phases,
         agentCount: state.agentCount,
-      });
+      }));
     };
 
     const abortWorkflow = (reason: string) => {

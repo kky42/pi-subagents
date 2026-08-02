@@ -35,7 +35,7 @@ describe("pi-subagent claude backend", () => {
     trackSession,
     disposeSession,
     createSession,
-    delegateOnce,
+    waitForTaskNotification,
     makeMockTheme,
     stripAnsi,
     renderToText,
@@ -198,27 +198,27 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, registration } = await createSession();
-    let rootContinuationContext: Context | undefined;
     registration.setResponses([
       fauxAssistantMessage([fauxToolCall("Agent", {
         description: "Claude review",
         subagent_type: "claude-reviewer",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
-      (context) => {
-        rootContinuationContext = context;
-        return fauxAssistantMessage("reported");
-      },
+      fauxAssistantMessage("launch observed"),
+      fauxAssistantMessage("notification observed"),
     ]);
 
     await session.prompt("Delegate to Claude.");
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as any;
+    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
 
     const claudeRun = JSON.parse(readFileSync(argsPath, "utf8"));
     const claudeArgs = claudeRun.args;
     expect(claudeArgs).toContain("-p");
     expect(claudeArgs).toContain("--output-format");
     expect(claudeArgs).toContain("stream-json");
-    expect(claudeArgs).toContain("--no-session-persistence");
+    expect(claudeArgs).not.toContain("--no-session-persistence");
     expect(claudeArgs).toContain("--dangerously-skip-permissions");
     expect(claudeArgs).not.toContain("--permission-mode");
     expect(claudeArgs).toContain("--model");
@@ -228,9 +228,9 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(claudeArgs).toContain("--append-system-prompt");
     expect(claudeArgs).toContain("Claude reviewer prompt.");
     expect(claudeRun.stdin).toBe("Review the latest diff.");
-    const rootMessages = JSON.stringify(rootContinuationContext?.messages);
-    expect(rootMessages).toContain("claude child done");
-    expect(rootMessages).not.toContain("session_id:");
+    expect(accepted.details).toMatchObject({ status: "accepted", session_key: expect.stringMatching(/^session_/) });
+    expect(terminal).toEqual({ ...accepted.details, status: "completed", content: "claude child done" });
+    expect(JSON.stringify(terminal)).not.toContain("session_id:");
 
     disposeSession(session);
   });
@@ -298,6 +298,41 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(runs[1].args).toContain("--resume");
     expect(runs[1].args).toContain("claude-first-session");
     expect(runs[1].stdin).toBe("Second prompt.");
+  });
+
+  it("fails a persistent claude call that returns no resumable session ID", async () => {
+    const binDir = join(tempDir, "bin-claude-missing-session");
+    mkdirSync(binDir, { recursive: true });
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'usable output', usage: { input_tokens: 10, output_tokens: 2 } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const result = await spawnClaudeSubagent({
+      toolCallId: "claude-missing-session",
+      description: "Claude missing session",
+      prompt: "Persist this conversation.",
+      profile: {
+        name: "claude-missing-session",
+        description: "Claude missing session profile.",
+        backend: "claude",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+      persistSession: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "claude completed without a resumable session ID",
+    });
   });
 
   it("kills a claude child if abort lands after process spawn", async () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SubagentBackend, SubagentType } from "../types.ts";
 
@@ -26,6 +27,10 @@ interface SessionManagerLike {
 export function normalizeSessionKey(value: string | undefined): string | undefined {
   const key = value?.trim();
   return key ? key : undefined;
+}
+
+export function createSessionKey(): string {
+  return `session_${randomUUID().replace(/-/g, "")}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

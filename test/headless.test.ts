@@ -40,7 +40,15 @@ beforeEach(() => {
   spawn.mockImplementation(async (params) => {
     const usage = { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 } };
     params.onUsage(usage, { tokensKnown: true, costKnown: true, costBreakdownKnown: false });
-    return { content: [], details: { status: "done", result: "ok" }, usage };
+    return {
+      content: [],
+      details: {
+        status: "done",
+        result: "ok",
+        ...(params.persistSession ? { sessionId: params.sessionId ?? "new-session" } : {}),
+      },
+      usage,
+    };
   });
 });
 

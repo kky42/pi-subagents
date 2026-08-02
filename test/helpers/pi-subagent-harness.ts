@@ -29,6 +29,14 @@ export const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url
 
 export type FauxModelDef = { id: string; name: string; reasoning: boolean };
 export type TestFauxProvider = FauxProviderHandle & { unregister: () => void };
+export type TaskEnvelope = {
+  task_id: string;
+  task_type: "agent" | "workflow";
+  status: "accepted" | "completed" | "failed";
+  name: string;
+  session_key?: string;
+  content?: string;
+};
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type CreateSessionOptions = {
   maxConcurrentSubagents?: number;
@@ -39,6 +47,7 @@ type CreateSessionOptions = {
   defaultModelId?: string;
   thinkingLevel?: ThinkingLevel;
   systemPrompt?: string;
+  mode?: "tui" | "rpc" | "json" | "print";
 };
 
 export type HarnessState = {
@@ -126,10 +135,6 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     session.dispose();
   }
 
-  // Mirror the registered faux models into models.json so that subagent profile
-  // `model:` overrides resolve through ModelRegistry.find(provider, id) exactly
-  // like real custom models. Without this, find() only knows the built-in
-  // catalog and any profile model override would be filtered out as unavailable.
   function writeModelsJson(models: Array<Model<string>>) {
     if (models.length === 0) {
       return;
@@ -169,6 +174,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       defaultModelId,
       thinkingLevel = "high",
       systemPrompt,
+      mode = "tui",
     } = options;
     const faux = fauxProvider({ models: modelDefs });
     const models = modelDefs.map((def) => faux.getModel(def.id) as Model<string>);
@@ -218,13 +224,70 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       resourceLoader,
     });
     trackSession(session);
-    await session.bindExtensions({});
+    await session.bindExtensions({ mode });
 
     return { session, registration, model, models, modelRegistry, sessionManager };
   }
 
+  function setContextRoutingResponses(
+    registration: FauxProviderHandle,
+    response: (context: Context, options: SimpleStreamOptions, model: Model<string>) => ReturnType<typeof fauxAssistantMessage> | Promise<ReturnType<typeof fauxAssistantMessage>>,
+    count = 32,
+  ): void {
+    registration.setResponses(Array.from({ length: count }, () =>
+      (context: Context, options: SimpleStreamOptions | undefined, _state: unknown, model: Model<string>) =>
+        response(context, options ?? {}, model),
+    ));
+  }
+
+  function taskNotifications(session: { messages: readonly unknown[] }, taskId?: string): TaskEnvelope[] {
+    return session.messages
+      .filter((message): message is { role: string; customType?: string; details?: unknown } =>
+        typeof message === "object" && message !== null && "role" in message)
+      .filter((message) => message.role === "custom" && message.customType === "pi-flow-task-notification")
+      .map((message) => message.details as TaskEnvelope)
+      .filter((envelope) => taskId === undefined || envelope.task_id === taskId);
+  }
+
+  async function waitForTaskNotification(
+    session: { messages: readonly unknown[] },
+    taskId: string,
+    timeoutMs = 3000,
+  ): Promise<TaskEnvelope> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const notification = taskNotifications(session, taskId)[0];
+      if (notification) {
+        return notification;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`Timed out waiting for task notification ${taskId}`);
+  }
+
+  async function executeAgentTask(
+    session: { getToolDefinition: (name: string) => unknown; messages: readonly unknown[] },
+    registration: FauxProviderHandle,
+    context: unknown,
+    toolArgs: Record<string, unknown>,
+    childResponse: (context: Context, options: SimpleStreamOptions, model: Model<string>) => ReturnType<typeof fauxAssistantMessage> | Promise<ReturnType<typeof fauxAssistantMessage>>,
+  ) {
+    setContextRoutingResponses(registration, (providerContext, options, model) => {
+      if (getToolNames(providerContext).includes("Agent")) {
+        return fauxAssistantMessage("notification observed");
+      }
+      return childResponse(providerContext, options, model);
+    });
+    const tool = session.getToolDefinition("Agent") as {
+      execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }>; details: TaskEnvelope }>;
+    };
+    const accepted = await tool.execute("agent-test-call", toolArgs, undefined, undefined, context);
+    const terminal = await waitForTaskNotification(session, accepted.details.task_id);
+    return { accepted, terminal };
+  }
+
   async function delegateOnce(
-    session: { prompt: (input: string) => Promise<unknown> },
+    session: { prompt: (input: string) => Promise<unknown>; messages: readonly unknown[] },
     registration: FauxProviderHandle,
     toolArgs: Record<string, unknown>,
     opts: { childReply?: string; rootReply?: string; userPrompt?: string } = {},
@@ -236,20 +299,26 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       childModel?: Model<string>;
       rootContinuationContext?: Context;
     } = {};
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", toolArgs)], { stopReason: "toolUse" }),
-      (context, options, _state, model) => {
+    setContextRoutingResponses(registration, (context, options, model) => {
+      if (!getToolNames(context).includes("Agent")) {
         captured.childContext = context;
-        captured.childOptions = options as SimpleStreamOptions;
+        captured.childOptions = options;
         captured.childModel = model;
         return fauxAssistantMessage(childReply);
-      },
-      (context) => {
-        captured.rootContinuationContext = context;
-        return fauxAssistantMessage(rootReply);
-      },
-    ]);
+      }
+      const serialized = JSON.stringify(context.messages);
+      if (!serialized.includes('"toolName":"Agent"') && !serialized.includes("pi-flow-task-notification")) {
+        return fauxAssistantMessage([fauxToolCall("Agent", toolArgs)], { stopReason: "toolUse" });
+      }
+      captured.rootContinuationContext = context;
+      return fauxAssistantMessage(rootReply);
+    });
     await session.prompt(userPrompt);
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as { details?: TaskEnvelope } | undefined;
+    if (accepted?.details?.task_id) {
+      await waitForTaskNotification(session, accepted.details.task_id);
+    }
     return captured;
   }
 
@@ -292,6 +361,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     onStatus,
     projectTrusted = false,
     persistedSession = false,
+    sessionManager,
   }: {
     hasUI: boolean;
     model: Model<string>;
@@ -300,6 +370,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     onStatus?: (key: string, text: string | undefined) => void;
     projectTrusted?: boolean;
     persistedSession?: boolean;
+    sessionManager?: SessionManager;
   }) {
     const theme = makeMockTheme();
     const sessionDir = join(tempDir, "sessions");
@@ -308,14 +379,14 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       cwd,
       model,
       modelRegistry,
-      sessionManager: persistedSession
+      sessionManager: sessionManager ?? (persistedSession
         ? {
             isPersisted: () => true,
             getSessionFile: () => join(sessionDir, "session.jsonl"),
             getSessionDir: () => sessionDir,
             getSessionId: () => "test-session",
           }
-        : undefined,
+        : undefined),
       isProjectTrusted: () => projectTrusted,
       ui: {
         getAllThemes: () => (tui ? [{ name: "test", path: "test-theme.json" }] : []),
@@ -335,6 +406,10 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     trackSession,
     disposeSession,
     createSession,
+    setContextRoutingResponses,
+    taskNotifications,
+    waitForTaskNotification,
+    executeAgentTask,
     delegateOnce,
     makeMockTheme,
     stripAnsi,

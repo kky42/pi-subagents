@@ -1,401 +1,222 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  AuthStorage,
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry,
-  SessionManager,
-  SettingsManager,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import {
-  fauxAssistantMessage,
-  fauxToolCall,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
-import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles, loadBuiltinSubagentProfiles } from "../src/profiles.ts";
-import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
-import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
-import { packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
+import { fauxAssistantMessage, type Context, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 describe("pi-subagent pi backend behavior", () => {
-  let tempDir = "";
   let cwd = "";
   let agentDir = "";
-  let originalPathEnv: string | undefined;
-  let registrations: Array<{ unregister: () => void }> = [];
-
   const {
-    trackSession,
     disposeSession,
     createSession,
-    delegateOnce,
-    makeMockTheme,
-    stripAnsi,
-    renderToText,
-    formatTestTokens,
+    setContextRoutingResponses,
+    waitForTaskNotification,
+    executeAgentTask,
     makeExecutionContext,
     getToolNames,
   } = setupPiSubagentTestHarness((state) => {
-    tempDir = state.tempDir;
     cwd = state.cwd;
     agentDir = state.agentDir;
-    originalPathEnv = state.originalPathEnv;
-    registrations = state.registrations;
   });
-  it("runs a custom read-only subagent with fresh context and an appended role prompt", async () => {
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "code-searcher.md"), `---
+
+  it("keeps custom profile prompt, model, thinking, and tools isolated in the child", async () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(join(agentDir, "subagents", "code-searcher.md"), `---
 description: Searches code without editing files.
 tools: read, grep, find, ls, bash
----
-
-# Custom Code Searcher Role`);
-
-    const { session, registration } = await createSession();
-    let childContext: Context | undefined;
-    let childOptions: SimpleStreamOptions | undefined;
-    let childModel: Model<string> | undefined;
-    let rootContinuationContext: Context | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Find auth files",
-        subagent_type: "code-searcher",
-        prompt: "Search for the auth flow and report key files.",
-      })], { stopReason: "toolUse" }),
-      (context, options, _state, model) => {
-        childContext = context;
-        childOptions = options;
-        childModel = model;
-        return fauxAssistantMessage("found auth.ts");
-      },
-      (context) => {
-        rootContinuationContext = context;
-        return fauxAssistantMessage("reported to user");
-      },
-    ]);
-
-    await session.prompt("Please delegate the auth search.");
-
-    expect(childModel?.id).toBe("faux-thinker");
-    expect((childOptions as { reasoning?: string } | undefined)?.reasoning).toBe("high");
-    expect(childContext?.systemPrompt).toContain("Custom Code Searcher Role");
-    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
-    expect(getToolNames(childContext)).toEqual(["bash", "find", "grep", "ls", "read"]);
-    expect(JSON.stringify(childContext?.messages)).toContain("Search for the auth flow");
-    expect(JSON.stringify(childContext?.messages)).not.toContain("Please delegate the auth search");
-    expect(JSON.stringify(rootContinuationContext?.messages)).toContain("found auth.ts");
-
-    disposeSession(session);
-  });
-
-  it("resumes the child context when session_key is reused", async () => {
-    const { session, registration, sessionManager } = await createSession();
-    let firstChildContext: Context | undefined;
-    let secondChildContext: Context | undefined;
-    let rootContinuationContext: Context | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Initial draft",
-        prompt: "Initial draft prompt.",
-        session_key: "worker",
-      })], { stopReason: "toolUse" }),
-      (context) => {
-        firstChildContext = context;
-        return fauxAssistantMessage("draft v1");
-      },
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Revise draft",
-        prompt: "Reviewer says tighten the argument.",
-        session_key: "worker",
-      })], { stopReason: "toolUse" }),
-      (context) => {
-        secondChildContext = context;
-        return fauxAssistantMessage("draft v2");
-      },
-      (context) => {
-        rootContinuationContext = context;
-        return fauxAssistantMessage("reported");
-      },
-    ]);
-
-    await session.prompt("Create and revise with the same worker.");
-
-    expect(JSON.stringify(firstChildContext?.messages)).toContain("Initial draft prompt.");
-    const resumedMessages = JSON.stringify(secondChildContext?.messages);
-    expect(resumedMessages).toContain("Initial draft prompt.");
-    expect(resumedMessages).toContain("draft v1");
-    expect(resumedMessages).toContain("Reviewer says tighten the argument.");
-    expect(resumedMessages).not.toContain("Create and revise with the same worker.");
-    const rootMessages = JSON.stringify(rootContinuationContext?.messages);
-    expect(rootMessages).not.toContain("session_id:");
-    expect(rootMessages).not.toContain("sessionId");
-    const mappingEntries = sessionManager.getEntries().filter((entry: any) => entry.type === "custom" && entry.customType === "pi-flow-subagent-session-key") as any[];
-    expect(mappingEntries).toHaveLength(1);
-    expect(mappingEntries[0]?.data).toMatchObject({ key: "worker", subagentType: "general-purpose", backend: "pi" });
-    expect(mappingEntries[0]?.data.sessionId).toEqual(expect.any(String));
-
-    disposeSession(session);
-  });
-
-  it("preserves discovered append system prompts in child sessions", async () => {
-    const piDir = join(cwd, ".pi");
-    mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, "APPEND_SYSTEM.md"), "Project append marker must survive into subagents.");
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "context-checker.md"), `---
-description: Checks project context without editing files.
-tools: read
----
-
-# Custom Context Checker Role`);
-
-    const { session, registration } = await createSession();
-    let childContext: Context | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Find auth files",
-        subagent_type: "context-checker",
-        prompt: "Search for the auth flow and report key files.",
-      })], { stopReason: "toolUse" }),
-      (context) => {
-        childContext = context;
-        return fauxAssistantMessage("found auth.ts");
-      },
-      fauxAssistantMessage("reported to user"),
-    ]);
-
-    await session.prompt("Please delegate the auth search.");
-
-    expect(childContext?.systemPrompt).toContain("Project append marker must survive into subagents.");
-    expect(childContext?.systemPrompt).toContain("Custom Context Checker Role");
-    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
-
-    disposeSession(session);
-  });
-
-  it("does not append an extra role prompt for general-purpose subagents", async () => {
-    const { session, registration } = await createSession();
-    let childContext: Context | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Research config",
-        prompt: "Inspect config loading.",
-      })], { stopReason: "toolUse" }),
-      (context) => {
-        childContext = context;
-        return fauxAssistantMessage("config found");
-      },
-      fauxAssistantMessage("done"),
-    ]);
-
-    await session.prompt("Delegate config research.");
-
-    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
-    expect(JSON.stringify(childContext?.messages)).toContain("Inspect config loading.");
-
-    disposeSession(session);
-  });
-
-
-  it("runs a custom subagent with appended body prompt and thinking override", async () => {
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "code-reviewer.md"), `---
-description: Reviews code changes for correctness.
-tools: read, bash
+model: faux/faux-fast
 thinking: low
 ---
 
-Custom reviewer prompt marker.`);
-
-    const { session, registration } = await createSession();
-    let childContext: Context | undefined;
-    let childOptions: SimpleStreamOptions | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Review changes",
-        subagent_type: "code-reviewer",
-        prompt: "Review the latest diff.",
-      })], { stopReason: "toolUse" }),
-      (context, options) => {
-        childContext = context;
-        childOptions = options;
-        return fauxAssistantMessage("review complete");
-      },
-      fauxAssistantMessage("reported"),
-    ]);
-
-    await session.prompt("Delegate code review.");
-
-    expect(childContext?.systemPrompt).toContain("Custom reviewer prompt marker.");
-    expect(getToolNames(childContext)).toEqual(["bash", "read"]);
-    expect((childOptions as { reasoning?: string } | undefined)?.reasoning).toBe("low");
-    expect(JSON.stringify(childContext?.messages)).toContain("Review the latest diff.");
-
-    disposeSession(session);
-  });
-
-  it("runs a custom subagent on the valid model named in its profile, not the caller's model", async () => {
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "fast-agent.md"), `---
-description: Runs on the fast model.
-model: faux/faux-fast
----
-
-Fast agent prompt marker.`);
-
-    const { session, registration, model: callerModel } = await createSession({
+Custom Code Searcher Role`);
+    const { session, registration, model, modelRegistry } = await createSession({
       models: [
         { id: "faux-thinker", name: "Faux Thinker", reasoning: true },
         { id: "faux-fast", name: "Faux Fast", reasoning: false },
       ],
       defaultModelId: "faux-thinker",
     });
-    expect(callerModel.id).toBe("faux-thinker");
+    let childContext: Context | undefined;
+    let childOptions: SimpleStreamOptions | undefined;
+    let childModel: Model<string> | undefined;
 
-    const captured = await delegateOnce(session, registration, {
-      description: "Fast task",
-      subagent_type: "fast-agent",
-      prompt: "Do the fast thing.",
+    const { accepted, terminal } = await executeAgentTask(
+      session,
+      registration,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      { description: "Find auth files", subagent_type: "code-searcher", prompt: "Search for the auth flow." },
+      async (context, options, selectedModel) => {
+        childContext = context;
+        childOptions = options;
+        childModel = selectedModel;
+        return fauxAssistantMessage("found auth.ts");
+      },
+    );
+
+    expect(accepted.details).toMatchObject({ status: "accepted", session_key: expect.stringMatching(/^session_/) });
+    expect(terminal).toEqual({ ...accepted.details, status: "completed", content: "found auth.ts" });
+    expect(childModel?.id).toBe("faux-fast");
+    expect((childOptions as { reasoning?: string } | undefined)?.reasoning).toBeUndefined();
+    expect(childContext?.systemPrompt).toContain("Custom Code Searcher Role");
+    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
+    expect(getToolNames(childContext)).toEqual(["bash", "find", "grep", "ls", "read"]);
+    expect(JSON.stringify(childContext?.messages)).toContain("Search for the auth flow.");
+    disposeSession(session);
+  });
+
+  it("preserves project append prompts without exposing delegation tools", async () => {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    writeFileSync(join(cwd, ".pi", "APPEND_SYSTEM.md"), "Project append marker.");
+    const { session, registration, model, modelRegistry } = await createSession();
+    let childContext: Context | undefined;
+
+    await executeAgentTask(
+      session,
+      registration,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      { description: "Inspect context", prompt: "Inspect context." },
+      async (context) => {
+        childContext = context;
+        return fauxAssistantMessage("context inspected");
+      },
+    );
+
+    expect(childContext?.systemPrompt).toContain("Project append marker.");
+    expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
+    expect(getToolNames(childContext)).not.toContain("Agent");
+    expect(getToolNames(childContext)).not.toContain("workflow");
+    disposeSession(session);
+  });
+
+  it("generates a session key and resumes it on a later Agent call", async () => {
+    const { session, registration, model, modelRegistry, sessionManager } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, sessionManager });
+    let secondContext: Context | undefined;
+    setContextRoutingResponses(registration, (providerContext) => {
+      if (getToolNames(providerContext).includes("Agent")) return fauxAssistantMessage("notification observed");
+      const serialized = JSON.stringify(providerContext.messages);
+      if (serialized.includes("Second prompt.")) {
+        secondContext = providerContext;
+        return fauxAssistantMessage("draft v2");
+      }
+      return fauxAssistantMessage("draft v1");
     });
 
-    // The child must actually stream on the profile's model (the 4th faux
-    // callback arg is the model the session ran with), not the caller's model.
-    expect(captured.childModel?.id).toBe("faux-fast");
-    expect(captured.childModel?.id).not.toBe(callerModel.id);
-    expect(captured.childContext?.systemPrompt).toContain("Fast agent prompt marker.");
+    const first = await tool.execute("first", { description: "Initial draft", prompt: "First prompt." }, undefined, undefined, context);
+    const firstTerminal = await waitForTaskNotification(session, first.details.task_id);
+    const second = await tool.execute(
+      "second",
+      { description: "Revise draft", prompt: "Second prompt.", session_key: first.details.session_key },
+      undefined,
+      undefined,
+      context,
+    );
+    const secondTerminal = await waitForTaskNotification(session, second.details.task_id);
 
+    expect(first.details.session_key).toMatch(/^session_/);
+    expect(firstTerminal.session_key).toBe(first.details.session_key);
+    expect(second.details.session_key).toBe(first.details.session_key);
+    expect(secondTerminal.content).toBe("draft v2");
+    const messages = JSON.stringify(secondContext?.messages);
+    expect(messages).toContain("First prompt.");
+    expect(messages).toContain("draft v1");
+    expect(messages).toContain("Second prompt.");
+    const mappings = sessionManager.getEntries().filter((entry: any) => entry.type === "custom" && entry.customType === "pi-flow-subagent-session-key");
+    expect(mappings).toHaveLength(1);
     disposeSession(session);
   });
 
-  it("uses the default child-session tools when a subagent profile omits tools", async () => {
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "default-tools.md"), `---
-description: Uses the default tool set.
----
+  it("preserves a caller-supplied new session key", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const { accepted, terminal } = await executeAgentTask(
+      session,
+      registration,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      { description: "Named worker", prompt: "Work.", session_key: "worker" },
+      async () => fauxAssistantMessage("worker done"),
+    );
 
-Default tools prompt marker.`);
-
-    const { session, registration } = await createSession();
-    let childContext: Context | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Default tools",
-        subagent_type: "default-tools",
-        prompt: "Inspect the available child-session tools.",
-      })], { stopReason: "toolUse" }),
-      (context) => {
-        childContext = context;
-        return fauxAssistantMessage("default tools inspected");
-      },
-      fauxAssistantMessage("reported"),
-    ]);
-
-    await session.prompt("Delegate a default-tools subagent.");
-
-    expect(childContext?.systemPrompt).toContain("Default tools prompt marker.");
-    expect(getToolNames(childContext)).toEqual(["bash", "edit", "read", "write"]);
-
+    expect(accepted.details.session_key).toBe("worker");
+    expect(terminal.session_key).toBe("worker");
     disposeSession(session);
   });
 
+  it("fails a session key reused with a different profile", async () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(join(agentDir, "subagents", "reviewer.md"), "---\ndescription: Reviewer.\n---\nReviewer role.");
+    const { session, registration, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    setContextRoutingResponses(registration, (providerContext) =>
+      fauxAssistantMessage(getToolNames(providerContext).includes("Agent") ? "notification observed" : "first done"));
 
-  it("rejects explorer when the user has not defined it as a custom profile", async () => {
-    const { session, registration } = await createSession();
-    let rootContinuationContext: Context | undefined;
+    const first = await tool.execute(
+      "first",
+      { description: "First", prompt: "First.", session_key: "shared" },
+      undefined,
+      undefined,
+      context,
+    );
+    await waitForTaskNotification(session, first.details.task_id);
+    const mismatch = await tool.execute(
+      "mismatch",
+      { description: "Mismatch", prompt: "Second.", session_key: "shared", subagent_type: "reviewer" },
+      undefined,
+      undefined,
+      context,
+    );
+    const terminal = await waitForTaskNotification(session, mismatch.details.task_id);
 
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Find auth files",
-        subagent_type: "explorer",
-        prompt: "Search for auth.",
-      })], { stopReason: "toolUse" }),
-      (context) => {
-        rootContinuationContext = context;
-        return fauxAssistantMessage("saw rejection");
-      },
-    ]);
-
-    await session.prompt("Delegate with the removed built-in name.");
-
-    expect(JSON.stringify(rootContinuationContext?.messages)).toContain("Unknown subagent_type");
-    expect(registration.getPendingResponseCount()).toBe(0);
-
+    expect(terminal.status).toBe("failed");
+    expect(terminal.content).toContain("already belongs to general-purpose (pi)");
     disposeSession(session);
   });
 
+  it("reports unknown profiles only in the terminal notification", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    setContextRoutingResponses(registration, () => fauxAssistantMessage("notification observed"));
+    const tool = session.getToolDefinition("Agent") as any;
+    const accepted = await tool.execute(
+      "unknown",
+      { description: "Unknown", prompt: "Search.", subagent_type: "explorer" },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+    );
+    const terminal = await waitForTaskNotification(session, accepted.details.task_id);
 
-  it("does not expose Agent to subagent sessions", async () => {
-    const { session, registration } = await createSession();
-    let childContext: Context | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Search",
-        prompt: "Report whether the Agent tool is available.",
-      })], { stopReason: "toolUse" }),
-      (context) => {
-        childContext = context;
-        const hasAgent = context.tools?.some((tool: { name?: string }) => tool.name === "Agent") ?? false;
-        return fauxAssistantMessage(hasAgent ? "Agent visible" : "Agent hidden");
-      },
-      fauxAssistantMessage("done"),
-    ]);
-
-    await session.prompt("Delegate once.");
-
-    expect(childContext?.tools?.some((tool: { name?: string }) => tool.name === "Agent")).toBe(false);
-    expect(JSON.stringify(session.messages)).toContain("Agent hidden");
-    expect(registration.getPendingResponseCount()).toBe(0);
-
+    expect(accepted.details.status).toBe("accepted");
+    expect(terminal.status).toBe("failed");
+    expect(terminal.content).toContain("Unknown subagent_type");
     disposeSession(session);
   });
 
-  it("does not leak a prior parent tool result into a later child session", async () => {
-    const { session, registration } = await createSession();
-    let secondChildContext: Context | undefined;
+  it("fresh generated keys do not leak one child conversation into another", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    let secondContext: Context | undefined;
+    setContextRoutingResponses(registration, (providerContext) => {
+      if (getToolNames(providerContext).includes("Agent")) return fauxAssistantMessage("notification observed");
+      if (JSON.stringify(providerContext.messages).includes("Second task.")) {
+        secondContext = providerContext;
+        return fauxAssistantMessage("second done");
+      }
+      return fauxAssistantMessage("FIRST_CHILD_SECRET");
+    });
 
-    registration.setResponses([
-      fauxAssistantMessage(
-        [fauxToolCall("Agent", { description: "First search", prompt: "First task." })],
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("FIRST_CHILD_SECRET_RESULT"),
-      fauxAssistantMessage(
-        [fauxToolCall("Agent", { description: "Second search", prompt: "Second task." })],
-        { stopReason: "toolUse" },
-      ),
-      (context) => {
-        secondChildContext = context;
-        return fauxAssistantMessage("second child done");
-      },
-      fauxAssistantMessage("reported"),
-    ]);
+    const first = await tool.execute("first", { description: "First", prompt: "First task." }, undefined, undefined, context);
+    await waitForTaskNotification(session, first.details.task_id);
+    const second = await tool.execute("second", { description: "Second", prompt: "Second task." }, undefined, undefined, context);
+    await waitForTaskNotification(session, second.details.task_id);
 
-    await session.prompt("Delegate twice in sequence.");
-
-    const serialized = JSON.stringify(secondChildContext?.messages);
-    expect(serialized).toContain("Second task.");
-    expect(serialized).not.toContain("FIRST_CHILD_SECRET_RESULT");
-    expect(serialized).not.toContain("First task.");
-    expect(serialized).not.toContain("Delegate twice in sequence.");
-
+    expect(first.details.session_key).not.toBe(second.details.session_key);
+    const messages = JSON.stringify(secondContext?.messages);
+    expect(messages).toContain("Second task.");
+    expect(messages).not.toContain("FIRST_CHILD_SECRET");
+    expect(messages).not.toContain("First task.");
     disposeSession(session);
   });
 });

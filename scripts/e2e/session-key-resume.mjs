@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Real end-to-end smoke for pi-flow session_key continuation.
 //
-// Each selected backend is asked to run the same subagent twice with the same
-// session_key. The first child reads a secret file in a way that leaves the
+// Each selected backend starts a subagent without a session_key, then resumes
+// it with the generated key returned by the first background task. The first
+// child reads a secret file in a way that leaves the
 // value in the child session transcript, then deletes it; the second child must
 // recall the deleted secret from its continued child session. A fresh child
 // cannot read the file after the first turn, so the final token proves resume
@@ -119,6 +120,31 @@ function readAllTextUnder(root) {
     .join("\n");
 }
 
+function analyzeTaskMessages(root) {
+  const calls = [];
+  const accepted = [];
+  const terminal = [];
+  for (const file of listFilesRecursive(root).filter((candidate) => candidate.endsWith(".jsonl"))) {
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      let record;
+      try { record = JSON.parse(line); } catch { continue; }
+      const message = record.message;
+      for (const item of Array.isArray(message?.content) ? message.content : []) {
+        if (item?.type === "toolCall" && item.name === "Agent") calls.push(item.arguments ?? {});
+      }
+      if (message?.role === "toolResult" && message.toolName === "Agent" && message.details?.status === "accepted") {
+        accepted.push(message.details);
+      }
+      const custom = record.type === "custom_message" ? record : message?.role === "custom" ? message : undefined;
+      if (custom?.customType === "pi-flow-task-notification" && custom.details?.task_type === "agent") {
+        terminal.push(custom.details);
+      }
+    }
+  }
+  return { calls, accepted, terminal };
+}
+
 function runPi({ command, cwd, env, timeoutMs }) {
   return new Promise((resolve) => {
     const child = spawn(command[0], command.slice(1), {
@@ -180,7 +206,7 @@ function writePrompt(runRoot, backend, profileName, expectedPrefix) {
   ensureDir(path.dirname(promptPath));
   const firstPrompt = "Read e2e-secret.txt in a way that leaves its exact trimmed content visible in this subagent session's tool transcript, remember that exact content, delete e2e-secret.txt, and then reply exactly STEP1_DONE.";
   const secondPrompt = `Using only the prior conversation in this same subagent session, reply exactly ${expectedPrefix}:<remembered secret>. Do not read files.`;
-  writeFileSync(promptPath, `You are testing pi-flow session_key continuation for backend ${backend}.\n\nYou MUST call the Agent tool exactly twice, sequentially, with subagent_type "${profileName}" and session_key "worker" both times.\n\nFirst Agent call:\n- description: "${backend} remember secret"\n- prompt exactly:\n${firstPrompt}\n\nSecond Agent call:\n- description: "${backend} recall secret"\n- prompt exactly:\n${secondPrompt}\n\nAfter the second Agent result returns, reply with exactly the second subagent's token line and nothing else.\n`, "utf8");
+  writeFileSync(promptPath, `You are testing pi-flow generated session_key continuation for backend ${backend}.\n\nYou MUST call the Agent tool exactly twice, sequentially, with subagent_type "${profileName}". Do not pass session_key on the first call. Wait for its completed task notification, copy the returned session_key exactly, and pass that key on the second call. Do not invent or preselect a key.\n\nFirst Agent call:\n- description: "${backend} remember secret"\n- prompt exactly:\n${firstPrompt}\n\nSecond Agent call after the first terminal notification:\n- description: "${backend} recall secret"\n- session_key: the exact generated session_key returned by the first Agent task\n- prompt exactly:\n${secondPrompt}\n\nAfter the second terminal notification arrives, reply with exactly the second subagent's token line and nothing else.\n`, "utf8");
   return promptPath;
 }
 
@@ -237,10 +263,20 @@ async function runBackend(options, backend) {
       timeoutMs: options.timeoutMs,
     });
     const transcriptText = `${run.stdout}\n${run.stderr}\n${readAllTextUnder(sessionDir)}`;
+    const tasks = analyzeTaskMessages(sessionDir);
     assert(!run.timedOut, `[${backend}] pi timed out after ${options.timeoutMs}ms`);
     assert(run.code === 0, `[${backend}] pi exited with ${run.code}${run.signal ? ` (${run.signal})` : ""}\nSTDOUT:\n${run.stdout}\nSTDERR:\n${run.stderr}`);
     assert(transcriptText.includes(profileName), `[${backend}] session/output did not mention profile ${profileName}`);
-    assert(transcriptText.includes("session_key"), `[${backend}] transcript did not include session_key usage`);
+    assert(tasks.calls.length === 2, `[${backend}] expected exactly two Agent calls, observed ${tasks.calls.length}`);
+    assert(tasks.calls[0].session_key === undefined, `[${backend}] first Agent call must omit session_key`);
+    assert(tasks.accepted.length === 2, `[${backend}] expected two accepted Agent results, observed ${tasks.accepted.length}`);
+    const generatedKey = tasks.accepted[0].session_key;
+    assert(/^session_[a-f0-9]{32}$/.test(generatedKey ?? ""), `[${backend}] first Agent did not return a generated session_key`);
+    assert(tasks.calls[1].session_key === generatedKey, `[${backend}] second Agent call did not reuse the generated session_key`);
+    assert(tasks.accepted[1].session_key === generatedKey, `[${backend}] second accepted result changed session_key`);
+    assert(tasks.terminal.length === 2, `[${backend}] expected two terminal Agent notifications, observed ${tasks.terminal.length}`);
+    assert(tasks.terminal.every((item) => item.status === "completed"), `[${backend}] an Agent task did not complete successfully`);
+    assert(tasks.terminal.every((item) => tasks.accepted.some((start) => start.task_id === item.task_id)), `[${backend}] terminal task_id did not match an accepted task`);
     assert(transcriptText.includes("STEP1_DONE"), `[${backend}] first child result was not observed`);
     assert(transcriptText.includes(expected), `[${backend}] expected resumed token not found: ${expected}`);
     assert(!existsSync(path.join(fixture, "e2e-secret.txt")), `[${backend}] first child did not delete e2e-secret.txt`);

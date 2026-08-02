@@ -4,7 +4,7 @@
 
 **Give Pi a team.**
 
-Run focused subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Claude Code**—without leaving your Pi session.
+Run focused subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Claude Code** without leaving your Pi session.
 
 [![CI](https://github.com/kky42/pi-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/kky42/pi-flow/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/%40kky42%2Fpi-flow?label=npm)](https://www.npmjs.com/package/@kky42/pi-flow)
@@ -12,7 +12,13 @@ Run focused subagents and multi-agent workflows across **Pi**, **Codex CLI**, an
 
 </div>
 
-![pi-flow in action](./assets/pi-flow.png)
+```text
+Agent Inspect auth accepted task_...
+Workflow review_project accepted task_...
+✓ Agent Inspect auth task_...
+
+pi-flow [1/1] agents [0/1] workflows ↑210k ↓22k R4.9M CH95.9% $0.167
+```
 
 ## One coordinator, many specialists
 
@@ -23,7 +29,7 @@ Pi stays in control while `pi-flow` gives it two new ways to delegate:
 | **`Agent`** | Independent parallel work or context-heavy exploration where only the result needs to return. |
 | **`workflow`** | Saved workflows, dependent stages, control flow, structured results or branching, replay, or larger fan-out. |
 
-Each subagent can run through a different harness and model. Route fast searches to Codex, UI review to Claude Code, local analysis to Pi—or define your own mix.
+Each subagent can run through a different harness and model. Route fast searches to Codex, UI review to Claude Code, local analysis to Pi, or define your own mix.
 
 ```text
                               your request
@@ -64,7 +70,7 @@ Or ask for staged orchestration:
 Use a workflow to classify each changed file by risk, run a risk-specific review, and return structured results.
 ```
 
-Pi decides how to invoke `Agent` or `workflow`, shows live progress, and returns the combined result in the same conversation.
+Pi launches each `Agent` or `workflow` call as a background task, continues independent work, and receives the result later through a correlated task notification. `task_id` is the stable correlation identity; `name` is descriptive and may become more specific after a Workflow source loads. In `pi -p`, Pi waits for those tasks and notification turns before exiting.
 
 ## Headless execution
 
@@ -95,8 +101,8 @@ The lower-level `@kky42/pi-flow/runtime` export remains available for consumers 
 
 - **Use the right model for each lane.** A single task can combine different models, harnesses, prompts, and toolsets.
 - **Work in parallel.** Fan out repository exploration, research, review, or migration analysis while keeping one coordinator.
-- **Keep delegation visible.** Pi's TUI shows queued and running agents, recent activity, duration, tokens, cache hits, and cost when available.
-- **Continue a specialist when needed.** A caller-chosen `session_key` resumes the same backend conversation for review-and-revise loops.
+- **Keep delegation visible.** Pi's footer shows completed and total Agent/Workflow tasks alongside cumulative child tokens, cache hits, and cost.
+- **Continue a specialist when needed.** Every direct Agent returns a `session_key`; reuse it to continue the same backend conversation for review-and-revise loops.
 - **Reuse successful orchestration.** Save trusted workflows globally or per project and invoke them later by name.
 - **Stay harness-native.** Pi children use Pi tools; Codex and Claude children use their own CLI capabilities.
 
@@ -170,23 +176,29 @@ Agent({
 });
 ```
 
-For follow-up work, reuse a stable `session_key`:
+The first call immediately returns an accepted task with a generated continuation key:
+
+```json
+{
+  "task_id": "task_...",
+  "task_type": "agent",
+  "status": "accepted",
+  "session_key": "session_...",
+  "name": "Map the authentication flow"
+}
+```
+
+Its completed or failed result arrives later with the same `task_id` and `session_key`. For follow-up work, pass that returned key:
 
 ```ts
 Agent({
-  description: "Draft the migration",
-  session_key: "auth-migration",
-  prompt: "Propose a migration plan based on the current implementation.",
-});
-
-Agent({
   description: "Revise the migration",
-  session_key: "auth-migration",
+  session_key: "session_...",
   prompt: "Revise the plan using the review feedback. Address rollback and compatibility.",
 });
 ```
 
-`pi-flow` maps that key to the backend-native session or thread and keeps the continuation explicit.
+A caller-supplied key is also accepted on the first turn. `pi-flow` maps the effective key to the backend-native session or thread.
 
 ## Choose Agent or workflow by task shape
 
@@ -209,18 +221,18 @@ Saved workflows live in:
 - `~/.pi/agent/workflows/*.js` for global workflows
 - `.pi/workflows/*.js` for workflows in trusted projects
 
-Inline workflows can also be resumed by replay: unchanged earlier agent calls reuse their journaled results, while changed or new calls run live.
+Inline workflows can also be resumed with `resumeFromTaskId`: unchanged earlier agent calls reuse their journaled results, while changed or new calls run live. Workflow scripts can assign local `session_key` values such as `worker` and `reviewer` when internal agents need iterative conversations.
 
 ## Built for real work
 
 | Behavior | What it means |
 | --- | --- |
-| **Foreground execution** | `Agent` and `workflow` return only after delegated work completes; there is no hidden background job or polling system. |
-| **Bounded concurrency** | Direct agents and workflow agents share one global concurrency limit; excess work queues visibly. |
-| **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles—not hidden per-call overrides. |
-| **Cancellation and timeouts** | Aborts propagate to child processes, and a global timeout prevents stalled subagents from running forever. |
-| **Usage visibility** | Completed rows expose duration, input/output tokens, cache reads/writes, cache-hit rate, and known or estimated cost. |
-| **Inspectable workflows** | Saved and generated workflows are ordinary JavaScript files with journals, rather than opaque orchestration state. |
+| **Background tasks** | `Agent` and `workflow` immediately return a compact accepted envelope, then send one correlated completed or failed notification. |
+| **Bounded concurrency** | Direct agents and workflow agents share one global concurrency limit; excess work queues internally and drains as slots free. |
+| **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles, not hidden per-call overrides. |
+| **Session-scoped lifecycle** | Background work survives the launching turn, stops with its owning Pi session, and remains bounded by the global timeout. |
+| **Compact visibility** | The footer shows completed/total Agent and Workflow counts plus cumulative input/output tokens, cache hit rate, and cost. |
+| **Inspectable workflows** | Saved and generated workflows remain ordinary JavaScript files with task journals rather than opaque orchestration state. |
 
 Tune runtime guardrails when needed:
 

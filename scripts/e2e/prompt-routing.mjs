@@ -284,17 +284,19 @@ function addUsage(total, usage) {
   if (typeof usage?.cost?.total === "number") total.cost = (total.cost ?? 0) + usage.cost.total;
 }
 
-function summarizeChildSessionKeys(agents) {
-  const counts = new Map();
-  for (const agent of agents) {
-    if (typeof agent?.sessionKey !== "string" || !agent.sessionKey) continue;
-    counts.set(agent.sessionKey, (counts.get(agent.sessionKey) ?? 0) + 1);
+function parseEnvelope(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   }
-  return {
-    keyedChildCount: [...counts.values()].reduce((total, count) => total + count, 0),
-    distinctKeyCount: counts.size,
-    reusedKeyCount: [...counts.values()].filter((count) => count > 1).length,
-  };
+}
+
+function messageEnvelope(message) {
+  return parseEnvelope(message.details) ?? parseEnvelope(message.content?.[0]?.text) ?? parseEnvelope(message.content);
 }
 
 function analyzeJsonl(text) {
@@ -303,10 +305,9 @@ function analyzeJsonl(text) {
     toolCounts: {},
     agentCalls: [],
     workflowCalls: [],
-    agentResults: [],
-    workflowResults: [],
+    acceptedTasks: [],
+    notifications: [],
     rootUsage: {},
-    childUsage: {},
     rootModels: [],
     finalStop: false,
   };
@@ -318,12 +319,6 @@ function analyzeJsonl(text) {
       event = JSON.parse(line);
     } catch {
       analysis.malformedLines += 1;
-      continue;
-    }
-    if (event.type === "tool_execution_end") {
-      if (event.toolName === "Agent" || event.toolName === "workflow") {
-        addUsage(analysis.childUsage, event.result?.usage);
-      }
       continue;
     }
     if (event.type !== "message_end") continue;
@@ -357,17 +352,29 @@ function analyzeJsonl(text) {
       if (message.stopReason === "stop") analysis.finalStop = true;
     } else if (message.role === "toolResult") {
       if (message.toolName !== "Agent" && message.toolName !== "workflow") continue;
-      const details = message.details ?? {};
-      if (message.toolName === "Agent") {
-        analysis.agentResults.push({ status: details.status });
-      } else {
-        const agents = Array.isArray(details.agents) ? details.agents : [];
-        analysis.workflowResults.push({
-          status: details.status,
-          error: typeof details.error === "string" ? details.error : null,
-          agentCount: details.agentCount,
-          childStatuses: agents.map((agent) => agent.status),
-          childSessionKeys: summarizeChildSessionKeys(agents),
+      const envelope = messageEnvelope(message);
+      const taskType = message.toolName === "Agent" ? "agent" : "workflow";
+      if (envelope?.task_type === taskType && envelope.status === "accepted" && typeof envelope.task_id === "string") {
+        analysis.acceptedTasks.push({
+          taskId: envelope.task_id,
+          taskType,
+          sessionKey: taskType === "agent" && typeof envelope.session_key === "string" ? envelope.session_key : undefined,
+        });
+      }
+    } else if (message.role === "custom" && message.customType === "pi-flow-task-notification") {
+      const envelope = messageEnvelope(message);
+      if (
+        (envelope?.task_type === "agent" || envelope?.task_type === "workflow")
+        && (envelope.status === "completed" || envelope.status === "failed")
+        && typeof envelope.task_id === "string"
+      ) {
+        analysis.notifications.push({
+          taskId: envelope.task_id,
+          taskType: envelope.task_type,
+          status: envelope.status,
+          sessionKey: envelope.task_type === "agent" && typeof envelope.session_key === "string"
+            ? envelope.session_key
+            : undefined,
         });
       }
     }
@@ -471,7 +478,7 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
       }
       try {
         const event = JSON.parse(line);
-        if (event.type === "message_end" || event.type === "tool_execution_end") {
+        if (event.type === "message_end") {
           stdout = append(stdout, `${line}\n`, "stdout");
         }
       } catch {
@@ -533,33 +540,57 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
 
 function summarizedAnalysis(analysis) {
   const keyIds = new Map();
-  const sessionKeyPattern = analysis.agentCalls.map((call) => {
-    if (!call.sessionKey) return "fresh";
-    if (!keyIds.has(call.sessionKey)) keyIds.set(call.sessionKey, `key-${keyIds.size + 1}`);
-    return keyIds.get(call.sessionKey);
+  const agentTasks = analysis.acceptedTasks.filter((task) => task.taskType === "agent");
+  const sessionKeyPattern = agentTasks.map((task) => {
+    if (!task.sessionKey) return "missing";
+    if (!keyIds.has(task.sessionKey)) keyIds.set(task.sessionKey, `key-${keyIds.size + 1}`);
+    return keyIds.get(task.sessionKey);
   });
-  const keyedCallCount = sessionKeyPattern.filter((value) => value !== "fresh").length;
-  const sessionKeyState = analysis.agentCalls.length === 0
-    ? "no-agent-calls"
-    : keyedCallCount === 0
-      ? "all-fresh"
-      : keyedCallCount < analysis.agentCalls.length
-        ? "mixed"
-        : keyIds.size === 1
-          ? "same"
-          : "different";
+  const sessionKeyState = agentTasks.length === 0
+    ? "no-agent-tasks"
+    : sessionKeyPattern.includes("missing")
+      ? "missing"
+      : keyIds.size === 1
+        ? "same"
+        : "different";
+  const tasks = analysis.acceptedTasks.map((accepted) => {
+    const terminal = analysis.notifications.find((notification) =>
+      notification.taskId === accepted.taskId && notification.taskType === accepted.taskType);
+    return {
+      taskId: accepted.taskId,
+      taskType: accepted.taskType,
+      acceptedStatus: "accepted",
+      outcome: terminal?.status ?? "pending",
+      ...(accepted.taskType === "agent"
+        ? {
+            sessionKey: accepted.sessionKey ? keyIds.get(accepted.sessionKey) : null,
+            terminalSessionKeyMatches: terminal ? terminal.sessionKey === accepted.sessionKey : null,
+          }
+        : {}),
+    };
+  });
+  const taskOutcomes = {
+    accepted: tasks.length,
+    completed: tasks.filter((task) => task.outcome === "completed").length,
+    failed: tasks.filter((task) => task.outcome === "failed").length,
+    pending: tasks.filter((task) => task.outcome === "pending").length,
+    unmatchedNotifications: analysis.notifications.filter((notification) =>
+      !analysis.acceptedTasks.some((accepted) =>
+        accepted.taskId === notification.taskId && accepted.taskType === notification.taskType)).length,
+  };
   return {
     rootModels: analysis.rootModels,
     toolCounts: analysis.toolCounts,
     agentCallCount: analysis.agentCalls.length,
     agentCallGroups: analysis.agentCalls.map((call) => call.group),
+    requestedSessionKeys: analysis.agentCalls.map((call) =>
+      call.sessionKey ? keyIds.get(call.sessionKey) ?? "provided-unmatched" : "fresh"),
     sessionKeyState,
     sessionKeyPattern,
     workflowCalls: analysis.workflowCalls,
-    agentResults: analysis.agentResults,
-    workflowResults: analysis.workflowResults,
+    tasks,
+    taskOutcomes,
     rootUsage: analysis.rootUsage,
-    childUsage: analysis.childUsage,
   };
 }
 

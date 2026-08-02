@@ -1,24 +1,23 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
-import type { WorkflowToolDetails } from "../types.ts";
 import {
   createWorkflowJournalWriter,
-  createWorkflowRunIdentity,
+  createWorkflowTaskIdentity,
   getSessionWorkflowDir,
   loadWorkflowJournal,
   persistWorkflowScript,
+  type LoadedWorkflowJournal,
   type WorkflowJournalWriter,
-  type WorkflowRunIdentity,
 } from "./journal.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "./registry.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
-import type { WorkflowCachedAgentResult, WorkflowMetaPhase } from "./types.ts";
+import type { WorkflowCachedAgentResult } from "./types.ts";
 
 export const WORKFLOW_PROMPT_SNIPPET = "Run a saved or ad-hoc multi-agent JavaScript workflow";
 
 export const WORKFLOW_TOOL_DESCRIPTION = [
-  "Run a trusted JavaScript workflow in the foreground and return its JSON result.",
-  "Provide exactly one source: `name`, `scriptPath`, or `script`; use `resumeFromRunId` only with `scriptPath`.",
+  "Launch a trusted JavaScript workflow as a background task and return its task ID immediately.",
+  "Provide exactly one source: `name`, `scriptPath`, or `script`; a prior workflow can instead be replayed with `resumeFromTaskId`.",
   "Subagent calls share PiFlow's bounded concurrency and queue when full.",
   "Only run trusted scripts; worker VM isolation detects stalls but is not a security boundary.",
 ].join(" ");
@@ -58,7 +57,7 @@ const INLINE_WORKFLOW_DESCRIPTION = [
   "The first statement must be the plain literal `export const meta = { name: 'short_name', description: 'non-empty' }`; optional `phases` entries may contain `title`, `detail`, and `model`.",
   "Available globals are `agent(prompt, opts)`, `parallel(thunks)`, `pipeline(items, ...stages)`, `phase(title)`, `log(message)`, `args`, and `cwd`.",
   "Call `agent()` at least once, await or return every call, and return a JSON-serializable value.",
-  "Agent options are `label`, `phase`, `subagent_type`, `session_key`, and `schema`. `subagent_type` defaults to `general-purpose`; reuse a session key only for the same child. Nonfatal failures resolve to `null`.",
+  "Agent options are `label`, `phase`, `subagent_type`, `session_key`, and `schema`. `subagent_type` defaults to `general-purpose`; calls using the same workflow-local session key continue the same child conversation and are serialized. Nonfatal failures resolve to `null`.",
   "`parallel()` takes thunk functions, for example `await parallel([() => agent('A', { label: 'a' }), () => agent('B', { label: 'b' })])`, not promises, and preserves input order. `pipeline(items, ...stages)` preserves stage order per item while items run concurrently; stages receive `(previousValue, originalItem, index)`.",
   "A schema must have root type `object`; every object sets `additionalProperties: false` and lists every property in `required`, with nullable types for optional values. `anyOf` is supported; `oneOf` and `allOf` are not. Schema literals and top-level-const references are preflighted before any child starts. A schema inside a dynamic options object is validated immediately before that call; a dynamic schema value inside a static options object is rejected.",
   "Write plain JavaScript without imports, require, filesystem APIs, Date APIs, or `Math.random()`.",
@@ -82,10 +81,10 @@ export const workflowToolParameters = Type.Object({
   args: Type.Optional(
     Type.Any({ description: "Optional JSON value exposed unchanged to the workflow as the global `args`." }),
   ),
-  resumeFromRunId: Type.Optional(
+  resumeFromTaskId: Type.Optional(
     Type.String({
       description:
-        "Optional prior run id for replay. Valid only with `scriptPath`; successful cached agent results are reused for the longest unchanged call prefix, then execution continues live.",
+        "Optional prior workflow task ID for replay. Use it alone to replay the persisted script, or with `scriptPath` to replay an edited script. Successful cached agent results are reused for the longest unchanged call prefix, then execution continues live.",
     }),
   ),
 });
@@ -95,22 +94,18 @@ export type WorkflowToolParams = Static<typeof workflowToolParameters>;
 export type PreparedWorkflowToolSource = {
   script: string;
   metaName: string;
-  plannedPhases?: WorkflowMetaPhase[];
-  source: "inline" | "saved" | "path";
-  sourcePath?: string;
-  scriptPath?: string;
-  warnings: string[];
-  identity: WorkflowRunIdentity;
   journalWriter?: WorkflowJournalWriter;
-  resumeFromRunId?: string;
   resumeAgentResults?: WorkflowCachedAgentResult[];
 };
 
-type PrepareErrorDetails = Partial<WorkflowToolDetails> & { name: string; error: string };
+interface PrepareErrorDetails {
+  name: string;
+  error: string;
+}
 
 export type PrepareWorkflowToolSourceResult =
   | { ok: true; value: PreparedWorkflowToolSource }
-  | { ok: false; text: string; details: PrepareErrorDetails };
+  | { ok: false; details: PrepareErrorDetails };
 
 type WorkflowSource =
   | {
@@ -135,15 +130,15 @@ function formatAvailableWorkflowNames(names: string[]): string {
   return names.length ? names.join(", ") : "none";
 }
 
-function formatWarnings(warnings: string[]): string {
-  if (!warnings.length) {
-    return "";
-  }
-  return `\n\nWarnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
+function redactAbsolutePaths(message: string): string {
+  return message.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s:]+/g, "<path>");
 }
 
-function sourceError(text: string, details: PrepareErrorDetails): PrepareWorkflowToolSourceResult {
-  return { ok: false, text, details };
+function sourceError(
+  _text: string,
+  details: PrepareErrorDetails & Record<string, unknown>,
+): PrepareWorkflowToolSourceResult {
+  return { ok: false, details: { name: details.name, error: details.error } };
 }
 
 function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext): WorkflowSource {
@@ -222,28 +217,64 @@ export function normalizeWorkflowScript(script: string): string {
 export async function prepareWorkflowToolSource(
   params: WorkflowToolParams,
   ctx: ExtensionContext,
+  taskId: string,
 ): Promise<PrepareWorkflowToolSourceResult> {
-  const source = resolveWorkflowSource(params, ctx);
+  const resumeFromTaskId = typeof params.resumeFromTaskId === "string" && params.resumeFromTaskId.trim()
+    ? params.resumeFromTaskId.trim()
+    : undefined;
+  const sessionWorkflowDir = getSessionWorkflowDir(ctx);
+  if (resumeFromTaskId && (params.script || params.name)) {
+    const message = "Cannot resume workflow: resumeFromTaskId may only be used alone or with scriptPath.";
+    return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+  }
+
+  let resumeJournal: LoadedWorkflowJournal | undefined;
+  let sourceParams = params;
+  if (resumeFromTaskId && !(typeof params.scriptPath === "string" && params.scriptPath.trim())) {
+    if (!sessionWorkflowDir) {
+      const message = "Cannot resume workflow: current session has no persisted workflow state.";
+      return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+    }
+    try {
+      resumeJournal = await loadWorkflowJournal(sessionWorkflowDir, resumeFromTaskId);
+    } catch {
+      const message = `Cannot resume workflow: task journal for ${resumeFromTaskId} could not be read.`;
+      return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+    }
+    if (!resumeJournal) {
+      const message = `Cannot resume workflow: task journal not found for ${resumeFromTaskId}.`;
+      return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+    }
+    if (resumeJournal.status === "running") {
+      const message = `Cannot resume workflow: task ${resumeFromTaskId} is still running.`;
+      return sourceError(message, { name: resumeJournal.name ?? "workflow", error: message, resumeFromTaskId });
+    }
+    if (!resumeJournal.scriptPath) {
+      const message = `Cannot resume workflow: task ${resumeFromTaskId} has no persisted script.`;
+      return sourceError(message, { name: resumeJournal.name ?? "workflow", error: message, resumeFromTaskId });
+    }
+    sourceParams = { ...params, scriptPath: resumeJournal.scriptPath };
+  }
+
+  const source = resolveWorkflowSource(sourceParams, ctx);
   if (!source.ok) {
-    return sourceError(`${source.message}${formatWarnings(source.warnings)}`, {
+    const message = redactAbsolutePaths(source.message);
+    return sourceError(message, {
       name: "workflow",
-      error: source.message,
-      logs: source.warnings,
+      error: message,
     });
   }
 
   const script = normalizeWorkflowScript(source.script);
   let metaName = source.requestedName ?? "workflow";
-  let plannedPhases: WorkflowMetaPhase[] | undefined;
   try {
-    const parsed = parseWorkflowScript(script);
-    metaName = parsed.meta.name;
-    plannedPhases = parsed.meta.phases?.map((phase) => ({ ...phase }));
+    metaName = parseWorkflowScript(script).meta.name;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return sourceError(`Workflow script is invalid; no subagents were started: ${message}`, {
+    const publicError = `Workflow script is invalid; no subagents were started: ${message}`;
+    return sourceError(publicError, {
       name: metaName,
-      error: message,
+      error: publicError,
       logs: source.warnings,
       source: source.source,
       sourcePath: source.sourcePath,
@@ -251,43 +282,26 @@ export async function prepareWorkflowToolSource(
     });
   }
 
-  const resumeFromRunId = typeof params.resumeFromRunId === "string" && params.resumeFromRunId.trim()
-    ? params.resumeFromRunId.trim()
-    : undefined;
-  if (resumeFromRunId && source.source !== "path") {
-    const message = "Cannot resume workflow: resumeFromRunId can only be used with scriptPath.";
-    return sourceError(message, {
-      name: metaName,
-      error: message,
-      logs: source.warnings,
-      source: source.source,
-      sourcePath: source.sourcePath,
-      scriptPath: undefined,
-      resumeFromRunId,
-    });
-  }
-
-  const sessionWorkflowDir = getSessionWorkflowDir(ctx);
-  const identity = createWorkflowRunIdentity(script, params.args);
+  const identity = createWorkflowTaskIdentity(taskId, script, params.args);
   let scriptPath = source.sourcePath;
-  if (source.source === "inline" && sessionWorkflowDir) {
+  if (sessionWorkflowDir) {
     try {
       scriptPath = await persistWorkflowScript({ dir: sessionWorkflowDir, metaName, scriptHash: identity.scriptHash, script });
-    } catch (error) {
-      const message = `Workflow persistence failed: ${error instanceof Error ? error.message : String(error)}`;
+    } catch {
+      const message = "Workflow persistence failed.";
       return sourceError(message, {
         name: metaName,
         error: message,
         logs: source.warnings,
         source: source.source,
         sourcePath: source.sourcePath,
-        runId: identity.runId,
+        taskId: identity.taskId,
       });
     }
   }
 
   let resumeAgentResults: WorkflowCachedAgentResult[] | undefined = undefined;
-  if (resumeFromRunId) {
+  if (resumeFromTaskId) {
     if (!sessionWorkflowDir) {
       const message = "Cannot resume workflow: current session has no persisted workflow state.";
       return sourceError(message, {
@@ -297,15 +311,29 @@ export async function prepareWorkflowToolSource(
         source: source.source,
         sourcePath: source.sourcePath,
         scriptPath,
-        runId: identity.runId,
-        resumeFromRunId,
+        taskId: identity.taskId,
+        resumeFromTaskId,
       });
     }
-    let journal;
-    try {
-      journal = await loadWorkflowJournal(sessionWorkflowDir, resumeFromRunId);
-    } catch (error) {
-      const message = `Cannot resume workflow: ${error instanceof Error ? error.message : String(error)}`;
+    if (!resumeJournal) {
+      try {
+        resumeJournal = await loadWorkflowJournal(sessionWorkflowDir, resumeFromTaskId);
+      } catch {
+        const message = `Cannot resume workflow: task journal for ${resumeFromTaskId} could not be read.`;
+        return sourceError(message, {
+          name: metaName,
+          error: message,
+          logs: source.warnings,
+          source: source.source,
+          sourcePath: source.sourcePath,
+          scriptPath,
+          taskId: identity.taskId,
+          resumeFromTaskId,
+        });
+      }
+    }
+    if (!resumeJournal) {
+      const message = `Cannot resume workflow: task journal not found for ${resumeFromTaskId}.`;
       return sourceError(message, {
         name: metaName,
         error: message,
@@ -313,12 +341,12 @@ export async function prepareWorkflowToolSource(
         source: source.source,
         sourcePath: source.sourcePath,
         scriptPath,
-        runId: identity.runId,
-        resumeFromRunId,
+        taskId: identity.taskId,
+        resumeFromTaskId,
       });
     }
-    if (!journal) {
-      const message = `Cannot resume workflow: run journal not found for ${resumeFromRunId}.`;
+    if (resumeJournal.status === "running") {
+      const message = `Cannot resume workflow: task ${resumeFromTaskId} is still running.`;
       return sourceError(message, {
         name: metaName,
         error: message,
@@ -326,11 +354,11 @@ export async function prepareWorkflowToolSource(
         source: source.source,
         sourcePath: source.sourcePath,
         scriptPath,
-        runId: identity.runId,
-        resumeFromRunId,
+        taskId: identity.taskId,
+        resumeFromTaskId,
       });
     }
-    resumeAgentResults = journal.agentResults;
+    resumeAgentResults = resumeJournal.agentResults;
   }
 
   let journalWriter: WorkflowJournalWriter | undefined;
@@ -342,10 +370,10 @@ export async function prepareWorkflowToolSource(
         name: metaName,
         source: source.source,
         scriptPath,
-        resumeFromRunId,
+        resumeFromTaskId,
       });
-    } catch (error) {
-      const message = `Workflow journal setup failed: ${error instanceof Error ? error.message : String(error)}`;
+    } catch {
+      const message = "Workflow journal setup failed.";
       return sourceError(message, {
         name: metaName,
         error: message,
@@ -353,8 +381,8 @@ export async function prepareWorkflowToolSource(
         source: source.source,
         sourcePath: source.sourcePath,
         scriptPath,
-        runId: identity.runId,
-        resumeFromRunId,
+        taskId: identity.taskId,
+        resumeFromTaskId,
       });
     }
   }
@@ -364,14 +392,7 @@ export async function prepareWorkflowToolSource(
     value: {
       script,
       metaName,
-      plannedPhases,
-      source: source.source,
-      sourcePath: source.sourcePath,
-      scriptPath,
-      warnings: source.warnings,
-      identity,
       journalWriter,
-      resumeFromRunId,
       resumeAgentResults,
     },
   };

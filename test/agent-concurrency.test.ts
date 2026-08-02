@@ -1,341 +1,157 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  AuthStorage,
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry,
-  SessionManager,
-  SettingsManager,
-  type ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import {
-  fauxAssistantMessage,
-  fauxToolCall,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
-import { createSubagentExtension } from "../src/pi-subagent.ts";
-import { getSubagentProfiles, loadBuiltinSubagentProfiles } from "../src/profiles.ts";
-import { buildClaudeArgs, claudeUsageToSubagentUsage, extractClaudeCostUsd, extractClaudeError, extractClaudeFinalText, extractClaudeUsage, spawnClaudeSubagent } from "../src/core/claude.ts";
-import { buildCodexArgs, codexUsageToSubagentUsage, estimateCodexCostUsd, extractCodexFinalText, spawnCodexSubagent } from "../src/core/codex.ts";
-import { packageRoot, setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { describe, expect, it } from "vitest";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
-describe("pi-subagent agent concurrency", () => {
-  let tempDir = "";
-  let cwd = "";
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+describe("pi-subagent background concurrency", () => {
   let agentDir = "";
-  let originalPathEnv: string | undefined;
-  let registrations: Array<{ unregister: () => void }> = [];
-
   const {
-    trackSession,
     disposeSession,
     createSession,
-    delegateOnce,
-    makeMockTheme,
-    stripAnsi,
-    renderToText,
-    formatTestTokens,
+    setContextRoutingResponses,
+    waitForTaskNotification,
     makeExecutionContext,
-    getToolNames,
   } = setupPiSubagentTestHarness((state) => {
-    tempDir = state.tempDir;
-    cwd = state.cwd;
     agentDir = state.agentDir;
-    originalPathEnv = state.originalPathEnv;
-    registrations = state.registrations;
-  });
-  it("does not count an unavailable-profile-model rejection toward maxConcurrentSubagents", async () => {
-    const subagentsDir = join(agentDir, "subagents");
-    mkdirSync(subagentsDir, { recursive: true });
-    writeFileSync(join(subagentsDir, "bad-model-agent.md"), `---
-description: Uses an unavailable registered model.
-model: ghost/nope
----
-
-This should not be advertised or launched.`);
-
-    const { session, registration } = await createSession({ maxConcurrentSubagents: 1 });
-    let rootContinuationContext: Context | undefined;
-
-    registration.setResponses([
-      fauxAssistantMessage([
-        fauxToolCall("Agent", {
-          description: "Bad model first",
-          subagent_type: "bad-model-agent",
-          prompt: "This should fail before launch.",
-        }),
-        fauxToolCall("Agent", {
-          description: "Valid second",
-          prompt: "This valid child should still run.",
-        }),
-      ], { stopReason: "toolUse" }),
-      fauxAssistantMessage("valid child ran"),
-      (context) => {
-        rootContinuationContext = context;
-        return fauxAssistantMessage("done");
-      },
-    ]);
-
-    await session.prompt("Run one bad and one good subagent.");
-
-    const serialized = JSON.stringify(rootContinuationContext?.messages);
-    expect(serialized).toContain("Profile model not found: ghost/nope");
-    expect(serialized).toContain("valid child ran");
-
-    disposeSession(session);
   });
 
-
-  it("queues foreground parallel Agent calls over maxConcurrentSubagents", async () => {
-    const { session, registration } = await createSession({ maxConcurrentSubagents: 1 });
-    let rootContinuationContext: Context | undefined;
-    let childCallCount = 0;
-    let activeChildren = 0;
-    let maxActiveChildren = 0;
+  it("accepts parallel calls immediately while limiting active children", async () => {
+    const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    let active = 0;
+    let maximum = 0;
+    let started = 0;
     let releaseFirst!: () => void;
-    let firstStarted!: () => void;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
-    const firstStartedGate = new Promise<void>((resolve) => {
-      firstStarted = resolve;
-    });
-    const childResponse = async () => {
-      const index = ++childCallCount;
-      activeChildren++;
-      maxActiveChildren = Math.max(maxActiveChildren, activeChildren);
-      try {
-        if (index === 1) {
-          firstStarted();
-          await firstGate;
-          return fauxAssistantMessage("first result");
-        }
-        return fauxAssistantMessage("second result");
-      } finally {
-        activeChildren--;
+    setContextRoutingResponses(registration, async (providerContext) => {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        return fauxAssistantMessage("notification observed");
       }
-    };
+      const index = ++started;
+      active++;
+      maximum = Math.max(maximum, active);
+      try {
+        if (index === 1) await firstGate;
+        return fauxAssistantMessage(`child ${index} done`);
+      } finally {
+        active--;
+      }
+    });
 
-    registration.setResponses([
-      fauxAssistantMessage([
-        fauxToolCall("Agent", {
-          description: "First search",
-          prompt: "First search task.",
-        }),
-        fauxToolCall("Agent", {
-          description: "Second search",
-          prompt: "Second search task.",
-        }),
-      ], { stopReason: "toolUse" }),
-      childResponse,
-      childResponse,
-      (context) => {
-        rootContinuationContext = context;
-        return fauxAssistantMessage("done");
-      },
-    ]);
+    const first = await tool.execute("first", { description: "First", prompt: "First task." }, undefined, undefined, context);
+    const second = await tool.execute("second", { description: "Second", prompt: "Second task." }, undefined, undefined, context);
 
-    const promptPromise = session.prompt("Run two searches.");
-    await firstStartedGate;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(childCallCount).toBe(1);
-    expect(maxActiveChildren).toBe(1);
+    expect(first.details.status).toBe("accepted");
+    expect(second.details.status).toBe("accepted");
+    expect(first.details.task_id).not.toBe(second.details.task_id);
+    await delay(20);
+    expect(started).toBe(1);
+    expect(maximum).toBe(1);
 
     releaseFirst();
-    await promptPromise;
-
-    const serialized = JSON.stringify(rootContinuationContext?.messages);
-    expect(serialized).toContain("first result");
-    expect(serialized).toContain("second result");
-    expect(childCallCount).toBe(2);
-    expect(maxActiveChildren).toBe(1);
-
+    const terminals = await Promise.all([
+      waitForTaskNotification(session, first.details.task_id),
+      waitForTaskNotification(session, second.details.task_id),
+    ]);
+    expect(terminals.map((item) => item.status)).toEqual(["completed", "completed"]);
+    expect(started).toBe(2);
+    expect(maximum).toBe(1);
     disposeSession(session);
   });
 
-
-  it("uses --max-concurrent-subagents flag value over the factory default", async () => {
-    const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 3, maxConcurrentSubagentsFlag: "1" });
-    const tool = session.getToolDefinition("Agent") as any;
-    const ctx = makeExecutionContext({ hasUI: false, model, modelRegistry });
-
-    let release1!: () => void;
-    const gate1 = new Promise<void>((resolve) => {
-      release1 = resolve;
+  it("uses the max-concurrency flag over the factory default", async () => {
+    const { session, registration, model, modelRegistry } = await createSession({
+      maxConcurrentSubagents: 3,
+      maxConcurrentSubagentsFlag: "1",
     });
-    registration.setResponses([
-      async () => {
-        await gate1;
-        return fauxAssistantMessage("first flagged result");
-      },
-      fauxAssistantMessage("second flagged result"),
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    let active = 0;
+    let maximum = 0;
+    setContextRoutingResponses(registration, async (providerContext) => {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        return fauxAssistantMessage("notification observed");
+      }
+      active++;
+      maximum = Math.max(maximum, active);
+      await delay(20);
+      active--;
+      return fauxAssistantMessage("done");
+    });
+
+    const accepted = await Promise.all([
+      tool.execute("a", { description: "A", prompt: "A" }, undefined, undefined, context),
+      tool.execute("b", { description: "B", prompt: "B" }, undefined, undefined, context),
     ]);
+    await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
-    const inFlight = tool.execute("flag-1", { description: "First", prompt: "First flagged task." }, undefined, undefined, ctx);
-    let queuedSettled = false;
-    const queued = tool
-      .execute("flag-2", { description: "Second", prompt: "Second flagged task." }, undefined, undefined, ctx)
-      .then((result: any) => {
-        queuedSettled = true;
-        return result;
-      });
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(queuedSettled).toBe(false);
-
-    release1();
-    expect((await inFlight).details.result).toContain("first flagged result");
-    expect((await queued).details.result).toContain("second flagged result");
-
+    expect(maximum).toBe(1);
     disposeSession(session);
   });
 
-  it("frees slots across user turns so a later turn can still delegate under the cap", async () => {
-    const { session, registration } = await createSession({ maxConcurrentSubagents: 1 });
-
-    registration.setResponses([
-      fauxAssistantMessage(
-        [fauxToolCall("Agent", { description: "Turn 1 search", prompt: "First task." })],
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("turn 1 child done"),
-      fauxAssistantMessage("turn 1 reply"),
-      fauxAssistantMessage(
-        [fauxToolCall("Agent", { description: "Turn 2 search", prompt: "Second task." })],
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("turn 2 child done"),
-      fauxAssistantMessage("turn 2 reply"),
-    ]);
-
-    await session.prompt("Turn 1 — please delegate.");
-    await session.prompt("Turn 2 — please delegate again.");
-
-    const serialized = JSON.stringify(session.messages);
-    expect(serialized).toContain("turn 1 child done");
-    expect(serialized).toContain("turn 2 child done");
-
-    disposeSession(session);
-  });
-
-  it("counts live in-flight children, not a per-turn quota", async () => {
+  it("serializes calls that share a session key before consuming concurrency slots", async () => {
     const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 2 });
     const tool = session.getToolDefinition("Agent") as any;
-    const ctx = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    let sharedActive = 0;
+    let maximumShared = 0;
+    setContextRoutingResponses(registration, async (providerContext) => {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        return fauxAssistantMessage("notification observed");
+      }
+      sharedActive++;
+      maximumShared = Math.max(maximumShared, sharedActive);
+      await delay(20);
+      sharedActive--;
+      return fauxAssistantMessage("shared done");
+    });
 
-    let release1!: () => void;
-    let release2!: () => void;
-    const gate1 = new Promise<void>((resolve) => {
-      release1 = resolve;
-    });
-    const gate2 = new Promise<void>((resolve) => {
-      release2 = resolve;
-    });
-    registration.setResponses([
-      async () => {
-        await gate1;
-        return fauxAssistantMessage("child 1 done");
-      },
-      async () => {
-        await gate2;
-        return fauxAssistantMessage("child 2 done");
-      },
-      fauxAssistantMessage("recovery child done"),
+    const accepted = await Promise.all([
+      tool.execute("shared-a", { description: "Shared A", prompt: "A", session_key: "worker" }, undefined, undefined, context),
+      tool.execute("shared-b", { description: "Shared B", prompt: "B", session_key: "worker" }, undefined, undefined, context),
     ]);
+    await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
-    const inFlight1 = tool.execute("c1", { description: "A", prompt: "Task A." }, undefined, undefined, ctx);
-    const inFlight2 = tool.execute("c2", { description: "B", prompt: "Task B." }, undefined, undefined, ctx);
-
-    let queuedSettled = false;
-    const queued = tool.execute("c3", { description: "C", prompt: "Task C." }, undefined, undefined, ctx).then((result: any) => {
-      queuedSettled = true;
-      return result;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(queuedSettled).toBe(false);
-
-    release1();
-    expect((await inFlight1).details.status).toBe("done");
-    const recovered = await queued;
-    expect(recovered.details.status).toBe("done");
-    expect(recovered.details.result).toContain("recovery child done");
-
-    release2();
-    expect((await inFlight2).details.status).toBe("done");
-
+    expect(maximumShared).toBe(1);
+    expect(accepted.map((result) => result.details.session_key)).toEqual(["worker", "worker"]);
     disposeSession(session);
   });
 
-  it("releases completed subagents before later tool rounds in the same user prompt", async () => {
-    const { session, registration } = await createSession({ maxConcurrentSubagents: 4 });
-
-    registration.setResponses([
-      fauxAssistantMessage(
-        [1, 2, 3, 4].map((index) =>
-          fauxToolCall("Agent", { description: `Round 1 search ${index}`, prompt: `First round task ${index}.` }),
-        ),
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("round 1 child 1 done"),
-      fauxAssistantMessage("round 1 child 2 done"),
-      fauxAssistantMessage("round 1 child 3 done"),
-      fauxAssistantMessage("round 1 child 4 done"),
-      fauxAssistantMessage(
-        [1, 2, 3, 4].map((index) =>
-          fauxToolCall("Agent", { description: `Round 2 search ${index}`, prompt: `Second round task ${index}.` }),
-        ),
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("round 2 child 1 done"),
-      fauxAssistantMessage("round 2 child 2 done"),
-      fauxAssistantMessage("round 2 child 3 done"),
-      fauxAssistantMessage("round 2 child 4 done"),
-      fauxAssistantMessage("root done"),
-    ]);
-
-    await session.prompt("Run four searches, then after they finish run four more.");
-
-    const serialized = JSON.stringify(session.messages);
-    expect(serialized).toContain("round 1 child 4 done");
-    expect(serialized).toContain("round 2 child 4 done");
-
-    disposeSession(session);
-  });
-
-  it("releases the slot when a child fails so a later delegation still launches", async () => {
+  it("a rejected profile does not prevent a queued valid task from completing", async () => {
+    mkdirSync(join(agentDir, "subagents"), { recursive: true });
+    writeFileSync(join(agentDir, "subagents", "bad-model.md"), "---\ndescription: Bad model.\nmodel: ghost/nope\n---\n");
     const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
     const tool = session.getToolDefinition("Agent") as any;
-    const ctx = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    setContextRoutingResponses(registration, (providerContext) =>
+      fauxAssistantMessage(providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")
+        ? "notification observed"
+        : "valid child done"));
 
-    registration.setResponses([fauxAssistantMessage("recovery child done")]);
-
-    const aborted = new AbortController();
-    aborted.abort();
-    const failed = await tool.execute(
-      "failed-agent-call",
-      { description: "Doomed search", prompt: "First task that fails." },
-      aborted.signal,
+    const invalid = await tool.execute(
+      "invalid",
+      { description: "Invalid", prompt: "Fail.", subagent_type: "bad-model" },
       undefined,
-      ctx,
+      undefined,
+      context,
     );
-    expect(failed.details.status).toBe("aborted");
-    expect(failed.details.error).toContain("Aborted while waiting for a concurrency slot");
+    const valid = await tool.execute("valid", { description: "Valid", prompt: "Run." }, undefined, undefined, context);
+    const [invalidTerminal, validTerminal] = await Promise.all([
+      waitForTaskNotification(session, invalid.details.task_id),
+      waitForTaskNotification(session, valid.details.task_id),
+    ]);
 
-    const recovered = await tool.execute(
-      "recovery-agent-call",
-      { description: "Recovery search", prompt: "Second task that succeeds." },
-      undefined,
-      undefined,
-      ctx,
-    );
-    expect(recovered.details.status).toBe("done");
-    expect(recovered.details.error).toBeUndefined();
-    expect(recovered.details.result).toContain("recovery child done");
-
+    expect(invalidTerminal.status).toBe("failed");
+    expect(invalidTerminal.content).toContain("Profile model not found: ghost/nope");
+    expect(validTerminal).toMatchObject({ status: "completed", content: "valid child done" });
     disposeSession(session);
   });
 });

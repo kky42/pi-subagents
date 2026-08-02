@@ -60,11 +60,13 @@ describe("pi-subagent agent contract", () => {
     } | undefined;
     const properties = schema?.properties ?? {};
 
-    expect(tool?.description.trim().length).toBeGreaterThan(0);
+    expect(tool?.description).toContain("background");
+    expect(tool?.description).toContain("return its task ID immediately");
     expect(tool?.promptGuidelines).toBeUndefined();
     expect(schema?.required).toEqual(["description", "prompt"]);
     expect(Object.keys(properties).sort()).toEqual(["description", "prompt", "session_key", "subagent_type"]);
     expectDescribedProperties(properties);
+    expect(properties.session_key?.description).toContain("effective session_key is returned");
 
     disposeSession(session);
   });
@@ -81,7 +83,7 @@ describe("pi-subagent agent contract", () => {
     expect(tool?.description.trim().length).toBeGreaterThan(0);
     expect(tool?.promptGuidelines).toBeUndefined();
     expect(schema?.required ?? []).toEqual([]);
-    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resumeFromRunId", "script", "scriptPath"]);
+    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resumeFromTaskId", "script", "scriptPath"]);
     expectDescribedProperties(properties);
 
     disposeSession(session);
@@ -135,8 +137,10 @@ describe("pi-subagent agent contract", () => {
     }
   });
 
-  it("uses the same PiFlow prompt regardless of the active tool subset", async () => {
+  it("uses availability-qualified routing in the same PiFlow prompt regardless of the active tool subset", async () => {
     const expectedFlowPrompt = buildFlowPrompt(getSubagentProfiles(agentDir), []);
+    expect(expectedFlowPrompt).toContain("When Agent is available");
+    expect(expectedFlowPrompt).toContain("When workflow is available");
     for (const activeTools of [["Agent", "workflow"], ["Agent"], ["workflow"], []]) {
       const prompt = await captureRootPrompt(activeTools);
       expect(prompt.endsWith(expectedFlowPrompt)).toBe(true);

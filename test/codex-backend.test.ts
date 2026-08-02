@@ -35,7 +35,7 @@ describe("pi-subagent codex backend", () => {
     trackSession,
     disposeSession,
     createSession,
-    delegateOnce,
+    waitForTaskNotification,
     makeMockTheme,
     stripAnsi,
     renderToText,
@@ -202,20 +202,20 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, registration } = await createSession();
-    let rootContinuationContext: Context | undefined;
     registration.setResponses([
       fauxAssistantMessage([fauxToolCall("Agent", {
         description: "Codex review",
         subagent_type: "codex-reviewer",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
-      (context) => {
-        rootContinuationContext = context;
-        return fauxAssistantMessage("reported");
-      },
+      fauxAssistantMessage("launch observed"),
+      fauxAssistantMessage("notification observed"),
     ]);
 
     await session.prompt("Delegate to Codex.");
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as any;
+    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
 
     const codexRun = JSON.parse(readFileSync(argsPath, "utf8"));
     const codexArgs = codexRun.args;
@@ -224,12 +224,12 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     expect(codexArgs).toContain("--model");
     expect(codexArgs).toContain("gpt-5.4-mini");
     expect(codexArgs).toContain("developer_instructions=\"Codex reviewer prompt.\"");
-    expect(codexArgs).toContain("--ephemeral");
+    expect(codexArgs).not.toContain("--ephemeral");
     expect(codexArgs.at(-1)).toBe("-");
     expect(codexRun.stdin).toBe("Review the latest diff.");
-    const rootMessages = JSON.stringify(rootContinuationContext?.messages);
-    expect(rootMessages).toContain("codex child done");
-    expect(rootMessages).not.toContain("session_id:");
+    expect(accepted.details).toMatchObject({ status: "accepted", session_key: expect.stringMatching(/^session_/) });
+    expect(terminal).toEqual({ ...accepted.details, status: "completed", content: "codex child done" });
+    expect(JSON.stringify(terminal)).not.toContain("session_id:");
 
     disposeSession(session);
   });
@@ -297,6 +297,42 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
     expect(runs[1].args).toContain("resume");
     expect(runs[1].args).toContain("codex-first-session");
     expect(runs[1].stdin).toBe("Second prompt.");
+  });
+
+  it("fails a persistent codex call that returns no resumable session ID", async () => {
+    const binDir = join(tempDir, "bin-codex-missing-session");
+    mkdirSync(binDir, { recursive: true });
+    const fakeCodexPath = join(binDir, "codex");
+    writeFileSync(fakeCodexPath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'usable output' } }));
+console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 2 } }));
+`);
+    chmodSync(fakeCodexPath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+
+    const result = await spawnCodexSubagent({
+      toolCallId: "codex-missing-session",
+      description: "Codex missing session",
+      prompt: "Persist this conversation.",
+      profile: {
+        name: "codex-missing-session",
+        description: "Codex missing session profile.",
+        backend: "codex",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => undefined,
+      persistSession: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "codex completed without a resumable session ID",
+    });
   });
 
   it("subtracts resumed-session usage from cumulative token snapshots", async () => {
@@ -464,7 +500,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("Agent") as any;
     const statuses: Array<{ key: string; text: string | undefined }> = [];
-    const result = await tool.execute(
+    const accepted = await tool.execute(
       "codex-tiered-cost",
       {
         description: "Tiered cost",
@@ -481,14 +517,9 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
       }),
     );
 
-    expect(result.usage).toMatchObject({
-      input: 271_801,
-      cacheRead: 200,
-      output: 50,
-      totalTokens: 272_051,
-      cost: { total: expect.closeTo(2.72046) },
-    });
-    expect(result.details.telemetry).toMatchObject({ costKnown: true, costEstimated: true });
+    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
+    expect(accepted).not.toHaveProperty("usage");
+    expect(terminal).toMatchObject({ status: "completed", content: "tiered model done" });
     const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
     expect(final).toContain("$2.720");
     expect(final).not.toContain("$?");
@@ -521,7 +552,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("Agent") as any;
     const statuses: Array<{ key: string; text: string | undefined }> = [];
-    const result = await tool.execute(
+    const accepted = await tool.execute(
       "codex-unknown-cost",
       {
         description: "Unknown cost",
@@ -538,16 +569,11 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
       }),
     );
 
-    expect(result.usage).toMatchObject({
-      input: 800,
-      cacheRead: 200,
-      output: 50,
-      totalTokens: 1050,
-      cost: { total: 0 },
-    });
-    expect(result.details.telemetry).toMatchObject({ costKnown: false });
+    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
+    expect(accepted).not.toHaveProperty("usage");
+    expect(terminal).toMatchObject({ status: "completed", content: "unknown model done" });
     const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
-    expect(final).toContain("pi-flow ↑800 ↓50 R200");
+    expect(final).toContain("pi-flow [1/1] agents [0/0] workflows ↑800 ↓50 R200");
     expect(final).toContain("$?");
 
     disposeSession(session);
@@ -586,23 +612,25 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
       onStatus: (key, text) => statuses.push({ key, text }),
     });
 
-    await tool.execute(
+    const first = await tool.execute(
       "codex-cache-first",
       { description: "First cache", subagent_type: "codex-cache", prompt: "First" },
       undefined,
       undefined,
       context,
     );
-    await tool.execute(
+    await waitForTaskNotification(session, first.details.task_id, 5000);
+    const second = await tool.execute(
       "codex-cache-second",
       { description: "Second cache", subagent_type: "codex-cache", prompt: "Second" },
       undefined,
       undefined,
       context,
     );
+    await waitForTaskNotification(session, second.details.task_id, 5000);
 
     const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
-    expect(final).toContain("pi-flow ↑1.0k ↓20 R1.0k CH50.0%");
+    expect(final).toContain("pi-flow [2/2] agents [0/0] workflows ↑1.0k ↓20 R1.0k CH50.0%");
 
     disposeSession(session);
   });

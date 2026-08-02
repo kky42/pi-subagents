@@ -1,26 +1,16 @@
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, type Context } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { getSubagentProfiles } from "../src/profiles.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
-function assistantToolCalls(messages: Array<{ role?: string; content?: unknown }>) {
-  return messages
-    .filter((message) => message.role === "assistant" && Array.isArray(message.content))
-    .flatMap((message) => message.content as Array<{ type?: string; name?: string; arguments?: Record<string, unknown> }>)
-    .filter((item) => item.type === "toolCall");
-}
-
 describe("delegation scenario execution", () => {
-  let agentDir = "";
-  const { disposeSession, createSession } = setupPiSubagentTestHarness((state) => {
-    agentDir = state.agentDir;
-  });
-
-  function availableProfileName(): string {
-    const name = getSubagentProfiles(agentDir).keys().next().value;
-    expect(name).toBeTypeOf("string");
-    return name as string;
-  }
+  const {
+    disposeSession,
+    createSession,
+    setContextRoutingResponses,
+    waitForTaskNotification,
+    makeExecutionContext,
+    getToolNames,
+  } = setupPiSubagentTestHarness();
 
   it("allows narrow work to finish in the root without delegation", async () => {
     const { session, registration } = await createSession();
@@ -28,67 +18,72 @@ describe("delegation scenario execution", () => {
 
     await session.prompt("Answer this narrow local question directly.");
 
-    expect(assistantToolCalls(session.messages)).toEqual([]);
+    expect(session.messages.some((message: any) =>
+      message.role === "assistant" && Array.isArray(message.content) && message.content.some((item: any) => item.name === "Agent"))).toBe(false);
     expect(JSON.stringify(session.messages)).toContain("direct result");
     disposeSession(session);
   });
 
-  it("executes a small flat fan-out as fresh parallel Agent calls", async () => {
-    const { session, registration } = await createSession();
-    const subagentType = availableProfileName();
-    registration.setResponses([
-      fauxAssistantMessage(
-        [
-          fauxToolCall("Agent", { description: "Inspect source", prompt: "Inspect source correctness.", subagent_type: subagentType }),
-          fauxToolCall("Agent", { description: "Inspect tests", prompt: "Inspect test coverage.", subagent_type: subagentType }),
-        ],
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("source result"),
-      fauxAssistantMessage("test result"),
-      fauxAssistantMessage("combined result"),
+  it("runs a flat fan-out as independent accepted background tasks", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    setContextRoutingResponses(registration, (providerContext) => {
+      if (getToolNames(providerContext).includes("Agent")) return fauxAssistantMessage("notification observed");
+      const text = JSON.stringify(providerContext.messages);
+      return fauxAssistantMessage(text.includes("source") ? "source result" : "test result");
+    });
+
+    const accepted = await Promise.all([
+      tool.execute("source", { description: "Inspect source", prompt: "Inspect source correctness." }, undefined, undefined, context),
+      tool.execute("tests", { description: "Inspect tests", prompt: "Inspect test coverage." }, undefined, undefined, context),
     ]);
+    const terminals = await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
-    await session.prompt("Run two independent investigations and synthesize them.");
-
-    const calls = assistantToolCalls(session.messages).filter((call) => call.name === "Agent");
-    expect(calls).toHaveLength(2);
-    expect(calls.every((call) => call.arguments?.session_key === undefined)).toBe(true);
-    expect(JSON.stringify(session.messages)).toContain("source result");
-    expect(JSON.stringify(session.messages)).toContain("test result");
-    expect(JSON.stringify(session.messages)).toContain("combined result");
+    expect(accepted.every((result) => result.details.status === "accepted")).toBe(true);
+    expect(accepted[0].details.session_key).not.toBe(accepted[1].details.session_key);
+    expect(terminals.map((result) => result.content).sort()).toEqual(["source result", "test result"]);
     disposeSession(session);
   });
 
-  it("continues one logical child stream with the same session key", async () => {
-    const { session, registration } = await createSession();
+  it("continues one logical child stream with a returned session key", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     let continuedChildContext: Context | undefined;
-    const sessionKey = "logical-child-stream";
-    const subagentType = availableProfileName();
-    registration.setResponses([
-      fauxAssistantMessage(
-        [fauxToolCall("Agent", { description: "Initial investigation", prompt: "Inspect and remember the flow.", subagent_type: subagentType, session_key: sessionKey })],
-        { stopReason: "toolUse" },
-      ),
-      fauxAssistantMessage("remembered flow"),
-      fauxAssistantMessage(
-        [fauxToolCall("Agent", { description: "Continue investigation", prompt: "Recall and refine the flow.", subagent_type: subagentType, session_key: sessionKey })],
-        { stopReason: "toolUse" },
-      ),
-      (context) => {
-        continuedChildContext = context;
+    setContextRoutingResponses(registration, (providerContext) => {
+      if (getToolNames(providerContext).includes("Agent")) return fauxAssistantMessage("notification observed");
+      if (JSON.stringify(providerContext.messages).includes("Recall and refine")) {
+        continuedChildContext = providerContext;
         return fauxAssistantMessage("refined flow");
+      }
+      return fauxAssistantMessage("remembered flow");
+    });
+
+    const first = await tool.execute(
+      "initial",
+      { description: "Initial investigation", prompt: "Inspect and remember the flow." },
+      undefined,
+      undefined,
+      context,
+    );
+    await waitForTaskNotification(session, first.details.task_id);
+    const second = await tool.execute(
+      "continue",
+      {
+        description: "Continue investigation",
+        prompt: "Recall and refine the flow.",
+        session_key: first.details.session_key,
       },
-      fauxAssistantMessage("reported refinement"),
-    ]);
+      undefined,
+      undefined,
+      context,
+    );
+    const terminal = await waitForTaskNotification(session, second.details.task_id);
 
-    await session.prompt("Use the same child for a dependent follow-up.");
-
-    const calls = assistantToolCalls(session.messages).filter((call) => call.name === "Agent");
-    expect(calls).toHaveLength(2);
-    expect(calls.map((call) => call.arguments?.session_key)).toEqual([sessionKey, sessionKey]);
+    expect(second.details.session_key).toBe(first.details.session_key);
     expect(JSON.stringify(continuedChildContext?.messages)).toContain("remembered flow");
-    expect(JSON.stringify(session.messages)).toContain("reported refinement");
+    expect(terminal.content).toBe("refined flow");
     disposeSession(session);
   });
 });

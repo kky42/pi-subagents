@@ -1,10 +1,10 @@
 # Prompt-routing behavior observations
 
-This document describes the observation protocol in `scripts/e2e/prompt-routing.mjs`. The driver is intentionally not a routing test oracle: model choices are stochastic, so Agent, session continuation, workflow, tool-count, and fixture-change observations never pass or fail the run.
+This document describes the observation protocol in `scripts/e2e/prompt-routing.mjs`. The driver is intentionally not a routing test oracle: model choices are stochastic, so Agent, session continuation, workflow, tool-count, task-outcome, and fixture-change observations never pass or fail the run.
 
 ## Fixed model
 
-Every scenario uses the same foreground configuration:
+Every scenario uses the same root configuration:
 
 - Model: `openai-codex/gpt-5.6-luna`
 - Thinking: `xhigh`
@@ -13,9 +13,17 @@ Every scenario uses the same foreground configuration:
 
 The model and thinking level are pinned in the driver and cannot be overridden through CLI flags. This keeps observations comparable across prompt revisions.
 
+## Background task contract
+
+Agent and workflow are always-background public tools. A tool result only accepts a task and returns a compact envelope with `status: "accepted"` and a `task_id`. Agent acceptance also returns the resumable `session_key`; workflow acceptance does not.
+
+A task later emits one custom terminal message with `customType: "pi-flow-task-notification"`. The driver parses those messages and correlates their `task_id` and task type with accepted tool results. Each accepted task is reported with a `completed`, `failed`, or `pending` outcome, and aggregate accepted/completed/failed/pending counts are included. `pending` means no matching terminal notification was retained before the root process ended. Unmatched terminal notifications are counted separately.
+
+The terminal notification's content is not interpreted by this routing driver. In particular, the driver does not assume a workflow tool result or notification exposes a final workflow agent tree, child statuses, child session keys, or child usage. Usage in the report is root assistant usage only.
+
 ## Scenarios
 
-The driver runs five small, read-oriented scenarios:
+The driver preserves five small, read-oriented scenarios:
 
 - `direct`: narrow package lookup
 - `focused`: context-heavy repository exploration
@@ -23,45 +31,11 @@ The driver runs five small, read-oriented scenarios:
 - `continuation`: two sequential calls intended to continue one child context
 - `staged`: dependent classification and structured follow-up work
 
-Each run records root tool calls, Agent call groups, session-key usage, workflow source and script-shape signals, child results, model identity, usage, duration, process status, and changed fixture files.
+Each run records root tool calls, Agent call groups, requested Agent session keys, accepted Agent session keys, workflow source and script-shape signals, correlated task outcomes, model identity, root usage, duration, process status, and changed fixture files.
 
-These values are observations only. For example, direct root work, one Agent, several Agents, or workflow are all recorded without an expected routing assertion.
+Accepted Agent session keys are anonymized as `key-1`, `key-2`, and so on in the pattern summary. This captures whether accepted calls used the same child conversation without retaining generated key values in that summary. Workflow scripts are inspected only for coarse authoring signals such as `pipeline()`, `parallel()`, schemas, and session-key expressions.
 
-## Full-scenario sample before the pipeline example
-
-One repetition per scenario was observed on 2026-08-02 against the modified working tree based on `325ad60`, before the dependent-pipeline example was added:
-
-| Scenario | Observed route |
-| --- | --- |
-| `direct` | One root `read`; no Agent or workflow call |
-| `focused` | Two fresh Agent calls issued together, plus root `bash`/`read` exploration |
-| `flat` | Three fresh Agent calls issued together |
-| `continuation` | Two sequential Agent calls using the same non-empty session key |
-| `staged` | One six-child structured pipeline ended with a script error, then one six-child structured parallel workflow completed |
-
-All five Pi processes exited successfully, reported `openai-codex/gpt-5.6-luna`, produced terminal responses, and left the fixture unchanged. The focused run still performed root exploration after delegation. The staged retry followed `TypeError: Cannot read properties of undefined (reading 'file')` in the first generated workflow. Both are intentionally preserved as observations rather than classified as failures. This single sample does not establish deterministic routing.
-
-## Dependent-pipeline example comparison
-
-A focused comparison ran the `staged` scenario three times without a dependent-pipeline example and three times after adding one to the workflow `script` parameter description. Both variants used the same fixture, driver, `openai-codex/gpt-5.6-luna` model, and `xhigh` thinking. The example demonstrates a static schema, concurrent pipeline items, explicit stage returns, null handling, and two calls that continue the same per-item child through `session_key`. The separate `parallel()` rule retains a minimal thunk example. Generated scripts and child result details were inspected to confirm that each with-example workflow reused one key across the two calls for each item.
-
-| Observation | Without example | With example |
-| --- | ---: | ---: |
-| Root runs | 3 | 3 |
-| First workflow call completed | 2/3 | 3/3 |
-| Generated workflow calls | 6 | 5 |
-| Workflow script errors | 2 | 0 |
-| Scripts using `pipeline()` | 1/6 | 5/5 |
-| Scripts using per-item `session_key` continuation | 0/6 | 5/5 |
-| Runs repeating a completed workflow | 1/3 | 2/3 |
-| Completed child-agent calls | 24 | 30 |
-| Reported tokens, root plus children | 137,238 | 128,684 |
-| Reported cost | $0.147169 | $0.137406 |
-| Summed wall time | 209.5s | 181.2s |
-
-Without the example, one run first produced a dynamically constructed schema enum rejected by static preflight, then a script with mismatched parentheses. The other generated scripts completed, including one valid pipeline. With the example, every generated script parsed, passed preflight, used a pipeline, reused one session key per file across its two stages, and completed all six children. Two with-example runs still repeated a successful workflow after initially misclassifying `package.json`, so the example improved orchestration shape and script validity in this sample but did not eliminate semantic mistakes or redundant self-correction. The small stochastic sample is not performance or reliability proof.
-
-After correcting the dynamic-schema wording and adding direct session-key observations to the driver, one final run against the resulting prompt completed one six-child pipeline on its first workflow call. Its script contained two `session_key` expressions, and the child details reported six keyed calls across three keys, each reused once. No workflow error or fixture change occurred.
+All routing values are observations only. Direct root work, one Agent, several Agents, workflow, completed tasks, failed tasks, pending tasks, and fixture changes are recorded without an expected behavioral assertion. No fresh real-model sample is claimed by this document for the new background contract.
 
 ## Infrastructure failures
 
@@ -74,7 +48,7 @@ The driver exits nonzero only when it cannot produce a trustworthy observation, 
 - the observed root model is not the pinned model
 - setup, credential, artifact, or cleanup operations fail
 
-A successful run prints `[OBSERVED]`. `[INFRA FAILURE]` means the harness failed, not that the model selected an unexpected route.
+A missing accepted task, failed background task, pending background task, unmatched notification, unexpected routing choice, or fixture change remains an observation rather than an infrastructure failure. A successful run prints `[OBSERVED]`. `[INFRA FAILURE]` means the harness failed, not that the model selected an unexpected route or a delegated task failed.
 
 ## Privacy and authentication
 

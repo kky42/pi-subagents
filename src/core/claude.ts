@@ -528,12 +528,15 @@ export async function spawnClaudeSubagent(params: {
     }
     if (!sawTerminalEvent && !resultText.trim()) {
       // Hard-fail only when claude produced nothing usable. If it exited cleanly
-      // (code 0) with final text but no recognized terminal event — e.g. a CLI
-      // stream-format change renamed the event — accept the output rather than
+      // (code 0) with final text but no recognized terminal event, for example a CLI
+      // stream-format change renamed the event, accept the output rather than
       // turning a good run into a failure.
       throw new Error("claude exited without a terminal JSON event");
     }
 
+    if (params.persistSession && !sessionId) {
+      throw new Error("claude completed without a resumable session ID");
+    }
     if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
     const result = resultText.trim() || "(no final text output)";
     if (progress) {

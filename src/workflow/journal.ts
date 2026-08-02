@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { hashStableValue } from "./replay-cache.ts";
 import type { WorkflowAgentResultEvent, WorkflowCachedAgentResult } from "./types.ts";
 
-const JOURNAL_VERSION = 1;
-const RUN_ID_PREFIX = "wf_";
+const JOURNAL_VERSION = 2;
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
 interface WorkflowSessionManagerLike {
@@ -19,20 +17,24 @@ export interface WorkflowSessionContextLike {
   sessionManager?: WorkflowSessionManagerLike;
 }
 
-export interface WorkflowRunIdentity {
-  runId: string;
+export interface WorkflowTaskIdentity {
+  taskId: string;
   scriptHash: string;
   argsHash: string;
 }
 
 export interface LoadedWorkflowJournal {
-  runId: string;
+  taskId: string;
   path: string;
+  name?: string;
+  source?: string;
+  scriptPath?: string;
+  status: "running" | "completed" | "failed";
   agentResults: WorkflowCachedAgentResult[];
 }
 
 export interface WorkflowJournalWriter {
-  runId: string;
+  taskId: string;
   path: string;
   appendAgentResult(event: WorkflowAgentResultEvent): Promise<void>;
   complete(result: unknown): Promise<void>;
@@ -56,13 +58,11 @@ export function getSessionWorkflowDir(ctx: WorkflowSessionContextLike): string |
   return join(sessionDir, `${safeFilePart(sessionId)}.workflows`);
 }
 
-export function createWorkflowRunIdentity(script: string, args: unknown): WorkflowRunIdentity {
-  const scriptHash = hashStableValue(script);
-  const argsHash = hashStableValue(args ?? null);
+export function createWorkflowTaskIdentity(taskId: string, script: string, args: unknown): WorkflowTaskIdentity {
   return {
-    scriptHash,
-    argsHash,
-    runId: `${RUN_ID_PREFIX}${hashStableValue({ scriptHash, argsHash }).slice(0, 8)}_${randomUUID().replace(/-/g, "")}`,
+    taskId,
+    scriptHash: hashStableValue(script),
+    argsHash: hashStableValue(args ?? null),
   };
 }
 
@@ -78,11 +78,11 @@ export async function persistWorkflowScript(params: {
   return path;
 }
 
-export async function loadWorkflowJournal(dir: string, runId: string): Promise<LoadedWorkflowJournal | undefined> {
-  if (!SAFE_ID.test(runId)) {
-    throw new Error(`Invalid workflow run id: ${runId}`);
+export async function loadWorkflowJournal(dir: string, taskId: string): Promise<LoadedWorkflowJournal | undefined> {
+  if (!SAFE_ID.test(taskId)) {
+    throw new Error(`Invalid workflow task id: ${taskId}`);
   }
-  const path = workflowJournalPath(dir, runId);
+  const path = workflowJournalPath(dir, taskId);
   let text: string;
   try {
     text = await readFile(path, "utf8");
@@ -94,7 +94,11 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
   }
 
   const agentResults: WorkflowCachedAgentResult[] = [];
-  let seenRunStart = false;
+  let seenTaskStart = false;
+  let name: string | undefined;
+  let source: string | undefined;
+  let scriptPath: string | undefined;
+  let status: LoadedWorkflowJournal["status"] = "running";
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
@@ -105,8 +109,19 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
     } catch {
       break;
     }
-    if (entry.type === "run_start") {
-      seenRunStart = entry.runId === runId;
+    if (entry.type === "task_start") {
+      seenTaskStart = entry.taskId === taskId;
+      name = typeof entry.name === "string" ? entry.name : undefined;
+      source = typeof entry.source === "string" ? entry.source : undefined;
+      scriptPath = typeof entry.scriptPath === "string" ? entry.scriptPath : undefined;
+      continue;
+    }
+    if (entry.type === "task_complete") {
+      status = "completed";
+      continue;
+    }
+    if (entry.type === "task_error") {
+      status = "failed";
       continue;
     }
     if (entry.type !== "agent_result") {
@@ -129,32 +144,32 @@ export async function loadWorkflowJournal(dir: string, runId: string): Promise<L
     };
   }
 
-  if (!seenRunStart) {
-    throw new Error(`Workflow journal ${path} does not match run id ${runId}`);
+  if (!seenTaskStart) {
+    throw new Error(`Workflow journal does not match task id ${taskId}`);
   }
-  return { runId, path, agentResults };
+  return { taskId, path, name, source, scriptPath, status, agentResults };
 }
 
 export async function createWorkflowJournalWriter(params: {
   dir: string;
-  identity: WorkflowRunIdentity;
+  identity: WorkflowTaskIdentity;
   name: string;
   source: string;
   scriptPath?: string;
-  resumeFromRunId?: string;
+  resumeFromTaskId?: string;
 }): Promise<WorkflowJournalWriter> {
   await mkdir(params.dir, { recursive: true });
-  const path = workflowJournalPath(params.dir, params.identity.runId);
+  const path = workflowJournalPath(params.dir, params.identity.taskId);
   await writeFile(
     path,
     `${JSON.stringify({
-      type: "run_start",
+      type: "task_start",
       version: JOURNAL_VERSION,
-      runId: params.identity.runId,
+      taskId: params.identity.taskId,
       name: params.name,
       source: params.source,
       scriptPath: params.scriptPath,
-      resumeFromRunId: params.resumeFromRunId,
+      resumeFromTaskId: params.resumeFromTaskId,
       scriptHash: params.identity.scriptHash,
       argsHash: params.identity.argsHash,
     })}\n`,
@@ -169,7 +184,7 @@ export async function createWorkflowJournalWriter(params: {
   };
 
   return {
-    runId: params.identity.runId,
+    taskId: params.identity.taskId,
     path,
     appendAgentResult: async (event) => {
       await enqueueAppend({
@@ -190,16 +205,16 @@ export async function createWorkflowJournalWriter(params: {
       });
     },
     complete: async (result) => {
-      await enqueueAppend({ type: "run_complete", result });
+      await enqueueAppend({ type: "task_complete", result });
     },
     fail: async (error) => {
-      await enqueueAppend({ type: "run_error", error });
+      await enqueueAppend({ type: "task_error", error });
     },
   };
 }
 
-function workflowJournalPath(dir: string, runId: string): string {
-  return join(dir, `run-${runId}.jsonl`);
+function workflowJournalPath(dir: string, taskId: string): string {
+  return join(dir, `task-${taskId}.jsonl`);
 }
 
 async function appendJsonLine(path: string, value: unknown): Promise<void> {
