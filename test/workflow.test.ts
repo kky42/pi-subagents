@@ -848,8 +848,9 @@ describe("saved workflow registry", () => {
 });
 
 describe("workflow tool rendering", () => {
+  const taskManager = new BackgroundTaskManager({ notify: () => {} });
   const tool = createWorkflowTool({
-    taskManager: new BackgroundTaskManager({ notify: () => {} }),
+    getTaskManager: () => taskManager,
     getLimiter: () => new ConcurrencyLimiter(4),
     getThinkingLevel: () => "high",
     getSubagentTimeoutMs: () => 0,

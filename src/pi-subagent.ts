@@ -91,7 +91,7 @@ interface FlowStatusState {
 }
 
 interface CreateAgentToolOptions {
-  taskManager: BackgroundTaskManager;
+  getTaskManager: () => BackgroundTaskManager;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
   updateStatus: (ctx: ExtensionContext, taskId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
@@ -257,7 +257,7 @@ function createAgentTool(
       const subagentType = normalizeSubagentType(params.subagent_type);
       const sessionKey = normalizeSessionKey(params.session_key) ?? createSessionKey();
       const name = params.description.trim() || params.description;
-      const accepted = options.taskManager.start({
+      const accepted = options.getTaskManager().start({
         taskType: "agent",
         name,
         sessionKey,
@@ -378,7 +378,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     };
     const statusState = createFlowStatusState();
     let statusContext: ExtensionContext | undefined;
-    const taskManager = new BackgroundTaskManager({
+    const createTaskManager = () => new BackgroundTaskManager({
       notify: (envelope) => {
         pi.sendMessage(
           {
@@ -400,6 +400,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         }
       },
     });
+    let taskManager = createTaskManager();
+    let taskManagerNeedsReset = false;
+    const getTaskManager = () => taskManager;
     const syncRuntimeOptions = () => {
       const current = normalizeMaxConcurrentSubagents(
         pi.getFlag(MAX_CONCURRENT_SUBAGENTS_FLAG),
@@ -433,7 +436,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       return renderTaskNotification(envelope, expanded, theme);
     });
     pi.registerTool(createAgentTool(syncRuntimeOptions, {
-      taskManager,
+      getTaskManager,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
       updateStatus,
@@ -441,7 +444,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     if (workflowEnabled) {
       pi.registerTool(
         createWorkflowTool({
-          taskManager,
+          getTaskManager,
           getLimiter: () => syncRuntimeOptions().limiter,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
@@ -451,12 +454,16 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     }
 
     pi.on("session_start", (_event, ctx) => {
+      if (taskManagerNeedsReset) {
+        taskManager = createTaskManager();
+        taskManagerNeedsReset = false;
+      }
       statusContext = ctx;
       syncRuntimeOptions();
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       statusState.calls.clear();
-      statusState.tasks = taskManager.getCounts();
+      statusState.tasks = getTaskManager().getCounts();
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }
@@ -464,12 +471,14 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.on("agent_end", async (_event, ctx) => {
       if (ctx.mode === "print" || ctx.mode === "json") {
-        await taskManager.waitForIdle();
+        await getTaskManager().waitForIdle();
       }
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
-      await taskManager.shutdown();
+      const endingTaskManager = getTaskManager();
+      taskManagerNeedsReset = true;
+      await endingTaskManager.shutdown();
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }

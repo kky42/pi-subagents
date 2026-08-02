@@ -174,6 +174,75 @@ describe("pi-subagent background progress and status", () => {
     disposeSession(session);
   });
 
+  it("starts Agent and workflow tasks after a reused extension session boundary", async () => {
+    const { session, registration, model, modelRegistry } = await createSession({ mode: "tui" });
+    let oldChildStarted = false;
+    setContextRoutingResponses(registration, (context, options) => {
+      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        return fauxAssistantMessage("notification observed");
+      }
+      oldChildStarted = true;
+      return new Promise((resolve) => {
+        if (options.signal?.aborted) {
+          resolve(fauxAssistantMessage("aborted old child"));
+          return;
+        }
+        options.signal?.addEventListener(
+          "abort",
+          () => resolve(fauxAssistantMessage("aborted old child")),
+          { once: true },
+        );
+      });
+    });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    const oldAgentTool = session.getToolDefinition("Agent") as any;
+    const oldAccepted = await oldAgentTool.execute(
+      "old-session-call",
+      { description: "Old session child", prompt: "Wait for the session boundary." },
+      undefined,
+      undefined,
+      context,
+    );
+    await waitUntil(() => oldChildStarted);
+
+    await session.extensionRunner.emit({ type: "session_shutdown", reason: "new" });
+    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([]);
+    await session.extensionRunner.emit({ type: "session_start", reason: "new" });
+
+    setContextRoutingResponses(registration, (providerContext) => {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        return fauxAssistantMessage("notification observed");
+      }
+      return fauxAssistantMessage("new session child done");
+    });
+    const agentTool = session.getToolDefinition("Agent") as any;
+    const agentAccepted = await agentTool.execute(
+      "new-session-agent",
+      { description: "New session agent", prompt: "Complete after the session boundary." },
+      undefined,
+      undefined,
+      context,
+    );
+    const agentTerminal = await waitForTaskNotification(session, agentAccepted.details.task_id);
+
+    const workflowTool = session.getToolDefinition("workflow") as any;
+    const workflowAccepted = await workflowTool.execute(
+      "new-session-workflow",
+      {
+        script: "export const meta = { name: 'new_session', description: 'Run after a new session' };\nreturn await agent('Complete after the session boundary.', { label: 'worker' });",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const workflowTerminal = await waitForTaskNotification(session, workflowAccepted.details.task_id);
+
+    expect(agentTerminal).toMatchObject({ status: "completed", content: "new session child done" });
+    expect(workflowTerminal).toMatchObject({ status: "completed", content: "new session child done" });
+    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([]);
+    disposeSession(session);
+  });
+
   it("does not bind background execution to the foreground tool signal", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("Agent") as any;

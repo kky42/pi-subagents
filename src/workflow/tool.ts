@@ -26,7 +26,7 @@ import {
 } from "./source.ts";
 
 export interface CreateWorkflowToolOptions {
-  taskManager: BackgroundTaskManager;
+  getTaskManager: () => BackgroundTaskManager;
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
@@ -43,7 +43,7 @@ export function createWorkflowTool(
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
     parameters: workflowToolParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const accepted = options.taskManager.start({
+      const accepted = options.getTaskManager().start({
         taskType: "workflow",
         name: initialWorkflowName(params),
         run: async (signal, taskId) => {
