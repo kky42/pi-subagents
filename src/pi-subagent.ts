@@ -398,7 +398,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     };
     const sendTaskNotification = (envelope: TerminalTaskEnvelope) => {
       pi.sendMessage(taskNotificationMessage(envelope), {
-        deliverAs: "followUp",
+        deliverAs: "steer",
         triggerTurn: true,
       });
     };

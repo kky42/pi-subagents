@@ -189,7 +189,7 @@ A background task must retain its limiter slot for its actual execution lifetime
 
 ### Notification delivery
 
-Use a custom Pi message, not a user message. Retain each terminal envelope until Pi emits `message_end` for its custom message. Queue it as a follow-up immediately so print and JSON modes drain it before shutdown. If Pi clears the queue before delivery, `agent_settled` retries any retained envelopes.
+Use a custom Pi message, not a user message. Retain each terminal envelope until Pi emits `message_end` for its custom message. Queue it as steering immediately so Pi delivers it after the current assistant tool calls and before the next model call. If Pi clears the queue before delivery, `agent_settled` retries any retained envelopes.
 
 ```ts
 pi.sendMessage(
@@ -200,7 +200,7 @@ pi.sendMessage(
     details: envelope,
   },
   {
-    deliverAs: "followUp",
+    deliverAs: "steer",
     triggerTurn: true,
   },
 );
@@ -214,7 +214,7 @@ Each accepted task produces exactly one terminal notification. Notification deli
 
 In TUI and RPC modes, do not wait at `agent_end`. The root agent may become idle, accept more user work, and receive terminal notifications later.
 
-In print and JSON modes, register an async `agent_end` handler that waits for the task manager to become idle. Task completion queues terminal notifications before the handler returns. Pi then processes those follow-up messages before settling.
+In print and JSON modes, register an async `agent_end` handler that waits for the task manager to become idle. Task completion queues terminal notifications before the handler returns. Pi then processes those steering messages before settling.
 
 If a notification-driven turn launches more tasks, its next `agent_end` waits again. This keeps `pi -p` alive until all pi-flow background work and resulting foreground turns are complete without modifying Pi core.
 
