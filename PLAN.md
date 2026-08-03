@@ -276,7 +276,7 @@ Do not add:
 
 - foreground/background mode flags
 - status polling tools
-- steering or task messaging
+- model-facing task steering or messaging tools
 - explicit cancellation tools
 - rich background dashboards
 - notification history APIs
