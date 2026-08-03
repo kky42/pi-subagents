@@ -1,5 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 import {
   buildFlowStatusLines,
   createFlowStatusState,
@@ -108,6 +111,57 @@ describe("flow status display", () => {
     expect(lines[1]).not.toMatch(/\d+s|event|↑|↓/);
     expect(lines[2]).toContain("Codex Agent(reviewer: working) 1s · 3 events · ↑100 ↓10 CH0.0%");
     expect(lines[3]).toContain("Workflow(review_flow) 7s · 1/3 agents");
+  });
+
+  it("uses pi's spinner animation while keeping widget text consistently dim", () => {
+    vi.setSystemTime(2_000);
+    const state = createFlowStatusState();
+    state.tasks = {
+      agent: { finished: 0, total: 1 },
+      workflow: { finished: 0, total: 0 },
+    };
+    state.activeAgents.set("agent", {
+      id: "agent",
+      name: "working",
+      subagentType: "general-purpose",
+      backend: "pi",
+      executionState: "running",
+      queuedAt: 1_000,
+      startedAt: 1_000,
+      eventCount: 1,
+    });
+
+    let widget: unknown;
+    let renders = 0;
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        setWidget: (_key: string, content: unknown) => {
+          widget = content;
+        },
+      },
+    } as unknown as ExtensionContext;
+
+    publishFlowStatus(ctx, state);
+    const component = (widget as (
+      tui: { requestRender: () => void },
+      theme: { fg: (color: string, text: string) => string },
+    ) => { render: (width: number) => string[]; dispose: () => void })(
+      { requestRender: () => renders++ },
+      { fg: (color, text) => `<${color}>${text}</${color}>` },
+    );
+
+    const first = component.render(200)[1];
+    expect(first).toContain("<accent>⠋</accent> <dim>Pi Agent(general-purpose: working)");
+    vi.advanceTimersByTime(80);
+    const second = component.render(200)[1];
+
+    expect(renders).toBe(1);
+    expect(second).toContain("<accent>⠙</accent> <dim>Pi Agent(general-purpose: working)");
+    component.dispose();
+    vi.advanceTimersByTime(80);
+    expect(renders).toBe(1);
   });
 
   it("truncates themed TUI output to a narrow terminal width", () => {

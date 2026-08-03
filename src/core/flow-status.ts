@@ -17,6 +17,7 @@ import {
 export const FLOW_STATUS_KEY = "pi-flow";
 export const MAX_FLOW_STATUS_LINES = 5;
 const MAX_ACTIVE_DETAIL_LINES = 3;
+const flowSpinnerStates = new WeakMap<FlowStatusState, { frame: number }>();
 
 interface FlowUsageEntry {
   usage: SubagentUsage;
@@ -255,15 +256,43 @@ export function publishFlowStatus(ctx: ExtensionContext, state: FlowStatusState)
   if (ctx.mode === "tui") {
     ctx.ui.setWidget(
       FLOW_STATUS_KEY,
-      (_tui, theme) => ({
-        render(width: number): string[] {
-          return lines.map((line, index) => {
-            const color = index === 0 || line.startsWith("…") ? "dim" : "muted";
-            return truncateToWidth(theme.fg(color, line), width, theme.fg("dim", "..."));
-          });
-        },
-        invalidate() {},
-      }),
+      (tui, theme) => {
+        const rows = lines.map((line) => {
+          const firstCharacter = [...line][0] ?? "";
+          const animated = SPINNER_FRAMES.includes(firstCharacter);
+          return {
+            animated,
+            text: animated ? line.slice(firstCharacter.length + 1) : line,
+          };
+        });
+        const spinnerState = flowSpinnerStates.get(state) ?? { frame: 0 };
+        flowSpinnerStates.set(state, spinnerState);
+        const interval = rows.some((row) => row.animated)
+          ? setInterval(() => {
+              spinnerState.frame = (spinnerState.frame + 1) % SPINNER_FRAMES.length;
+              tui.requestRender();
+            }, SPINNER_INTERVAL_MS)
+          : undefined;
+        interval?.unref?.();
+
+        return {
+          render(width: number): string[] {
+            return rows.map((row) => {
+              let rendered: string;
+              if (row.animated) {
+                rendered = `${theme.fg("accent", SPINNER_FRAMES[spinnerState.frame])} ${theme.fg("dim", row.text)}`;
+              } else {
+                rendered = theme.fg("dim", row.text);
+              }
+              return truncateToWidth(rendered, width, theme.fg("dim", "..."));
+            });
+          },
+          invalidate() {},
+          dispose() {
+            if (interval) clearInterval(interval);
+          },
+        };
+      },
       { placement: "belowEditor" },
     );
     return;
