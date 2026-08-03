@@ -8,6 +8,16 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("condition was not met before timeout");
+    }
+    await delay(5);
+  }
+}
+
 describe("pi-subagent background concurrency", () => {
   let agentDir = "";
   const {
@@ -23,7 +33,13 @@ describe("pi-subagent background concurrency", () => {
   it("accepts parallel calls immediately while limiting active children", async () => {
     const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
     const tool = session.getToolDefinition("Agent") as any;
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    const widgets: Array<string[] | undefined> = [];
+    const context = makeExecutionContext({
+      hasUI: true,
+      model,
+      modelRegistry,
+      onWidget: (_key, lines) => widgets.push(lines),
+    });
     let active = 0;
     let maximum = 0;
     let started = 0;
@@ -52,11 +68,21 @@ describe("pi-subagent background concurrency", () => {
     expect(first.details.status).toBe("accepted");
     expect(second.details.status).toBe("accepted");
     expect(first.details.task_id).not.toBe(second.details.task_id);
-    await delay(20);
+    await waitUntil(() => started === 1 && widgets.some((lines) =>
+      lines?.includes("◌ Pi Agent(general-purpose: Second) queued") === true));
     expect(started).toBe(1);
     expect(maximum).toBe(1);
+    const queuedUpdate = widgets.find((lines) =>
+      lines?.includes("◌ Pi Agent(general-purpose: Second) queued") === true);
+    expect(queuedUpdate?.[0]).toBe("pi-flow 2 agents and 0 workflows active");
+    expect(queuedUpdate?.find((line) => line.includes("Second"))).toBe(
+      "◌ Pi Agent(general-purpose: Second) queued",
+    );
 
     releaseFirst();
+    await waitUntil(() => started === 2 && widgets.some((lines) =>
+      lines?.some((line) =>
+        line.includes("Pi Agent(general-purpose: Second) 0s · 0 events")) === true));
     const terminals = await Promise.all([
       waitForTaskNotification(session, first.details.task_id),
       waitForTaskNotification(session, second.details.task_id),
@@ -100,28 +126,93 @@ describe("pi-subagent background concurrency", () => {
   it("serializes calls that share a session key before consuming concurrency slots", async () => {
     const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 2 });
     const tool = session.getToolDefinition("Agent") as any;
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    const widgets: Array<string[] | undefined> = [];
+    const context = makeExecutionContext({
+      hasUI: true,
+      model,
+      modelRegistry,
+      onWidget: (_key, lines) => widgets.push(lines),
+    });
     let sharedActive = 0;
     let maximumShared = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let started = 0;
     setContextRoutingResponses(registration, async (providerContext) => {
       if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
         return fauxAssistantMessage("notification observed");
       }
+      const index = ++started;
       sharedActive++;
       maximumShared = Math.max(maximumShared, sharedActive);
-      await delay(20);
-      sharedActive--;
-      return fauxAssistantMessage("shared done");
+      try {
+        if (index === 1) {
+          await firstGate;
+        }
+        return fauxAssistantMessage("shared done");
+      } finally {
+        sharedActive--;
+      }
     });
 
     const accepted = await Promise.all([
       tool.execute("shared-a", { description: "Shared A", prompt: "A", session_key: "worker" }, undefined, undefined, context),
       tool.execute("shared-b", { description: "Shared B", prompt: "B", session_key: "worker" }, undefined, undefined, context),
     ]);
+    await waitUntil(() => widgets.some((lines) =>
+      lines?.includes("◌ Pi Agent(general-purpose: Shared B) queued") === true));
+    expect(started).toBe(1);
+    expect(widgets.some((lines) => lines?.some((line) =>
+      line.includes("Pi Agent(general-purpose: Shared A) 0s · 0 events")) === true)).toBe(true);
+    releaseFirst();
     await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
     expect(maximumShared).toBe(1);
     expect(accepted.map((result) => result.details.session_key)).toEqual(["worker", "worker"]);
+    disposeSession(session);
+  });
+
+  it("removes queued Agent status when session shutdown aborts the queue", async () => {
+    const widgets: Array<string[] | undefined> = [];
+    const { session, registration, model, modelRegistry } = await createSession({
+      maxConcurrentSubagents: 1,
+      onWidget: (_key, lines) => widgets.push(lines),
+    });
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({
+      hasUI: true,
+      model,
+      modelRegistry,
+      onWidget: (_key, lines) => widgets.push(lines),
+    });
+    setContextRoutingResponses(registration, (providerContext, options) => {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        return fauxAssistantMessage("notification observed");
+      }
+      return new Promise((resolve) => {
+        if (options.signal?.aborted) {
+          resolve(fauxAssistantMessage("aborted"));
+          return;
+        }
+        options.signal?.addEventListener(
+          "abort",
+          () => resolve(fauxAssistantMessage("aborted")),
+          { once: true },
+        );
+      });
+    });
+
+    await tool.execute("running", { description: "Running", prompt: "Wait." }, undefined, undefined, context);
+    await tool.execute("queued", { description: "Queued", prompt: "Wait." }, undefined, undefined, context);
+    await waitUntil(() => widgets.some((lines) =>
+      lines?.includes("◌ Pi Agent(general-purpose: Queued) queued") === true));
+
+    await session.extensionRunner.emit({ type: "session_shutdown", reason: "shutdown" });
+
+    expect(widgets.at(-1)).toBeUndefined();
+    expect(widgets.slice(-2).some((lines) => lines?.some((line) => line.includes("queued")))).toBe(false);
     disposeSession(session);
   });
 

@@ -29,7 +29,7 @@ import {
   FLOW_STATUS_KEY,
   publishFlowStatus,
   recordFlowUsage,
-  type ActiveAgentStatus,
+  type QueuedAgentStatus,
 } from "./core/flow-status.ts";
 import {
   BackgroundTaskManager,
@@ -94,7 +94,8 @@ interface CreateAgentToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
-  startAgentStatus: (ctx: ExtensionContext, agent: ActiveAgentStatus) => void;
+  queueAgentStatus: (ctx: ExtensionContext, agent: QueuedAgentStatus) => void;
+  startAgentStatus: (ctx: ExtensionContext, taskId: string) => void;
   updateAgentProgress: (ctx: ExtensionContext, taskId: string, eventCount: number) => void;
   finishTaskStatus: (taskId: string) => void;
   updateStatus: (ctx: ExtensionContext, taskId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
@@ -215,13 +216,13 @@ function createAgentTool(
             throw new Error(profile.model ? `Profile model not found: ${profile.model}` : "No model is selected");
           }
 
-          options.startAgentStatus(ctx, {
+          options.queueAgentStatus(ctx, {
             id: taskId,
             name,
             subagentType,
             backend: profile.backend,
-            startedAt: Date.now(),
-            eventCount: 0,
+            executionState: "queued",
+            queuedAt: Date.now(),
           });
           try {
             return await state.sessionKeyLocks.run(sessionKey, async () => {
@@ -231,6 +232,7 @@ function createAgentTool(
               }
               const release = await state.limiter.acquire(signal);
               try {
+                options.startAgentStatus(ctx, taskId);
                 const spawned = await spawnSubagent({
                   toolCallId: taskId,
                   description: name,
@@ -408,13 +410,25 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       statusContext = ctx;
       publishFlowStatus(ctx, statusState);
     };
-    const startAgentStatus = (ctx: ExtensionContext, agent: ActiveAgentStatus) => {
+    const queueAgentStatus = (ctx: ExtensionContext, agent: QueuedAgentStatus) => {
       statusState.activeAgents.set(agent.id, agent);
+      refreshStatus(ctx);
+    };
+    const startAgentStatus = (ctx: ExtensionContext, taskId: string) => {
+      const agent = statusState.activeAgents.get(taskId);
+      if (agent?.executionState === "queued") {
+        statusState.activeAgents.set(taskId, {
+          ...agent,
+          executionState: "running",
+          startedAt: Date.now(),
+          eventCount: 0,
+        });
+      }
       refreshStatus(ctx);
     };
     const updateAgentProgress = (ctx: ExtensionContext, taskId: string, eventCount: number) => {
       const agent = statusState.activeAgents.get(taskId);
-      if (agent) {
+      if (agent?.executionState === "running") {
         agent.eventCount = eventCount;
       }
       refreshStatus(ctx);
@@ -472,6 +486,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getTaskManager,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
+      queueAgentStatus,
       startAgentStatus,
       updateAgentProgress,
       finishTaskStatus,

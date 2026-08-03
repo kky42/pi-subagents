@@ -23,14 +23,25 @@ interface FlowUsageEntry {
   telemetry: SubagentTelemetry;
 }
 
-export interface ActiveAgentStatus {
+interface AgentStatusBase {
   id: string;
   name: string;
   subagentType: string;
   backend: SubagentBackend;
+  queuedAt: number;
+}
+
+export interface QueuedAgentStatus extends AgentStatusBase {
+  executionState: "queued";
+}
+
+export interface RunningAgentStatus extends AgentStatusBase {
+  executionState: "running";
   startedAt: number;
   eventCount: number;
 }
+
+export type ActiveAgentStatus = QueuedAgentStatus | RunningAgentStatus;
 
 export interface ActiveWorkflowStatus {
   id: string;
@@ -49,7 +60,7 @@ export interface FlowStatusState {
 
 interface DetailLine {
   kind: "agent" | "workflow";
-  startedAt: number;
+  sortAt: number;
   text: string;
 }
 
@@ -140,15 +151,22 @@ function spinner(now: number): string {
 }
 
 function activeAgentLine(state: FlowStatusState, agent: ActiveAgentStatus, now: number): DetailLine {
-  const call = state.calls.get(agent.id);
   const descriptor = agent.name
     ? `${agent.subagentType}: ${agent.name}`
     : agent.subagentType;
+  if (agent.executionState === "queued") {
+    return {
+      kind: "agent",
+      sortAt: agent.queuedAt,
+      text: `◌ ${getBackendAgentLabel(agent.backend)}(${descriptor}) queued`,
+    };
+  }
+  const call = state.calls.get(agent.id);
   const events = countLabel(agent.eventCount, "event");
   const usage = call ? usageSuffix(call.usage, call.telemetry) : "";
   return {
     kind: "agent",
-    startedAt: agent.startedAt,
+    sortAt: agent.queuedAt,
     text: `${spinner(now)} ${getBackendAgentLabel(agent.backend)}(${descriptor}) ${formatDuration(now - agent.startedAt)} · ${events}${usage}`,
   };
 }
@@ -158,13 +176,13 @@ function activeWorkflowLine(state: FlowStatusState, workflow: ActiveWorkflowStat
   const agents = countLabel(workflow.totalAgents, "agent");
   return {
     kind: "workflow",
-    startedAt: workflow.startedAt,
+    sortAt: workflow.startedAt,
     text: `${spinner(now)} Workflow(${workflow.name}) ${formatDuration(now - workflow.startedAt)} · ${workflow.finishedAgents}/${agents}${usageSuffix(totals.usage, totals.telemetry)}`,
   };
 }
 
 function selectDetailLines(lines: DetailLine[]): DetailLine[] {
-  const sorted = [...lines].sort((left, right) => left.startedAt - right.startedAt);
+  const sorted = [...lines].sort((left, right) => left.sortAt - right.sortAt);
   const selected = sorted.slice(0, MAX_ACTIVE_DETAIL_LINES);
   if (selected.length < MAX_ACTIVE_DETAIL_LINES) {
     return selected;
@@ -180,7 +198,7 @@ function selectDetailLines(lines: DetailLine[]): DetailLine[] {
       selected[selected.length - 1] = replacement;
     }
   }
-  return selected.sort((left, right) => left.startedAt - right.startedAt);
+  return selected.sort((left, right) => left.sortAt - right.sortAt);
 }
 
 export function buildFlowStatusLines(state: FlowStatusState, now = Date.now()): string[] {
@@ -199,7 +217,7 @@ export function buildFlowStatusLines(state: FlowStatusState, now = Date.now()): 
     ];
   }
 
-  const summary = `pi-flow ${countLabel(activeAgentCount, "agent")} and ${countLabel(activeWorkflowCount, "workflow")} running${usageSuffix(totals.usage, totals.telemetry)}`;
+  const summary = `pi-flow ${countLabel(activeAgentCount, "agent")} and ${countLabel(activeWorkflowCount, "workflow")} active${usageSuffix(totals.usage, totals.telemetry)}`;
   const detailCandidates = [
     ...[...state.activeAgents.values()].map((agent) => activeAgentLine(state, agent, now)),
     ...[...state.activeWorkflows.values()].map((workflow) => activeWorkflowLine(state, workflow, now)),
