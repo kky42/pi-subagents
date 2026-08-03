@@ -115,6 +115,158 @@ describe("pi-subagent background progress and status", () => {
     disposeSession(session);
   });
 
+  it("defers completion while an idle prompt is in input preprocessing", async () => {
+    const childGate = deferred();
+    const inputHeld = deferred();
+    const releaseInput = deferred();
+    const taskFinished = deferred();
+    const delayedInputExtension: ExtensionFactory = (pi) => {
+      pi.on("input", async (event) => {
+        if (event.text === "Continue after input preprocessing.") {
+          inputHeld.resolve();
+          await releaseInput.promise;
+        }
+        return { action: "continue" };
+      });
+    };
+    const { session, registration } = await createSession({
+      mode: "tui",
+      extensionFactories: [delayedInputExtension],
+      onStatus: (_key, text) => {
+        if (text?.includes("[1/1] agents")) {
+          taskFinished.resolve();
+        }
+      },
+    });
+    let notificationContexts = 0;
+    let notificationCopies = 0;
+    let competingNotificationContexts = 0;
+
+    setContextRoutingResponses(registration, async (context) => {
+      const serialized = JSON.stringify(context.messages);
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        await childGate.promise;
+        return fauxAssistantMessage("preprocessing child done");
+      }
+      const notifications = context.messages.filter((message) =>
+        JSON.stringify(message).includes("preprocessing child done"));
+      if (notifications.length > 0) {
+        notificationContexts++;
+        notificationCopies += notifications.length;
+        if (!serialized.includes("Continue after input preprocessing.")) {
+          competingNotificationContexts++;
+        }
+        return fauxAssistantMessage("original prompt handled notification");
+      }
+      if (!serialized.includes('"toolName":"Agent"')) {
+        return fauxAssistantMessage([
+          fauxToolCall("Agent", { description: "Preprocessing child", prompt: "Wait during prompt preprocessing." }),
+        ], { stopReason: "toolUse" });
+      }
+      return fauxAssistantMessage("task launched");
+    });
+
+    await session.prompt("Launch one background task.");
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as any;
+    const nextPrompt = session.prompt("Continue after input preprocessing.");
+    await inputHeld.promise;
+    childGate.resolve();
+    await taskFinished.promise;
+    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(0);
+    releaseInput.resolve();
+    await expect(nextPrompt).resolves.toBeUndefined();
+    await session.waitForIdle();
+
+    const agentErrors = session.messages.filter((message: any) =>
+      message.role === "assistant" && message.stopReason === "error");
+    expect(agentErrors).toEqual([]);
+    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
+    expect(competingNotificationContexts).toBe(0);
+    expect(notificationContexts).toBe(1);
+    expect(notificationCopies).toBe(1);
+    disposeSession(session);
+  });
+
+  it("keeps steering active for input queued during a root run", async () => {
+    const childGate = deferred();
+    const rootProviderActive = deferred();
+    const finishRootResponse = deferred();
+    const queuedInputHeld = deferred();
+    const releaseQueuedInput = deferred();
+    const taskFinished = deferred();
+    const delayedInputExtension: ExtensionFactory = (pi) => {
+      pi.on("input", async (event) => {
+        if (event.text === "Queue this while the root is active.") {
+          queuedInputHeld.resolve();
+          await releaseQueuedInput.promise;
+        }
+        return { action: "continue" };
+      });
+    };
+    const { session, registration } = await createSession({
+      mode: "tui",
+      extensionFactories: [delayedInputExtension],
+      onStatus: (_key, text) => {
+        if (text?.includes("[1/1] agents")) {
+          taskFinished.resolve();
+        }
+      },
+    });
+    let activeRootResponseFinished = false;
+    const postActiveContexts: Array<{ notificationCopies: number; queuedInput: boolean }> = [];
+
+    setContextRoutingResponses(registration, async (context) => {
+      const serialized = JSON.stringify(context.messages);
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        await childGate.promise;
+        return fauxAssistantMessage("active root child done");
+      }
+      const notifications = context.messages.filter((message) =>
+        JSON.stringify(message).includes("active root child done"));
+      if (activeRootResponseFinished) {
+        postActiveContexts.push({
+          notificationCopies: notifications.length,
+          queuedInput: serialized.includes("Queue this while the root is active."),
+        });
+      }
+      if (notifications.length > 0) {
+        return fauxAssistantMessage("queued input handled notification");
+      }
+      if (!serialized.includes('"toolName":"Agent"')) {
+        return fauxAssistantMessage([
+          fauxToolCall("Agent", { description: "Active root child", prompt: "Wait during the root response." }),
+        ], { stopReason: "toolUse" });
+      }
+      rootProviderActive.resolve();
+      await finishRootResponse.promise;
+      activeRootResponseFinished = true;
+      return fauxAssistantMessage("root response complete");
+    });
+
+    const rootPrompt = session.prompt("Launch one background task and remain active.");
+    await rootProviderActive.promise;
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as any;
+    const queuedPrompt = session.prompt("Queue this while the root is active.", { streamingBehavior: "steer" });
+    await queuedInputHeld.promise;
+    childGate.resolve();
+    await taskFinished.promise;
+    expect((session as any).agent.hasQueuedMessages()).toBe(true);
+    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(0);
+    releaseQueuedInput.resolve();
+    await queuedPrompt;
+    finishRootResponse.resolve();
+    await rootPrompt;
+    await session.waitForIdle();
+
+    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
+    expect(postActiveContexts[0]).toMatchObject({ notificationCopies: 1 });
+    expect(postActiveContexts.some((context) => context.queuedInput && context.notificationCopies === 1)).toBe(true);
+    expect(postActiveContexts.every((context) => context.notificationCopies === 1)).toBe(true);
+    disposeSession(session);
+  });
+
   it("retries a terminal notification cleared from Pi's follow-up queue", async () => {
     const { session, registration } = await createSession({ mode: "tui" });
     let releaseChild!: () => void;

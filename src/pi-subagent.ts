@@ -512,6 +512,12 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
     });
 
+    pi.on("input", (event, ctx) => {
+      if (event.streamingBehavior === undefined && ctx.isIdle()) {
+        notificationDeliveryPaused = true;
+      }
+    });
+
     pi.on("message_end", (event) => {
       if (
         event.message.role === "custom" &&
