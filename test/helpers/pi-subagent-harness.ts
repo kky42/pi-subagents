@@ -6,6 +6,7 @@ import {
   AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
+  type ExtensionFactory,
   ModelRegistry,
   SessionManager,
   SettingsManager,
@@ -39,6 +40,7 @@ export type TaskEnvelope = {
 };
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type CreateSessionOptions = {
+  extensionFactories?: ExtensionFactory[];
   maxConcurrentSubagents?: number;
   maxConcurrentSubagentsFlag?: string;
   subagentTimeoutMs?: number;
@@ -166,6 +168,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
 
   async function createSession(options: CreateSessionOptions = {}) {
     const {
+      extensionFactories = [],
       maxConcurrentSubagents,
       maxConcurrentSubagentsFlag,
       subagentTimeoutMs,
@@ -196,7 +199,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       cwd,
       agentDir,
       settingsManager,
-      extensionFactories: [createSubagentExtension(extensionOptions)],
+      extensionFactories: [createSubagentExtension(extensionOptions), ...extensionFactories],
       noExtensions: true,
       noSkills: true,
       noPromptTemplates: true,

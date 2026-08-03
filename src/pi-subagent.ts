@@ -382,6 +382,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     const pendingNotifications = new Map<string, TerminalTaskEnvelope>();
     let statusContext: ExtensionContext | undefined;
     let notificationSessionManager: SessionManager | undefined;
+    let agentSettling = false;
     const taskNotificationMessage = (envelope: TerminalTaskEnvelope) => ({
       customType: TASK_NOTIFICATION_CUSTOM_TYPE,
       content: JSON.stringify(envelope),
@@ -415,7 +416,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           return;
         }
         pendingNotifications.set(envelope.task_id, envelope);
-        sendTaskNotification(envelope);
+        if (!agentSettling) {
+          sendTaskNotification(envelope);
+        }
       },
       onCountsChange: (counts) => {
         statusState.tasks = counts;
@@ -484,6 +487,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
       pendingNotifications.clear();
       notificationSessionManager = undefined;
+      agentSettling = false;
       statusContext = ctx;
       syncRuntimeOptions();
       rootState.sessionBindings.clear();
@@ -509,6 +513,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.on("agent_settled", () => {
       setImmediate(() => {
+        agentSettling = false;
         if (notificationSessionManager) {
           return;
         }
@@ -540,6 +545,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.on("session_tree", (_event, ctx) => {
       taskManager = createTaskManager();
       pendingNotifications.clear();
+      agentSettling = false;
       statusContext = ctx;
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
@@ -552,6 +558,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       if (ctx.mode === "print" || ctx.mode === "json") {
         await getTaskManager().waitForIdle();
       }
+      agentSettling = true;
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
