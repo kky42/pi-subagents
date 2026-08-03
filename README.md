@@ -12,14 +12,9 @@ Run focused subagents and multi-agent workflows across **Pi**, **Codex CLI**, an
 
 </div>
 
-```text
-Agent Inspect auth accepted task_...
-Workflow review_project accepted task_...
-✓ Agent Inspect auth task_...
+![A real Pi interactive session showing four direct Agents and two Workflows, live Workflow child progress, and the final one-line idle summary](./docs/images/pi-flow-interactive.png)
 
-pi-flow 0 agents and 1 workflow running · ↑210k ↓22k R4.9M CH95.9% $0.167
-⠋ Workflow(review_project) 18s · 2/4 agents · ↑180k ↓19k R4.1M
-```
+<p align="center"><sub>Captured from a real Pi interactive session with four direct Agents, two Workflows, and four Workflow child agents.</sub></p>
 
 ## One coordinator, many specialists
 
