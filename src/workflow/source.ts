@@ -218,6 +218,7 @@ export async function prepareWorkflowToolSource(
   params: WorkflowToolParams,
   ctx: ExtensionContext,
   taskId: string,
+  isTaskActive: (taskId: string) => boolean = () => false,
 ): Promise<PrepareWorkflowToolSourceResult> {
   const resumeFromTaskId = typeof params.resumeFromTaskId === "string" && params.resumeFromTaskId.trim()
     ? params.resumeFromTaskId.trim()
@@ -245,7 +246,7 @@ export async function prepareWorkflowToolSource(
       const message = `Cannot resume workflow: task journal not found for ${resumeFromTaskId}.`;
       return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
     }
-    if (resumeJournal.status === "running") {
+    if (resumeJournal.status === "running" && isTaskActive(resumeFromTaskId)) {
       const message = `Cannot resume workflow: task ${resumeFromTaskId} is still running.`;
       return sourceError(message, { name: resumeJournal.name ?? "workflow", error: message, resumeFromTaskId });
     }
@@ -345,7 +346,7 @@ export async function prepareWorkflowToolSource(
         resumeFromTaskId,
       });
     }
-    if (resumeJournal.status === "running") {
+    if (resumeJournal.status === "running" && isTaskActive(resumeFromTaskId)) {
       const message = `Cannot resume workflow: task ${resumeFromTaskId} is still running.`;
       return sourceError(message, {
         name: metaName,

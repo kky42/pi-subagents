@@ -30,12 +30,14 @@ export interface LoadedWorkflowJournal {
   source?: string;
   scriptPath?: string;
   status: "running" | "completed" | "failed";
+  logs: string[];
   agentResults: WorkflowCachedAgentResult[];
 }
 
 export interface WorkflowJournalWriter {
   taskId: string;
   path: string;
+  appendLog(message: string): Promise<void>;
   appendAgentResult(event: WorkflowAgentResultEvent): Promise<void>;
   complete(result: unknown): Promise<void>;
   fail(error: string): Promise<void>;
@@ -94,6 +96,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
   }
 
   const agentResults: WorkflowCachedAgentResult[] = [];
+  const logs: string[] = [];
   let seenTaskStart = false;
   let name: string | undefined;
   let source: string | undefined;
@@ -124,6 +127,12 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
       status = "failed";
       continue;
     }
+    if (entry.type === "task_log") {
+      if (typeof entry.message === "string") {
+        logs.push(entry.message);
+      }
+      continue;
+    }
     if (entry.type !== "agent_result") {
       continue;
     }
@@ -137,6 +146,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
       fingerprint,
       result: entry.result,
       failed: entry.failed === true,
+      error: typeof entry.error === "string" ? entry.error : undefined,
       sessionKey: typeof entry.sessionKey === "string" ? entry.sessionKey : undefined,
       sessionId: typeof entry.sessionId === "string" ? entry.sessionId : undefined,
       subagentType: typeof entry.subagentType === "string" ? entry.subagentType : undefined,
@@ -147,7 +157,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
   if (!seenTaskStart) {
     throw new Error(`Workflow journal does not match task id ${taskId}`);
   }
-  return { taskId, path, name, source, scriptPath, status, agentResults };
+  return { taskId, path, name, source, scriptPath, status, logs, agentResults };
 }
 
 export async function createWorkflowJournalWriter(params: {
@@ -186,6 +196,9 @@ export async function createWorkflowJournalWriter(params: {
   return {
     taskId: params.identity.taskId,
     path,
+    appendLog: async (message) => {
+      await enqueueAppend({ type: "task_log", message });
+    },
     appendAgentResult: async (event) => {
       await enqueueAppend({
         type: "agent_result",
@@ -201,6 +214,7 @@ export async function createWorkflowJournalWriter(params: {
         schema: event.schema,
         cached: event.cached,
         failed: event.failed === true,
+        error: event.error,
         result: event.result,
       });
     },

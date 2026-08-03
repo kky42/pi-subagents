@@ -132,10 +132,25 @@ export class BackgroundTaskManager {
     return cloneCounts(this.counts);
   }
 
+  hasActiveTasks(): boolean {
+    return this.active.size > 0;
+  }
+
+  isActive(taskId: string): boolean {
+    return this.active.has(taskId);
+  }
+
   async waitForIdle(): Promise<void> {
     while (this.active.size > 0) {
       await Promise.all([...this.active.values()].map((task) => task.promise));
     }
+  }
+
+  async abortAll(reason: string): Promise<void> {
+    for (const task of this.active.values()) {
+      task.controller.abort(new Error(reason));
+    }
+    await this.waitForIdle();
   }
 
   async shutdown(): Promise<void> {
@@ -144,10 +159,7 @@ export class BackgroundTaskManager {
       return;
     }
     this.closed = true;
-    for (const task of this.active.values()) {
-      task.controller.abort(new Error("Pi session shut down"));
-    }
-    await this.waitForIdle();
+    await this.abortAll("Pi session shut down");
   }
 
   private finish(
@@ -177,9 +189,6 @@ export class BackgroundTaskManager {
 
     this.counts[options.taskType].finished++;
     this.publishCounts();
-    if (this.closed) {
-      return;
-    }
     try {
       this.options.notify(envelope);
     } catch {

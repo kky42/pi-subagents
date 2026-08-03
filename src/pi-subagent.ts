@@ -305,6 +305,7 @@ function createAgentTool(
                   backend: profile.backend,
                 });
               }
+              signal.throwIfAborted();
               if (details.status !== "done") {
                 throw new Error(details.error ?? "Subagent failed");
               }
@@ -377,21 +378,38 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       sessionKeyLocks: new SessionKeyLocks(),
     };
     const statusState = createFlowStatusState();
+    const pendingNotifications = new Map<string, TerminalTaskEnvelope>();
     let statusContext: ExtensionContext | undefined;
+    let persistNotifications = false;
+    const taskNotificationMessage = (envelope: TerminalTaskEnvelope) => ({
+      customType: TASK_NOTIFICATION_CUSTOM_TYPE,
+      content: JSON.stringify(envelope),
+      display: true,
+      details: envelope,
+    });
+    const persistTaskNotification = (envelope: TerminalTaskEnvelope) => {
+      pi.sendMessage(taskNotificationMessage(envelope));
+    };
+    const sendTaskNotification = (envelope: TerminalTaskEnvelope) => {
+      pi.sendMessage(taskNotificationMessage(envelope), {
+        deliverAs: "followUp",
+        triggerTurn: true,
+      });
+    };
+    const persistPendingNotifications = () => {
+      for (const envelope of pendingNotifications.values()) {
+        persistTaskNotification(envelope);
+      }
+      pendingNotifications.clear();
+    };
     const createTaskManager = () => new BackgroundTaskManager({
       notify: (envelope) => {
-        pi.sendMessage(
-          {
-            customType: TASK_NOTIFICATION_CUSTOM_TYPE,
-            content: JSON.stringify(envelope),
-            display: true,
-            details: envelope,
-          },
-          {
-            deliverAs: "followUp",
-            triggerTurn: true,
-          },
-        );
+        if (persistNotifications) {
+          persistTaskNotification(envelope);
+          return;
+        }
+        pendingNotifications.set(envelope.task_id, envelope);
+        sendTaskNotification(envelope);
       },
       onCountsChange: (counts) => {
         statusState.tasks = counts;
@@ -458,6 +476,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         taskManager = createTaskManager();
         taskManagerNeedsReset = false;
       }
+      pendingNotifications.clear();
+      persistNotifications = false;
       statusContext = ctx;
       syncRuntimeOptions();
       rootState.sessionBindings.clear();
@@ -469,6 +489,58 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
     });
 
+    pi.on("message_end", (event) => {
+      if (
+        event.message.role === "custom" &&
+        event.message.customType === TASK_NOTIFICATION_CUSTOM_TYPE &&
+        typeof event.message.details === "object" &&
+        event.message.details !== null &&
+        "task_id" in event.message.details
+      ) {
+        pendingNotifications.delete(String(event.message.details.task_id));
+      }
+    });
+
+    pi.on("agent_settled", () => {
+      setImmediate(() => {
+        if (persistNotifications) {
+          return;
+        }
+        for (const envelope of pendingNotifications.values()) {
+          sendTaskNotification(envelope);
+        }
+      });
+    });
+
+    pi.on("session_before_tree", async (_event, ctx) => {
+      const manager = getTaskManager();
+      if (!manager.hasActiveTasks() && pendingNotifications.size === 0) {
+        return;
+      }
+      const hadActiveTasks = manager.hasActiveTasks();
+      persistNotifications = true;
+      try {
+        await manager.abortAll("Pi session tree changed");
+        persistPendingNotifications();
+      } finally {
+        persistNotifications = false;
+      }
+      if (hadActiveTasks && ctx.hasUI) {
+        ctx.ui.notify("PiFlow aborted background tasks before changing branches", "warning");
+      }
+    });
+
+    pi.on("session_tree", (_event, ctx) => {
+      taskManager = createTaskManager();
+      pendingNotifications.clear();
+      statusContext = ctx;
+      rootState.sessionBindings.clear();
+      rootState.sessionKeyLocks = new SessionKeyLocks();
+      statusState.calls.clear();
+      statusState.tasks = taskManager.getCounts();
+      publishFlowStatus(ctx, statusState);
+    });
+
     pi.on("agent_end", async (_event, ctx) => {
       if (ctx.mode === "print" || ctx.mode === "json") {
         await getTaskManager().waitForIdle();
@@ -478,7 +550,13 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.on("session_shutdown", async (_event, ctx) => {
       const endingTaskManager = getTaskManager();
       taskManagerNeedsReset = true;
-      await endingTaskManager.shutdown();
+      persistNotifications = true;
+      try {
+        await endingTaskManager.shutdown();
+        persistPendingNotifications();
+      } finally {
+        persistNotifications = false;
+      }
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);
       }

@@ -189,7 +189,7 @@ A background task must retain its limiter slot for its actual execution lifetime
 
 ### Notification delivery
 
-Use a custom Pi message, not a user message:
+Use a custom Pi message, not a user message. Retain each terminal envelope until Pi emits `message_end` for its custom message. Queue it as a follow-up immediately so print and JSON modes drain it before shutdown. If Pi clears the queue before delivery, `agent_settled` retries any retained envelopes.
 
 ```ts
 pi.sendMessage(
@@ -224,7 +224,9 @@ Background tasks are scoped to the current Pi session.
 
 - Do not bind their lifetime to the foreground tool call signal after acceptance.
 - Abort active tasks when their owning session is shut down or replaced.
-- Prevent a task from notifying a different session after a switch.
+- Abort active tasks before session-tree navigation and persist their failed notifications on the originating branch.
+- Persist failed notifications without triggering a model turn during session shutdown.
+- Prevent a task from notifying a different session or tree branch after a switch.
 - Clear task and session-key state only after owned tasks are stopped.
 
 Keep the existing global subagent timeout as the execution guardrail.

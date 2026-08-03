@@ -70,7 +70,7 @@ Or ask for staged orchestration:
 Use a workflow to classify each changed file by risk, run a risk-specific review, and return structured results.
 ```
 
-Pi launches each `Agent` or `workflow` call as a background task, continues independent work, and receives the result later through a correlated task notification. `task_id` is the stable correlation identity; `name` is descriptive and may become more specific after a Workflow source loads. In `pi -p`, Pi waits for those tasks and notification turns before exiting.
+Pi launches each `Agent` or `workflow` call as a background task, continues independent work, and receives the result later through a correlated task notification. `task_id` is the stable correlation identity; `name` is descriptive and may become more specific after a Workflow source loads. In `pi -p`, Pi waits for those tasks and notification turns before exiting. Navigating to another session-tree branch aborts active PiFlow tasks and records their failed terminal notifications on the originating branch.
 
 ## Headless execution
 

@@ -10,6 +10,7 @@ import { createSubagentExtension } from "../src/pi-subagent.ts";
 import {
   parseWorkflowScript,
   runWorkflow,
+  type WorkflowAgentResultEvent,
   type WorkflowAgentRunner,
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
@@ -381,6 +382,7 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
 
   it("returns null and logs when an agent fails", async () => {
     const logs: string[] = [];
+    const agentResults: WorkflowAgentResultEvent[] = [];
     const result = await runWorkflow(`${META}return await agent('x', { label: 'boom' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
@@ -388,9 +390,13 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
         throw new Error("kaboom");
       },
       onLog: (message) => logs.push(message),
+      onAgentResult: (event) => { agentResults.push(event); },
     });
     expect(result.result).toBeNull();
     expect(logs.some((line) => line.includes("boom") && line.includes("kaboom"))).toBe(true);
+    expect(agentResults).toEqual([
+      expect.objectContaining({ label: "boom", result: null, failed: true, error: "kaboom" }),
+    ]);
   });
 
   it("does not treat a successful null agent result as a failed agent", async () => {
@@ -831,6 +837,7 @@ describe("saved workflow registry", () => {
         join(dir, `task-${taskId}.jsonl`),
         [
           JSON.stringify({ type: "task_start", taskId }),
+          JSON.stringify({ type: "task_log", message: "first diagnostic" }),
           JSON.stringify({ type: "agent_result", index: 1, fingerprint: "a", result: "one" }),
           "{ truncated",
           JSON.stringify({ type: "agent_result", index: 2, fingerprint: "b", result: "two" }),
@@ -840,6 +847,7 @@ describe("saved workflow registry", () => {
       const journal = await loadWorkflowJournal(dir, taskId);
 
       expect(journal?.status).toBe("running");
+      expect(journal?.logs).toEqual(["first diagnostic"]);
       expect(journal?.agentResults).toEqual([{ index: 1, fingerprint: "a", result: "one", failed: false }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

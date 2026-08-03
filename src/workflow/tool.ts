@@ -43,11 +43,13 @@ export function createWorkflowTool(
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
     parameters: workflowToolParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const accepted = options.getTaskManager().start({
+      const taskManager = options.getTaskManager();
+      const accepted = taskManager.start({
         taskType: "workflow",
         name: initialWorkflowName(params),
         run: async (signal, taskId) => {
-          const prepared = await prepareWorkflowToolSource(params, ctx, taskId);
+          const prepared = await prepareWorkflowToolSource(params, ctx, taskId, (resumeTaskId) =>
+            taskManager.isActive(resumeTaskId));
           if (!prepared.ok) {
             throw new Error(prepared.details.error);
           }
@@ -67,6 +69,7 @@ export function createWorkflowTool(
             toolCallId: taskId,
             onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:agent:${index}`, usage, telemetry),
           });
+          const warnings: string[] = [];
 
           try {
             const result = await runWorkflow(script, {
@@ -77,8 +80,16 @@ export function createWorkflowTool(
               serializeAgent: runner.serializeAgent,
               runAgent: runner.runAgent,
               resumeAgentResults,
+              onLog: (message) => {
+                if (journalWriter) {
+                  void journalWriter.appendLog(message).catch(() => {});
+                }
+              },
               onAgentResult: async (event) => {
                 runner.restoreSessionBinding(event);
+                if (event.error) {
+                  warnings.push(`agent ${event.label} failed: ${event.error}`);
+                }
                 await journalWriter?.appendAgentResult(event);
               },
             });
@@ -89,7 +100,7 @@ export function createWorkflowTool(
             }
             return {
               name: result.meta.name,
-              content: workflowContent(result.result),
+              content: workflowContent(result.result, warnings),
             };
           } catch (error) {
             try {
@@ -139,9 +150,10 @@ function initialWorkflowName(params: WorkflowToolParams): string {
   return "workflow";
 }
 
-function workflowContent(result: unknown): string {
-  if (typeof result === "string") {
-    return result;
+function workflowContent(result: unknown, warnings: string[]): string {
+  const content = typeof result === "string" ? result : JSON.stringify(result) ?? "null";
+  if (warnings.length === 0) {
+    return content;
   }
-  return JSON.stringify(result) ?? "null";
+  return `${content}\n\nWorkflow warnings:\n${warnings.join("\n")}`;
 }

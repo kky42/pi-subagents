@@ -115,11 +115,32 @@ describe("BackgroundTaskManager", () => {
     expect(order).toEqual(["notification", "idle"]);
   });
 
-  it("aborts tasks and suppresses notifications during session shutdown", async () => {
+  it("aborts active tasks without closing the manager", async () => {
     const notifications: TerminalTaskEnvelope[] = [];
     const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
 
-    manager.start({
+    const aborted = manager.start({
+      taskType: "workflow",
+      name: "old branch",
+      run: (signal) => new Promise<string>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }),
+    });
+    await manager.abortAll("Pi session tree changed");
+    const completed = manager.start({ taskType: "workflow", name: "new branch", run: async () => "done" });
+    await manager.waitForIdle();
+
+    expect(notifications).toEqual([
+      expect.objectContaining({ task_id: aborted.task_id, status: "failed", content: "Pi session tree changed" }),
+      expect.objectContaining({ task_id: completed.task_id, status: "completed", content: "done" }),
+    ]);
+  });
+
+  it("aborts tasks and emits failed notifications during session shutdown", async () => {
+    const notifications: TerminalTaskEnvelope[] = [];
+    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
+
+    const accepted = manager.start({
       taskType: "workflow",
       name: "long task",
       run: (signal) => new Promise<string>((_resolve, reject) => {
@@ -128,7 +149,13 @@ describe("BackgroundTaskManager", () => {
     });
     await manager.shutdown();
 
-    expect(notifications).toEqual([]);
+    expect(notifications).toEqual([{
+      task_id: accepted.task_id,
+      task_type: "workflow",
+      status: "failed",
+      name: "long task",
+      content: "Pi session shut down",
+    }]);
     expect(manager.getCounts().workflow).toEqual({ finished: 1, total: 1 });
     expect(() => manager.start({ taskType: "workflow", name: "late", run: async () => "late" })).toThrow(
       "after session shutdown",

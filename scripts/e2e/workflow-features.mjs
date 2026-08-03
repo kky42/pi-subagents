@@ -255,7 +255,7 @@ function runPi({ model, thinking, deepseekApiKeyEnv, agentDir, cwd, sessionDir, 
   ];
   const stdoutPath = path.join(sessionDir, "stdout.txt");
   const stderrPath = path.join(sessionDir, "stderr.txt");
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const out = createWriteStream(stdoutPath, { flags: "a" });
     const err = createWriteStream(stderrPath, { flags: "a" });
     const e2eEnv = prepareDeepseekClaudeE2EEnv(process.env, {
@@ -267,6 +267,8 @@ function runPi({ model, thinking, deepseekApiKeyEnv, agentDir, cwd, sessionDir, 
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...e2eEnv, PI_CODING_AGENT_DIR: agentDir },
     });
+    let spawnError;
+    child.on("error", (error) => { spawnError = error; });
     let timedOut = false;
     let killTimer;
     const timer = setTimeout(() => {
@@ -284,8 +286,20 @@ function runPi({ model, thinking, deepseekApiKeyEnv, agentDir, cwd, sessionDir, 
       out.end();
       err.end();
       rmSync(path.join(sessionDir, "claude-runtime"), { recursive: true, force: true });
-      if (timedOut) console.log(`    ! pi session timed out after ${Math.round(timeoutMs / 1000)}s (${sessionId})`);
-      resolve({ exitCode, stdoutPath, stderrPath, timedOut });
+      const outcome = { exitCode, stdoutPath, stderrPath, timedOut };
+      if (spawnError) {
+        reject(new Error(`pi session ${sessionId} failed to start: ${spawnError.message}; stdout=${stdoutPath}; stderr=${stderrPath}`));
+        return;
+      }
+      if (timedOut) {
+        reject(new Error(`pi session ${sessionId} timed out after ${Math.round(timeoutMs / 1000)}s; stdout=${stdoutPath}; stderr=${stderrPath}`));
+        return;
+      }
+      if (exitCode !== 0) {
+        reject(new Error(`pi session ${sessionId} exited with code ${exitCode}; stdout=${stdoutPath}; stderr=${stderrPath}`));
+        return;
+      }
+      resolve(outcome);
     });
   });
 }

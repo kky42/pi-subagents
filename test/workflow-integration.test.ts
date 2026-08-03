@@ -236,15 +236,69 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
 
     const script = `export const meta = { name: 'slow-flow', description: 'slow workflow child' };\nreturn await agent('wait too long', { label: 'slow' });`;
     const started = Date.now();
-    const { notification } = await executeWorkflow(
+    const { accepted, notification } = await executeWorkflow(
       session,
       { script },
-      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }),
     );
 
-    expect(notification).toMatchObject({ status: "completed", name: "slow-flow", content: "null" });
+    expect(notification).toMatchObject({ status: "completed", name: "slow-flow" });
+    expect(notification.content).toMatch(/null[\s\S]*workflow warnings:[\s\S]*(timed out|timeout)/i);
     expect(Date.now() - started).toBeGreaterThanOrEqual(20);
+    const entries = readFileSync(
+      join(workflowStateDir(tempDir), `task-${accepted.task_id}.jsonl`),
+      "utf8",
+    ).trim().split("\n").map((line) => JSON.parse(line));
+    const agentResult = entries.find((entry) => entry.type === "agent_result");
+    expect(agentResult).toMatchObject({ failed: true, error: expect.stringMatching(/timed out|timeout/i) });
+    expect(entries.find((entry) => entry.type === "task_log")?.message).toMatch(/timed out|timeout/i);
 
+    disposeSession(session);
+  });
+
+  it("persists a failed Workflow notification when reload aborts it", async () => {
+    const { session, registration, model, modelRegistry } = await createSession({ mode: "tui" });
+    let childStarted = false;
+    let rootNotificationCalls = 0;
+    setContextRoutingResponses(registration, (providerContext, options) => {
+      if (getToolNames(providerContext).includes("Agent")) {
+        rootNotificationCalls++;
+        return fauxAssistantMessage("notification observed");
+      }
+      childStarted = true;
+      return new Promise((resolve) => {
+        options.signal?.addEventListener("abort", () => resolve(fauxAssistantMessage("aborted workflow child")), { once: true });
+      });
+    });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    const tool = session.getToolDefinition("workflow") as any;
+    const script = `export const meta = { name: 'reload_flow', description: 'Wait for reload' };\nreturn await agent('wait for reload', { label: 'worker' });`;
+
+    const result = await tool.execute("reload-workflow", { script }, undefined, undefined, context);
+    const accepted = result.details as AcceptedWorkflow;
+    await waitUntil(() => childStarted || undefined);
+    await session.reload();
+
+    const terminal = taskNotifications(session).find((item) => item.task_id === accepted.task_id);
+    expect(terminal).toMatchObject({ status: "failed", content: "Pi session shut down" });
+    expect(rootNotificationCalls).toBe(0);
+    disposeSession(session);
+  });
+
+  it("journals explicit logs without changing a successful JSON result", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    registration.setResponses([fauxAssistantMessage("logged child done")]);
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
+    const script = `export const meta = { name: 'logged_flow', description: 'Persist workflow logs' };\nlog('starting review');\nreturn { reply: await agent('finish review', { label: 'reviewer' }) };`;
+
+    const { accepted, notification } = await executeWorkflow(session, { script }, context);
+
+    expect(JSON.parse(notification.content)).toEqual({ reply: "logged child done" });
+    const entries = readFileSync(
+      join(workflowStateDir(tempDir), `task-${accepted.task_id}.jsonl`),
+      "utf8",
+    ).trim().split("\n").map((line) => JSON.parse(line));
+    expect(entries).toContainEqual({ type: "task_log", message: "starting review" });
     disposeSession(session);
   });
 
@@ -347,6 +401,27 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
     release();
     const firstTerminal = await waitUntil(() => taskNotifications(session).find((item) => item.task_id === first.task_id));
     expect(firstTerminal.status).toBe("completed");
+    disposeSession(session);
+  });
+
+  it("replays an orphaned running journal when no live task owns it", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
+    registration.setResponses([fauxAssistantMessage("journaled result")]);
+    const script = `export const meta = { name: 'orphan_replay', description: 'Replay an orphaned journal' };\nreturn await agent('run once', { label: 'worker' });`;
+
+    const first = await executeWorkflow(session, { script }, context);
+    const journalPath = join(workflowStateDir(tempDir), `task-${first.accepted.task_id}.jsonl`);
+    const runningJournal = readFileSync(journalPath, "utf8")
+      .split("\n")
+      .filter((line) => !line.includes('"type":"task_complete"'))
+      .join("\n");
+    writeFileSync(journalPath, runningJournal);
+
+    const replay = await executeWorkflow(session, { resumeFromTaskId: first.accepted.task_id }, context);
+
+    expect(replay.notification).toMatchObject({ status: "completed", content: "journaled result" });
+    expect(registration.getPendingResponseCount()).toBe(0);
     disposeSession(session);
   });
 

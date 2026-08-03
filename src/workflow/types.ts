@@ -32,6 +32,7 @@ export interface WorkflowCachedAgentResult {
   fingerprint: string;
   result: unknown;
   failed?: boolean;
+  error?: string;
   sessionKey?: string;
   sessionId?: string;
   subagentType?: string;

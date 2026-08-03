@@ -209,6 +209,7 @@ export async function runWorkflow<T = unknown>(
 
     let result: unknown;
     let failed = false;
+    let failureMessage: string | undefined;
     try {
       result = options.serializeAgent
         ? await options.serializeAgent(opts.sessionKey, runLiveAgent)
@@ -217,12 +218,13 @@ export async function runWorkflow<T = unknown>(
       if (options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error)) {
         throw error;
       }
-      log(`agent ${label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      failureMessage = error instanceof Error ? error.message : String(error);
+      log(`agent ${label} failed: ${failureMessage}`);
       result = null;
       failed = true;
     }
     options.onAgentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
-    await recordAgentResult({ ...call, index, fingerprint, result, failed, cached: false });
+    await recordAgentResult({ ...call, index, fingerprint, result, failed, error: failureMessage, cached: false });
     return result;
   };
 
@@ -313,7 +315,10 @@ export async function runWorkflow<T = unknown>(
       }
     };
 
-    const onExternalAbort = () => abortWorkflow("workflow aborted");
+    const onExternalAbort = () => {
+      const reason = options.signal?.reason;
+      abortWorkflow(reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "workflow aborted");
+    };
     if (options.signal?.aborted) {
       abortWorkflow("workflow aborted");
     } else {

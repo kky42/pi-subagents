@@ -20,6 +20,7 @@ interface SessionKeyEntryData {
 }
 
 interface SessionManagerLike {
+  getBranch?: () => unknown[];
   getEntries?: () => unknown[];
   appendCustomEntry?: (customType: string, data?: unknown) => string;
 }
@@ -60,7 +61,7 @@ function parseBindingData(data: unknown): SessionKeyBinding | undefined {
 
 export function getPersistedSessionKeyBinding(ctx: ExtensionContext, key: string): SessionKeyBinding | undefined {
   const manager = ctx.sessionManager as SessionManagerLike | undefined;
-  const entries = manager?.getEntries?.();
+  const entries = manager?.getBranch?.() ?? manager?.getEntries?.();
   if (!Array.isArray(entries)) {
     return undefined;
   }
