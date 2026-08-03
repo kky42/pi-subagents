@@ -23,8 +23,7 @@
     "scripts",
     "README.md",
     "LICENSE",
-    ".env.example",
-    "assets"
+    ".env.example"
   ],
   "keywords": [
     "pi-package",
@@ -69,8 +68,7 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ],
-    "image": "https://raw.githubusercontent.com/kky42/pi-flow/main/assets/subagents.png"
+    ]
   },
   "engines": {
     "node": ">=22.19.0"

@@ -4,7 +4,7 @@
 
 **Give Pi a team.**
 
-Run focused subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Claude Code**—without leaving your Pi session.
+Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Claude Code** without leaving your Pi session.
 
 [![CI](https://github.com/kky42/pi-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/kky42/pi-flow/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/%40kky42%2Fpi-flow?label=npm)](https://www.npmjs.com/package/@kky42/pi-flow)
@@ -12,244 +12,92 @@ Run focused subagents and multi-agent workflows across **Pi**, **Codex CLI**, an
 
 </div>
 
-![A real Pi interactive session showing four direct Agents and two Workflows, live Workflow child progress, and the final one-line idle summary](./assets/pi-flow.png)
+![A real Pi interactive session showing four direct Agents and two Workflows, live Workflow child progress, and the final one-line idle summary](./docs/images/pi-flow-interactive.png)
 
 <p align="center"><sub>Captured from a real Pi interactive session with four direct Agents, two Workflows, and four Workflow child agents.</sub></p>
 
-## One coordinator, many specialists
+## One coordinator, asynchronous specialists
 
-Pi stays in control while `pi-flow` gives it two new ways to delegate:
+`Agent` and `workflow` run as background tasks. Pi receives an `accepted` result immediately, continues independent work, then receives one correlated `completed` or `failed` notification. `accepted` means launched, not finished, and there is nothing to poll.
 
-| Primitive | Best for |
+| Primitive | Use it for |
 | --- | --- |
-| **`Agent`** | Independent parallel work or context-heavy exploration where only the result needs to return. |
-| **`workflow`** | Saved workflows, dependent stages, control flow, structured results or branching, replay, or larger fan-out. |
+| **`Agent`** | One focused, resumable specialist or several independent specialists in parallel. |
+| **`workflow`** | Parallel or staged child agents, branching, structured results, saved orchestration, and replay. |
 
-Each subagent can run through a different harness and model. Route fast searches to Codex, UI review to Claude Code, local analysis to Pi—or define your own mix.
-
-```text
-                              your request
-                                   │
-                                   ▼
-                          ┌─────────────────┐
-                          │ Pi coordinator  │
-                          └────────┬────────┘
-                                   │ Agent / workflow
-                ┌──────────────────┼──────────────────┐
-                ▼                  ▼                  ▼
-        ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-        │ Pi subagent  │   │ Codex CLI    │   │ Claude Code  │
-        │ local tools  │   │ codex exec   │   │ claude -p    │
-        └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
-               └──────────────────┼──────────────────┘
-                                  ▼
-                         synthesis back in Pi
-```
+Every call routes through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
 
 ## Get started in 30 seconds
-
-Install the package:
 
 ```bash
 pi install npm:@kky42/pi-flow
 ```
 
-Then ask Pi to delegate naturally:
+Ask Pi naturally:
 
 ```text
-Use a subagent to map this repository without changing files, then summarize the important entry points.
+Use three agents in parallel to review architecture, tests, and documentation, then synthesize their findings.
 ```
-
-Or ask for staged orchestration:
 
 ```text
-Use a workflow to classify each changed file by risk, run a risk-specific review, and return structured results.
+Use a workflow to classify each changed file by risk, run the matching review, and return structured results.
 ```
 
-Pi decides how to invoke `Agent` or `workflow`, shows live progress, and receives each terminal result for synthesis in the same conversation.
+### Add simple specialists
 
-## Headless execution
+Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the `subagent_type`.
 
-Schedulers and services can execute the same profile-aware workflow path without creating a Pi extension or TUI:
-
-```ts
-import { executeWorkflow } from "@kky42/pi-flow/headless";
-
-const run = await executeWorkflow({
-  script,
-  cwd: process.cwd(),
-  args: { topic: "auth" },
-  signal,
-  maxConcurrentSubagents: 4,
-  subagentTimeoutMs: 30 * 60_000,
-  allowedBackends: ["pi", "codex"],
-  onLog: console.log,
-  onPhase: (title) => console.log("phase", title),
-  onUsage: (usage) => console.log("cumulative usage", usage),
-});
-```
-
-The headless API loads the same profiles and preserves profile backend, model, thinking, tools, role prompt, `session_key`, structured output, and spawn behavior used by the interactive workflow tool. `run.usage.cacheHitRate` is the weighted cache-read share across all prompt tokens reported by agents in that workflow run, not the last model turn's rate. `allowedBackends` is an optional execution policy. Workflow scripts are trusted code, not a security sandbox.
-
-The lower-level `@kky42/pi-flow/runtime` export remains available for consumers that provide their own agent runner.
-
-## Why pi-flow?
-
-- **Use the right model for each lane.** A single task can combine different models, harnesses, prompts, and toolsets.
-- **Work in parallel.** Fan out repository exploration, research, review, or migration analysis while keeping one coordinator.
-- **Keep delegation visible.** Pi's TUI activity widget shows active task counts, direct-Agent events, Workflow child progress, duration, cumulative tokens, cache hits, and cost when available.
-- **Continue a specialist when needed.** Each direct Agent returns a `session_key`; reuse it to resume that backend conversation, or supply a stable key on the first call.
-- **Reuse successful orchestration.** Save trusted workflows globally or per project and invoke them later by name.
-- **Stay harness-native.** Pi children use Pi tools; Codex and Claude children use their own CLI capabilities.
-
-## Define your agent team
-
-`pi-flow` includes a minimal built-in profile and loads arbitrary custom profiles from Markdown files under:
-
-```text
-~/.pi/agent/subagents/<name>.md
-```
-
-The filename becomes the `subagent_type`. A profile chooses the backend, model, thinking level, tools, and role prompt.
-
-### Pi specialist
+**Pi explorer**
 
 ```md
 ---
 description: Fast read-only repository explorer.
-backend: pi
 tools: read, grep, find, ls
-model: inherit
-thinking: high
 ---
-
-Map the repository without modifying files. Return concise findings with paths and symbols.
+Map the repository and return the important paths.
 ```
 
-### Codex specialist
+**Codex reviewer**
 
 ```md
 ---
-description: Reviews implementation changes for correctness and missed edge cases.
+description: Reviews code for correctness and missed edge cases.
 backend: codex
-thinking: high
 ---
-
-Review the current diff. Lead with concrete findings and identify missing tests.
+Review the current diff and lead with concrete findings.
 ```
 
-### Claude Code specialist
+**Claude UI reviewer**
 
 ```md
 ---
-description: Reviews frontend work for UX, accessibility, and visual quality.
+description: Reviews UI quality and accessibility.
 backend: claude
-thinking: high
 ---
-
-Inspect the frontend changes and recommend specific, high-impact improvements.
+Inspect the UI and recommend specific improvements.
 ```
 
-### Profile fields
+## Why pi-flow?
 
-| Field | Meaning |
-| --- | --- |
-| `description` | Required routing guidance shown to the Pi coordinator. |
-| `backend` | `pi` (default), `codex`, or `claude`. |
-| `model` | Optional backend model; omit or use `inherit` for Pi inheritance. |
-| `thinking` | Optional backend-supported thinking level. |
-| `tools` | Pi backend only: child-session tool allowlist. |
-| Markdown body | Additional role and behavior instructions for the specialist. |
-
-## Use a focused subagent
-
-A fresh call starts a clean, resumable child conversation in the same working directory. Parent messages and tool results are not copied, so Pi sends a self-contained task. The call immediately returns an accepted task envelope. If `session_key` is omitted, that envelope contains a generated key that can be reused after the matching terminal notification arrives.
-
-```ts
-Agent({
-  description: "Map the authentication flow",
-  prompt: "Trace login from the HTTP entry point to session creation. Do not edit files.",
-});
-```
-
-For follow-up work, reuse a stable `session_key`:
-
-```ts
-Agent({
-  description: "Draft the migration",
-  session_key: "auth-migration",
-  prompt: "Propose a migration plan based on the current implementation.",
-});
-
-Agent({
-  description: "Revise the migration",
-  session_key: "auth-migration",
-  prompt: "Revise the plan using the review feedback. Address rollback and compatibility.",
-});
-```
-
-`pi-flow` maps that key to the backend-native session or thread and keeps the continuation explicit.
-
-## Choose Agent or workflow by task shape
-
-Keep narrow local work in the foreground when delegation adds no value. Use `Agent` for independent parallel work or focused exploration whose intermediate context does not need to remain in the foreground. Use `workflow` for more complex multi-agent coordination, including saved workflows, dependent stages, control flow, structured decisions, replay, or larger fan-out.
-
-```text
-Use a workflow to classify each module with a strict risk result, then run the matching follow-up review for each classification.
-```
-
-You usually do not need to write workflow code yourself. Pi can generate and run a trusted JavaScript workflow, then present the result.
-
-Ask Pi to save repeatable orchestration:
-
-```text
-Create a reusable release-readiness workflow, save it, and run it on this repository.
-```
-
-Saved workflows live in:
-
-- `~/.pi/agent/workflows/*.js` for global workflows
-- `.pi/workflows/*.js` for workflows in trusted projects
-
-Inline workflows can also be resumed by replay: unchanged earlier agent calls reuse their journaled results, while changed or new calls run live.
-
-## Built for real work
-
-| Behavior | What it means |
-| --- | --- |
-| **Background execution** | `Agent` and `workflow` immediately return a compact accepted envelope, then send one correlated terminal notification when the task completes or fails. There is no status polling or steering API. |
-| **Bounded concurrency** | Direct agents and workflow agents share one global concurrency limit; excess work queues until slots become free. |
-| **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles—not hidden per-call overrides. |
-| **Cancellation and timeouts** | Aborts propagate to child processes, and a global timeout prevents stalled subagents from running forever. |
-| **Usage visibility** | Active detail rows show duration and available usage; completed details disappear while the final one-line idle summary retains cumulative tokens, cache hits, and cost. |
-| **Inspectable workflows** | Saved and generated workflows are ordinary JavaScript files with journals, rather than opaque orchestration state. |
-
-Tune runtime guardrails when needed:
-
-```bash
-pi --max-concurrent-subagents 4 --subagent-timeout-ms 600000
-```
-
-Set `--subagent-timeout-ms 0` to disable the timeout.
-
-## Trust and safety
-
-`pi-flow` is designed for trusted development environments:
-
-- Codex profiles run `codex exec` with approvals and sandboxing bypassed.
-- Claude profiles run `claude -p` with permission checks bypassed.
-- Workflow scripts are trusted local code executed by the Pi process; determinism checks are not a security sandbox.
-- Pi-backed children cannot launch nested Pi agents or workflows. External CLIs keep their own native tool surface.
-
-Review third-party profiles and workflows before using them, and run external backends only in repositories you trust.
+- **Asynchronous by default.** Delegation runs in the background while Pi remains available.
+- **Parallel but bounded.** Direct Agents and Workflow children share one concurrency limit.
+- **Multi-backend.** Mix Pi, Codex CLI, and Claude Code through simple profiles.
+- **Real orchestration.** Workflows support parallel stages, pipelines, branching, schemas, saved scripts, and replay.
+- **Resumable specialists.** Reuse a direct Agent's `session_key` to continue its backend conversation.
+- **Visible progress.** Pi's TUI shows active tasks, Workflow child progress, tokens, cache usage, and cost, then collapses to one idle line.
 
 ## Requirements
 
-- A working [Pi](https://github.com/earendil-works/pi) installation
-- [Codex CLI](https://github.com/openai/codex) installed and authenticated for `backend: codex`
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated for `backend: claude`
+- [Pi](https://github.com/earendil-works/pi)
+- Node.js 22.19 or newer
+- [Codex CLI](https://github.com/openai/codex) only for `backend: codex`
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) only for `backend: claude`
 
-Only install the external CLIs you plan to use; Pi-backed subagents work without them.
+Pi-backed specialists require no external CLI.
+
+## Trust and safety
+
+Use external backends and Workflow scripts only in trusted repositories. Codex and Claude profiles bypass their native permission prompts, and Workflow JavaScript runs as trusted local code rather than inside a security sandbox.
 
 ## License
 
