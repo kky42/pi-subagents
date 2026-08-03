@@ -1,0 +1,103 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildFlowStatusLines,
+  createFlowStatusState,
+  MAX_FLOW_STATUS_LINES,
+  recordFlowUsage,
+} from "../src/core/flow-status.ts";
+import type { SubagentTelemetry, SubagentUsage } from "../src/types.ts";
+
+const telemetry: SubagentTelemetry = {
+  tokensKnown: true,
+  costKnown: true,
+  costBreakdownKnown: false,
+};
+
+function usage(input: number, output: number, cacheRead = 0, cost = 0): SubagentUsage {
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite: 0,
+    totalTokens: input + output + cacheRead,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+  };
+}
+
+describe("flow status display", () => {
+  it("renders at most five active lines with fair Agent and Workflow detail", () => {
+    const state = createFlowStatusState();
+    state.tasks = {
+      agent: { finished: 0, total: 4 },
+      workflow: { finished: 0, total: 2 },
+    };
+    for (let index = 0; index < 4; index++) {
+      state.activeAgents.set(`agent-${index}`, {
+        id: `agent-${index}`,
+        name: `task ${index}`,
+        subagentType: index === 0 ? "context-gather" : "expert",
+        backend: index === 0 ? "codex" : "pi",
+        startedAt: index * 1000,
+        eventCount: index + 1,
+      });
+      recordFlowUsage(state, `agent-${index}`, usage(100, 10), telemetry);
+    }
+    for (let index = 0; index < 2; index++) {
+      state.activeWorkflows.set(`workflow-${index}`, {
+        id: `workflow-${index}`,
+        name: `review_${index}`,
+        startedAt: 4000 + index * 1000,
+        finishedAgents: index + 2,
+        totalAgents: 6,
+      });
+      recordFlowUsage(state, `workflow-${index}:agent:1`, usage(200, 20), telemetry);
+    }
+
+    const lines = buildFlowStatusLines(state, 32_000);
+
+    expect(lines).toHaveLength(MAX_FLOW_STATUS_LINES);
+    expect(lines[0]).toBe("pi-flow 4 agents and 2 workflows running · ↑800 ↓80 CH0.0%");
+    expect(lines.some((line) => line.includes("Codex Agent(context-gather: task 0) 32s · 1 event · ↑100 ↓10 CH0.0%"))).toBe(true);
+    expect(lines.filter((line) => line.includes("Workflow("))).toHaveLength(1);
+    expect(lines.at(-1)).toBe("… 2 more agents, 1 more workflow");
+  });
+
+  it("removes active detail in idle state and keeps cumulative usage", () => {
+    const state = createFlowStatusState();
+    state.tasks = {
+      agent: { finished: 6, total: 6 },
+      workflow: { finished: 1, total: 1 },
+    };
+    state.activeAgents.set("stale", {
+      id: "stale",
+      name: "must not render",
+      subagentType: "expert",
+      backend: "pi",
+      startedAt: 0,
+      eventCount: 9,
+    });
+    recordFlowUsage(state, "agent-1", usage(1_000_000, 137_000, 17_000_000, 18.393), telemetry);
+
+    expect(buildFlowStatusLines(state, 50_000)).toEqual([
+      "pi-flow idle · 6 agents and 1 workflow done · ↑1.0M ↓137k R17M CH94.4% $18.393",
+    ]);
+  });
+
+  it("replaces cumulative snapshots for one call instead of double counting", () => {
+    const state = createFlowStatusState();
+    state.tasks = {
+      agent: { finished: 1, total: 1 },
+      workflow: { finished: 0, total: 0 },
+    };
+    recordFlowUsage(state, "agent-1", usage(100, 10), telemetry);
+    recordFlowUsage(state, "agent-1", usage(250, 20), telemetry);
+
+    expect(buildFlowStatusLines(state)).toEqual([
+      "pi-flow idle · 1 agent and 0 workflows done · ↑250 ↓20 CH0.0%",
+    ]);
+  });
+
+  it("stays hidden before the session launches any pi-flow task", () => {
+    expect(buildFlowStatusLines(createFlowStatusState())).toEqual([]);
+  });
+});

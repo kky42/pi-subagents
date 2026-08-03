@@ -23,13 +23,19 @@ import {
   type SessionKeyBinding,
 } from "./core/session-key.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
-import { formatUsage } from "./core/subagent-render.ts";
+import {
+  clearActiveFlowTasks,
+  createFlowStatusState,
+  FLOW_STATUS_KEY,
+  publishFlowStatus,
+  recordFlowUsage,
+  type ActiveAgentStatus,
+} from "./core/flow-status.ts";
 import {
   BackgroundTaskManager,
   TASK_NOTIFICATION_CUSTOM_TYPE,
   taskToolResult,
   type AgentAcceptedTaskEnvelope,
-  type TaskCounts,
   type TerminalTaskEnvelope,
 } from "./core/task-manager.ts";
 import { buildFlowPrompt } from "./prompts.ts";
@@ -50,8 +56,6 @@ const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 12;
 const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
-const STATUS_KEY = "pi-flow";
-
 const AGENT_PROMPT_SNIPPET = "Launch one focused background subagent task";
 
 const agentToolParameters = Type.Object({
@@ -86,15 +90,13 @@ interface DelegationState {
   sessionKeyLocks: SessionKeyLocks;
 }
 
-interface FlowStatusState {
-  calls: Map<string, { usage: SubagentUsage; telemetry: SubagentTelemetry }>;
-  tasks: TaskCounts;
-}
-
 interface CreateAgentToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
+  startAgentStatus: (ctx: ExtensionContext, agent: ActiveAgentStatus) => void;
+  updateAgentProgress: (ctx: ExtensionContext, taskId: string, eventCount: number) => void;
+  finishTaskStatus: (taskId: string) => void;
   updateStatus: (ctx: ExtensionContext, taskId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
 }
 
@@ -173,66 +175,6 @@ function getProfileBackend(subagentType: SubagentType): SubagentBackend | undefi
   return getSubagentProfiles(getAgentDir()).get(subagentType)?.backend;
 }
 
-function createFlowStatusState(): FlowStatusState {
-  return {
-    calls: new Map(),
-    tasks: {
-      agent: { finished: 0, total: 0 },
-      workflow: { finished: 0, total: 0 },
-    },
-  };
-}
-
-function getUsageTotals(state: FlowStatusState): { usage: SubagentUsage; telemetry: SubagentTelemetry } {
-  const usage: SubagentUsage = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  let reasoningReported = false;
-  let costKnown = true;
-  for (const entry of state.calls.values()) {
-    usage.input += entry.usage.input;
-    usage.output += entry.usage.output;
-    usage.cacheRead += entry.usage.cacheRead;
-    usage.cacheWrite += entry.usage.cacheWrite;
-    usage.cost.total += entry.usage.cost.total;
-    if (entry.usage.reasoning !== undefined) {
-      usage.reasoning = (usage.reasoning ?? 0) + entry.usage.reasoning;
-      reasoningReported = true;
-    }
-    costKnown &&= entry.telemetry.costKnown;
-  }
-  if (!reasoningReported) {
-    delete usage.reasoning;
-  }
-  usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-  return {
-    usage,
-    telemetry: { tokensKnown: true, costKnown, costBreakdownKnown: false },
-  };
-}
-
-function publishFlowStatus(ctx: ExtensionContext, state: FlowStatusState): void {
-  if (!ctx.hasUI) {
-    return;
-  }
-  const { agent, workflow } = state.tasks;
-  const totals = getUsageTotals(state);
-  if (agent.total === 0 && workflow.total === 0 && totals.usage.totalTokens === 0 && totals.usage.cost.total === 0) {
-    ctx.ui.setStatus(STATUS_KEY, undefined);
-    return;
-  }
-  const tasks = `[${agent.finished}/${agent.total}] agents [${workflow.finished}/${workflow.total}] workflows`;
-  const usage = totals.usage.totalTokens > 0 || totals.usage.cost.total > 0
-    ? ` ${formatUsage(totals.usage, totals.telemetry)}`
-    : "";
-  ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", `pi-flow ${tasks}${usage}`));
-}
-
 function renderTaskNotification(envelope: TerminalTaskEnvelope, expanded: boolean, theme: Theme): Text {
   const label = envelope.task_type === "agent" ? "Agent" : "Workflow";
   const color = envelope.status === "completed" ? "success" : "error";
@@ -273,51 +215,70 @@ function createAgentTool(
             throw new Error(profile.model ? `Profile model not found: ${profile.model}` : "No model is selected");
           }
 
-          return state.sessionKeyLocks.run(sessionKey, async () => {
-            const binding = getSessionKeyBinding(state, ctx, sessionKey);
-            if (binding) {
-              assertBindingMatchesProfile(binding, { subagentType, backend: profile.backend });
-            }
-            const release = await state.limiter.acquire(signal);
-            try {
-              const spawned = await spawnSubagent({
-                toolCallId: taskId,
-                description: name,
-                prompt: params.prompt,
-                profile,
-                model,
-                thinkingLevel: profile.thinking ?? options.getThinkingLevel(),
-                ctx,
-                signal,
-                timeoutMs: options.getSubagentTimeoutMs(),
-                progressEnabled: false,
-                onProgress: undefined,
-                onUsage: (usage, telemetry) => options.updateStatus(ctx, taskId, usage, telemetry),
-                excludeTools: CHILD_EXCLUDED_TOOLS,
-                sessionId: binding?.sessionId,
-                persistSession: true,
-              });
-              const details = spawned.details as SubagentToolDetails;
-              if (details.sessionId) {
-                rememberSessionKeyBinding(state, ctx, {
-                  key: sessionKey,
-                  sessionId: details.sessionId,
-                  subagentType,
-                  backend: profile.backend,
-                });
-              }
-              signal.throwIfAborted();
-              if (details.status !== "done") {
-                throw new Error(details.error ?? "Subagent failed");
-              }
-              if (!details.sessionId) {
-                throw new Error("Subagent completed without a resumable session ID");
-              }
-              return details.result ?? "";
-            } finally {
-              release();
-            }
+          options.startAgentStatus(ctx, {
+            id: taskId,
+            name,
+            subagentType,
+            backend: profile.backend,
+            startedAt: Date.now(),
+            eventCount: 0,
           });
+          try {
+            return await state.sessionKeyLocks.run(sessionKey, async () => {
+              const binding = getSessionKeyBinding(state, ctx, sessionKey);
+              if (binding) {
+                assertBindingMatchesProfile(binding, { subagentType, backend: profile.backend });
+              }
+              const release = await state.limiter.acquire(signal);
+              try {
+                const spawned = await spawnSubagent({
+                  toolCallId: taskId,
+                  description: name,
+                  prompt: params.prompt,
+                  profile,
+                  model,
+                  thinkingLevel: profile.thinking ?? options.getThinkingLevel(),
+                  ctx,
+                  signal,
+                  timeoutMs: options.getSubagentTimeoutMs(),
+                  progressEnabled: ctx.hasUI,
+                  onProgress: ctx.hasUI
+                    ? (partial) => {
+                        const progress = (partial.details as SubagentToolDetails).progress;
+                        if (progress) {
+                          options.updateAgentProgress(ctx, taskId, progress.activityCount);
+                        }
+                      }
+                    : undefined,
+                  onUsage: (usage, telemetry) => options.updateStatus(ctx, taskId, usage, telemetry),
+                  excludeTools: CHILD_EXCLUDED_TOOLS,
+                  sessionId: binding?.sessionId,
+                  persistSession: true,
+                });
+                const details = spawned.details as SubagentToolDetails;
+                if (details.sessionId) {
+                  rememberSessionKeyBinding(state, ctx, {
+                    key: sessionKey,
+                    sessionId: details.sessionId,
+                    subagentType,
+                    backend: profile.backend,
+                  });
+                }
+                signal.throwIfAborted();
+                if (details.status !== "done") {
+                  throw new Error(details.error ?? "Subagent failed");
+                }
+                if (!details.sessionId) {
+                  throw new Error("Subagent completed without a resumable session ID");
+                }
+                return details.result ?? "";
+              } finally {
+                release();
+              }
+            });
+          } finally {
+            options.finishTaskStatus(taskId);
+          }
         },
       });
       return taskToolResult(accepted);
@@ -404,6 +365,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     };
     const createTaskManager = () => new BackgroundTaskManager({
       notify: (envelope) => {
+        statusState.activeAgents.delete(envelope.task_id);
+        statusState.activeWorkflows.delete(envelope.task_id);
         if (notificationSessionManager) {
           persistTaskNotification(notificationSessionManager, envelope);
           return;
@@ -441,15 +404,67 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       );
       return rootState;
     };
+    const refreshStatus = (ctx: ExtensionContext) => {
+      statusContext = ctx;
+      publishFlowStatus(ctx, statusState);
+    };
+    const startAgentStatus = (ctx: ExtensionContext, agent: ActiveAgentStatus) => {
+      statusState.activeAgents.set(agent.id, agent);
+      refreshStatus(ctx);
+    };
+    const updateAgentProgress = (ctx: ExtensionContext, taskId: string, eventCount: number) => {
+      const agent = statusState.activeAgents.get(taskId);
+      if (agent) {
+        agent.eventCount = eventCount;
+      }
+      refreshStatus(ctx);
+    };
+    const startWorkflowStatus = (ctx: ExtensionContext, taskId: string, name: string) => {
+      statusState.activeWorkflows.set(taskId, {
+        id: taskId,
+        name,
+        startedAt: Date.now(),
+        finishedAgents: 0,
+        totalAgents: 0,
+      });
+      refreshStatus(ctx);
+    };
+    const renameWorkflowStatus = (ctx: ExtensionContext, taskId: string, name: string) => {
+      const workflow = statusState.activeWorkflows.get(taskId);
+      if (workflow) {
+        workflow.name = name;
+      }
+      refreshStatus(ctx);
+    };
+    const queueWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
+      const workflow = statusState.activeWorkflows.get(taskId);
+      if (workflow) {
+        workflow.totalAgents++;
+      }
+      refreshStatus(ctx);
+    };
+    const startCachedWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
+      queueWorkflowAgent(ctx, taskId);
+    };
+    const finishWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
+      const workflow = statusState.activeWorkflows.get(taskId);
+      if (workflow) {
+        workflow.finishedAgents++;
+      }
+      refreshStatus(ctx);
+    };
+    const finishTaskStatus = (taskId: string) => {
+      statusState.activeAgents.delete(taskId);
+      statusState.activeWorkflows.delete(taskId);
+    };
     const updateStatus = (
       ctx: ExtensionContext,
       taskId: string,
       usage: SubagentUsage,
       telemetry: SubagentTelemetry,
     ) => {
-      statusContext = ctx;
-      statusState.calls.set(taskId, { usage, telemetry });
-      publishFlowStatus(ctx, statusState);
+      recordFlowUsage(statusState, taskId, usage, telemetry);
+      refreshStatus(ctx);
     };
 
     pi.registerMessageRenderer<TerminalTaskEnvelope>(TASK_NOTIFICATION_CUSTOM_TYPE, (message, { expanded }, theme) => {
@@ -460,6 +475,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       getTaskManager,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
+      startAgentStatus,
+      updateAgentProgress,
+      finishTaskStatus,
       updateStatus,
     }));
     if (workflowEnabled) {
@@ -469,6 +487,15 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           getLimiter: () => syncRuntimeOptions().limiter,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
+          status: {
+            start: startWorkflowStatus,
+            rename: renameWorkflowStatus,
+            queueAgent: queueWorkflowAgent,
+            startCachedAgent: startCachedWorkflowAgent,
+            finishAgent: finishWorkflowAgent,
+            refresh: refreshStatus,
+            finish: finishTaskStatus,
+          },
           updateStatus,
         }),
       );
@@ -486,9 +513,11 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       statusState.calls.clear();
+      clearActiveFlowTasks(statusState);
       statusState.tasks = getTaskManager().getCounts();
       if (ctx.hasUI) {
-        ctx.ui.setStatus(STATUS_KEY, undefined);
+        ctx.ui.setStatus(FLOW_STATUS_KEY, undefined);
+        ctx.ui.setWidget(FLOW_STATUS_KEY, undefined);
       }
     });
 
@@ -530,6 +559,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       statusState.calls.clear();
+      clearActiveFlowTasks(statusState);
       statusState.tasks = taskManager.getCounts();
       publishFlowStatus(ctx, statusState);
     });
@@ -551,8 +581,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       } finally {
         notificationSessionManager = undefined;
       }
+      clearActiveFlowTasks(statusState);
       if (ctx.hasUI) {
-        ctx.ui.setStatus(STATUS_KEY, undefined);
+        ctx.ui.setStatus(FLOW_STATUS_KEY, undefined);
+        ctx.ui.setWidget(FLOW_STATUS_KEY, undefined);
       }
       statusContext = undefined;
     });

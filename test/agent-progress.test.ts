@@ -138,12 +138,52 @@ describe("pi-subagent background progress and status", () => {
     disposeSession(session);
   });
 
+  it("publishes active and idle widget lines through RPC mode", async () => {
+    const childGate = deferred();
+    const widgets: Array<{ lines: string[] | undefined; placement: string | undefined }> = [];
+    const { session, registration } = await createSession({
+      mode: "rpc",
+      onWidget: (_key, lines, placement) => widgets.push({ lines, placement }),
+    });
+    setContextRoutingResponses(registration, async (context) => {
+      const serialized = JSON.stringify(context.messages);
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        await childGate.promise;
+        return fauxAssistantMessage("rpc child done");
+      }
+      if (!serialized.includes('"toolName":"Agent"')) {
+        return fauxAssistantMessage([
+          fauxToolCall("Agent", { description: "RPC child", prompt: "Wait for release." }),
+        ], { stopReason: "toolUse" });
+      }
+      return fauxAssistantMessage(serialized.includes("rpc child done") ? "notification handled" : "task launched");
+    });
+
+    await session.prompt("Launch one RPC background task.");
+    await waitUntil(() => widgets.some((widget) =>
+      widget.lines?.some((line) => line.includes("Pi Agent(general-purpose: RPC child)")) === true));
+    childGate.resolve();
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as any;
+    await waitForTaskNotification(session, accepted.details.task_id);
+    await session.waitForIdle();
+
+    const active = widgets.find((widget) =>
+      widget.lines?.some((line) => line.includes("Pi Agent(general-purpose: RPC child)")));
+    expect(active?.placement).toBe("belowEditor");
+    expect(active?.lines?.length).toBeLessThanOrEqual(5);
+    expect(widgets.at(-1)?.lines).toHaveLength(1);
+    expect(widgets.at(-1)?.lines?.[0]).toContain("pi-flow idle · 1 agent and 0 workflows done");
+    disposeSession(session);
+  });
+
   it("steers one completion after an active root tool batch", async () => {
     const childGate = deferred();
     const toolBatchStarted = deferred();
     const finishToolBatch = deferred();
     const taskFinished = deferred();
     const terminalDelivered = deferred();
+    const widgets: string[][] = [];
     const toolExtension: ExtensionFactory = (pi) => {
       pi.registerTool({
         name: "active_gate",
@@ -163,8 +203,11 @@ describe("pi-subagent background progress and status", () => {
     const { session, registration } = await createSession({
       mode: "tui",
       extensionFactories: [toolExtension],
-      onStatus: (_key, text) => {
-        if (text?.includes("[1/1] agents")) {
+      onWidget: (_key, lines) => {
+        if (lines) {
+          widgets.push(lines);
+        }
+        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
           taskFinished.resolve();
         }
       },
@@ -209,6 +252,9 @@ describe("pi-subagent background progress and status", () => {
     await toolBatchStarted.promise;
     childGate.resolve();
     await taskFinished.promise;
+    expect(widgets.some((lines) => lines.some((line) => line.includes("Pi Agent(general-purpose: Active batch child)")))).toBe(true);
+    expect(widgets.at(-1)).toHaveLength(1);
+    expect(widgets.at(-1)?.[0]).toContain("pi-flow idle · 1 agent and 0 workflows done");
     expect((session as any).agent.hasQueuedMessages()).toBe(true);
     expect(taskNotifications(session)).toHaveLength(0);
     finishToolBatch.resolve();
@@ -233,8 +279,8 @@ describe("pi-subagent background progress and status", () => {
     const taskFinished = deferred();
     const { session, registration, sessionManager } = await createSession({
       mode: "tui",
-      onStatus: (_key, text) => {
-        if (text?.includes("[1/1] agents")) {
+      onWidget: (_key, lines) => {
+        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
           taskFinished.resolve();
         }
       },
@@ -298,8 +344,8 @@ describe("pi-subagent background progress and status", () => {
     const terminalDelivered = deferred();
     const { session, registration } = await createSession({
       mode: "tui",
-      onStatus: (_key, text) => {
-        if (text?.includes("[1/1] agents")) {
+      onWidget: (_key, lines) => {
+        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
           taskFinished.resolve();
         }
       },
@@ -406,8 +452,8 @@ describe("pi-subagent background progress and status", () => {
     const { session, registration } = await createSession({
       mode: "tui",
       extensionFactories: [toolExtension],
-      onStatus: (_key, text) => {
-        if (text?.includes("[1/1] agents")) {
+      onWidget: (_key, lines) => {
+        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
           taskFinished.resolve();
         }
       },
@@ -840,14 +886,14 @@ describe("pi-subagent background progress and status", () => {
     disposeSession(session);
   });
 
-  it("shows compact task counters and cumulative usage in the footer", async () => {
+  it("shows idle task totals and cumulative usage in the widget", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const statuses: Array<{ key: string; text: string | undefined }> = [];
+    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const context = makeExecutionContext({
       hasUI: true,
       model,
       modelRegistry,
-      onStatus: (key, text) => statuses.push({ key, text }),
+      onWidget: (key, lines) => widgets.push({ key, lines }),
     });
 
     await executeAgentTask(
@@ -858,9 +904,9 @@ describe("pi-subagent background progress and status", () => {
       async () => fauxAssistantMessage("usage child done"),
     );
 
-    const footer = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
-    expect(footer).toContain("pi-flow [1/1] agents [0/0] workflows");
-    expect(footer).toMatch(/↑\S+ ↓\S+ (?:R\S+ |W\S+ )*CH\d+\.\d%/);
+    const line = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
+    expect(line).toContain("pi-flow idle · 1 agent and 0 workflows done");
+    expect(line).toMatch(/↑\S+ ↓\S+ (?:R\S+ |W\S+ )*CH\d+\.\d%/);
     disposeSession(session);
   });
 });

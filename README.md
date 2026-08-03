@@ -17,7 +17,8 @@ Agent Inspect auth accepted task_...
 Workflow review_project accepted task_...
 ✓ Agent Inspect auth task_...
 
-pi-flow [1/1] agents [0/1] workflows ↑210k ↓22k R4.9M CH95.9% $0.167
+pi-flow 0 agents and 1 workflow running · ↑210k ↓22k R4.9M CH95.9% $0.167
+⠋ Workflow(review_project) 18s · 2/4 agents · ↑180k ↓19k R4.1M
 ```
 
 ## One coordinator, many specialists
@@ -101,7 +102,7 @@ The lower-level `@kky42/pi-flow/runtime` export remains available for consumers 
 
 - **Use the right model for each lane.** A single task can combine different models, harnesses, prompts, and toolsets.
 - **Work in parallel.** Fan out repository exploration, research, review, or migration analysis while keeping one coordinator.
-- **Keep delegation visible.** Pi's footer shows completed and total Agent/Workflow tasks alongside cumulative child tokens, cache hits, and cost.
+- **Keep delegation visible.** Pi's activity widget shows active Agent/Workflow tasks alongside cumulative child tokens, cache hits, and cost, then collapses to one idle summary line when they finish.
 - **Continue a specialist when needed.** Every direct Agent returns a `session_key`; reuse it to continue the same backend conversation for review-and-revise loops.
 - **Reuse successful orchestration.** Save trusted workflows globally or per project and invoke them later by name.
 - **Stay harness-native.** Pi children use Pi tools; Codex and Claude children use their own CLI capabilities.
@@ -231,7 +232,7 @@ Inline workflows can also be resumed with `resumeFromTaskId`: unchanged earlier 
 | **Bounded concurrency** | Direct agents and workflow agents share one global concurrency limit; excess work queues internally and drains as slots free. |
 | **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles, not hidden per-call overrides. |
 | **Session-scoped lifecycle** | Background work survives the launching turn, stops with its owning Pi session, and remains bounded by the global timeout. |
-| **Compact visibility** | The footer shows completed/total Agent and Workflow counts plus cumulative input/output tokens, cache hit rate, and cost. |
+| **Compact visibility** | A five-line activity widget shows active Agent and Workflow details plus cumulative input/output tokens, cache hit rate, and cost, then collapses to one idle summary line. |
 | **Inspectable workflows** | Saved and generated workflows remain ordinary JavaScript files with task journals that retain workflow logs and agent failure details. |
 
 Tune runtime guardrails when needed:

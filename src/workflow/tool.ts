@@ -25,11 +25,22 @@ import {
   type WorkflowToolParams,
 } from "./source.ts";
 
+interface WorkflowStatusCallbacks {
+  start(ctx: ExtensionContext, taskId: string, name: string): void;
+  rename(ctx: ExtensionContext, taskId: string, name: string): void;
+  queueAgent(ctx: ExtensionContext, taskId: string): void;
+  startCachedAgent(ctx: ExtensionContext, taskId: string): void;
+  finishAgent(ctx: ExtensionContext, taskId: string): void;
+  refresh(ctx: ExtensionContext): void;
+  finish(taskId: string): void;
+}
+
 export interface CreateWorkflowToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
+  status?: WorkflowStatusCallbacks;
   updateStatus: (ctx: ExtensionContext, taskId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
 }
 
@@ -48,63 +59,77 @@ export function createWorkflowTool(
         taskType: "workflow",
         name: initialWorkflowName(params),
         run: async (signal, taskId) => {
-          const prepared = await prepareWorkflowToolSource(params, ctx, taskId, (resumeTaskId) =>
-            taskManager.isActive(resumeTaskId));
-          if (!prepared.ok) {
-            throw new Error(prepared.details.error);
-          }
-
-          const {
-            script,
-            metaName,
-            journalWriter,
-            resumeAgentResults,
-          } = prepared.value;
-          const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-          const runner = createWorkflowAgentRunner({
-            profiles,
-            ctx,
-            thinkingLevel: options.getThinkingLevel(),
-            timeoutMs: options.getSubagentTimeoutMs(),
-            toolCallId: taskId,
-            onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:agent:${index}`, usage, telemetry),
-          });
-
+          options.status?.start(ctx, taskId, initialWorkflowName(params));
           try {
-            const result = await runWorkflow(script, {
-              args: params.args,
-              cwd: ctx.cwd,
-              signal,
-              limiter: options.getLimiter(),
-              serializeAgent: runner.serializeAgent,
-              runAgent: runner.runAgent,
+            const prepared = await prepareWorkflowToolSource(params, ctx, taskId, (resumeTaskId) =>
+              taskManager.isActive(resumeTaskId));
+            if (!prepared.ok) {
+              throw new Error(prepared.details.error);
+            }
+
+            const {
+              script,
+              metaName,
+              journalWriter,
               resumeAgentResults,
-              onLog: (message) => {
-                if (journalWriter) {
-                  void journalWriter.appendLog(message).catch(() => {});
-                }
-              },
-              onAgentResult: async (event) => {
-                runner.restoreSessionBinding(event);
-                await journalWriter?.appendAgentResult(event);
-              },
+            } = prepared.value;
+            options.status?.rename(ctx, taskId, metaName);
+            const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
+            const runner = createWorkflowAgentRunner({
+              profiles,
+              ctx,
+              thinkingLevel: options.getThinkingLevel(),
+              timeoutMs: options.getSubagentTimeoutMs(),
+              toolCallId: taskId,
+              onProgress: ctx.hasUI && options.status ? () => options.status?.refresh(ctx) : undefined,
+              onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:agent:${index}`, usage, telemetry),
             });
+
             try {
-              await journalWriter?.complete(result.result);
-            } catch {
-              // A completed workflow result remains valid when only replay journaling fails.
+              const result = await runWorkflow(script, {
+                args: params.args,
+                cwd: ctx.cwd,
+                signal,
+                limiter: options.getLimiter(),
+                serializeAgent: runner.serializeAgent,
+                runAgent: runner.runAgent,
+                resumeAgentResults,
+                onAgentQueued: () => options.status?.queueAgent(ctx, taskId),
+                onAgentStart: (event) => {
+                  if (event.cached) {
+                    options.status?.startCachedAgent(ctx, taskId);
+                  }
+                },
+                onAgentEnd: () => options.status?.finishAgent(ctx, taskId),
+                onLog: (message) => {
+                  if (journalWriter) {
+                    void journalWriter.appendLog(message).catch(() => {});
+                  }
+                },
+                onAgentResult: async (event) => {
+                  runner.restoreSessionBinding(event);
+                  await journalWriter?.appendAgentResult(event);
+                },
+              });
+              try {
+                await journalWriter?.complete(result.result);
+              } catch {
+                // A completed workflow result remains valid when only replay journaling fails.
+              }
+              return {
+                name: result.meta.name,
+                content: workflowContent(result.result),
+              };
+            } catch (error) {
+              try {
+                await journalWriter?.fail(error instanceof Error ? error.message : String(error));
+              } catch {
+                // Preserve the execution failure as the terminal task result.
+              }
+              throw error;
             }
-            return {
-              name: result.meta.name,
-              content: workflowContent(result.result),
-            };
-          } catch (error) {
-            try {
-              await journalWriter?.fail(error instanceof Error ? error.message : String(error));
-            } catch {
-              // Preserve the execution failure as the terminal task result.
-            }
-            throw error;
+          } finally {
+            options.status?.finish(taskId);
           }
         },
       });

@@ -51,7 +51,7 @@
 - The outer `workflow` tool is always a background task and immediately returns the same compact accepted envelope as Agent, without `session_key`. Its script still awaits internal `agent()` dependencies normally and emits one outer terminal notification. Internal agents do not notify the foreground individually. There is no model-facing polling, steering, or scheduling. Per-call model/thinking override remains out of contract; profile-based selection via `subagent_type` is the supported path.
 - Nesting is hard-blocked for pi-backed workflow subagents: they get neither `Agent` nor `workflow`. External CLI backends use their own tool surface; this extension does not try to prevent nested/delegation features inside those CLIs.
 - Do not put exact concurrency values in model-facing workflow text; the workflow tool description may state that fan-out is bounded and queued.
-- Architecture: `src/core/{spawn,concurrency,model,progress,stream,task-manager}.ts` is the shared core; `src/workflow/{runtime,tool,structured-output,output-schema}.ts` is the workflow layer; `src/pi-subagent.ts` wires both tools, one task manager, one limiter, notifications, print-mode draining, and the compact footer.
+- Architecture: `src/core/{spawn,concurrency,flow-status,model,progress,stream,task-manager}.ts` is the shared core; `src/workflow/{runtime,tool,structured-output,output-schema}.ts` is the workflow layer; `src/pi-subagent.ts` wires both tools, one task manager, one limiter, notifications, print-mode draining, and the compact activity widget.
 - The throttled progress-emit + heartbeat machinery lives ONCE in `progress.ts` as `createProgressEmitter` and is shared by all three backends (`spawn.ts` pi, `codex.ts`, `claude.ts`); do not re-inline per-backend copies. The queued→running and abort emit timing is owned by that emitter.
 - External-CLI backends bound parent-side child output via `createBoundedBuffer` (`stream.ts`): stderr is capped (`MAX_STDERR_CHARS`) and a single newline-free stdout line over `MAX_STDOUT_LINE_CHARS` aborts/fails the run clearly, so one runaway subagent cannot OOM the host pi process. A clean exit (code 0) with usable final text but no recognized terminal event is accepted rather than failed, so a CLI stream-format change does not turn good runs into failures.
 
@@ -100,7 +100,8 @@
 
 Interactive tmux TUI runs use `deepseek/deepseek-v4-flash` with high thinking and isolated `--no-*` resource flags.
 
-- `background-ui`: validated immediate accepted receipts, independent root turns, correlated terminal notifications, and footer transitions from `[2/3] agents [1/1] workflows` to `[3/3] agents [1/1] workflows` in an interactive tmux run.
+- `background-ui`: validated immediate accepted receipts, independent root turns, and correlated terminal notifications in an interactive tmux run.
+- `activity-widget`: a real Pi 0.83.0 TUI run with DeepSeek launched four Agents and two Workflows. The active widget stayed within five lines, removed each completed task's detail immediately, updated cumulative child usage while other tasks remained active, and collapsed to one idle line. A real RPC run emitted matching `setWidget` active/idle payloads with `belowEditor` placement, one terminal notification, and no stderr.
 - `width`: previously validated eight parallel foreground delegations under the old contract.
 - `proactive-multirepo-v3`: validated two-repo parallel Agent fan-out under the previous routing contract.
 - `proactive-fanout-v3`: validated three-lane TODO/FIXME/skipped-test Agent fan-out under the previous routing contract.

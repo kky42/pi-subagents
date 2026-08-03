@@ -476,7 +476,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
     expect(result.details.error).toContain("without a newline");
   });
 
-  it("renders priced Codex usage above 272K in the Agent status line", async () => {
+  it("renders priced Codex usage above 272K in the Agent widget", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-tiered-cost");
     mkdirSync(subagentsDir, { recursive: true });
@@ -499,7 +499,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
 
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("Agent") as any;
-    const statuses: Array<{ key: string; text: string | undefined }> = [];
+    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-tiered-cost",
       {
@@ -513,21 +513,21 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
         hasUI: true,
         model,
         modelRegistry,
-        onStatus: (key, text) => statuses.push({ key, text }),
+        onWidget: (key, lines) => widgets.push({ key, lines }),
       }),
     );
 
     const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
     expect(accepted).not.toHaveProperty("usage");
     expect(terminal).toMatchObject({ status: "completed", content: "tiered model done" });
-    const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
+    const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
     expect(final).toContain("$2.720");
     expect(final).not.toContain("$?");
 
     disposeSession(session);
   });
 
-  it("marks unknown codex model cost in the status line", async () => {
+  it("marks unknown codex model cost in the widget", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-unknown-cost");
     mkdirSync(subagentsDir, { recursive: true });
@@ -551,7 +551,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("Agent") as any;
-    const statuses: Array<{ key: string; text: string | undefined }> = [];
+    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-unknown-cost",
       {
@@ -565,15 +565,15 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
         hasUI: true,
         model,
         modelRegistry,
-        onStatus: (key, text) => statuses.push({ key, text }),
+        onWidget: (key, lines) => widgets.push({ key, lines }),
       }),
     );
 
     const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
     expect(accepted).not.toHaveProperty("usage");
     expect(terminal).toMatchObject({ status: "completed", content: "unknown model done" });
-    const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
-    expect(final).toContain("pi-flow [1/1] agents [0/0] workflows ↑800 ↓50 R200");
+    const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
+    expect(final).toContain("pi-flow idle · 1 agent and 0 workflows done · ↑800 ↓50 R200");
     expect(final).toContain("$?");
 
     disposeSession(session);
@@ -604,12 +604,12 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("Agent") as any;
-    const statuses: Array<{ key: string; text: string | undefined }> = [];
+    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const context = makeExecutionContext({
       hasUI: true,
       model,
       modelRegistry,
-      onStatus: (key, text) => statuses.push({ key, text }),
+      onWidget: (key, lines) => widgets.push({ key, lines }),
     });
 
     const first = await tool.execute(
@@ -629,8 +629,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     );
     await waitForTaskNotification(session, second.details.task_id, 5000);
 
-    const final = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
-    expect(final).toContain("pi-flow [2/2] agents [0/0] workflows ↑1.0k ↓20 R1.0k CH50.0%");
+    const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
+    expect(final).toContain("pi-flow idle · 2 agents and 0 workflows done · ↑1.0k ↓20 R1.0k CH50.0%");
 
     disposeSession(session);
   });

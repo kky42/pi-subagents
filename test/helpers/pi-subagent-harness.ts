@@ -42,6 +42,7 @@ type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type CreateSessionOptions = {
   extensionFactories?: ExtensionFactory[];
   onStatus?: (key: string, text: string | undefined) => void;
+  onWidget?: (key: string, lines: string[] | undefined, placement: string | undefined) => void;
   maxConcurrentSubagents?: number;
   maxConcurrentSubagentsFlag?: string;
   subagentTimeoutMs?: number;
@@ -171,6 +172,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     const {
       extensionFactories = [],
       onStatus,
+      onWidget,
       maxConcurrentSubagents,
       maxConcurrentSubagentsFlag,
       subagentTimeoutMs,
@@ -229,9 +231,27 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       resourceLoader,
     });
     trackSession(session);
-    const uiContext = onStatus
+    const uiContext = onStatus || onWidget
       ? Object.create(session.extensionRunner.getUIContext(), {
-          setStatus: { value: onStatus },
+          setStatus: { value: onStatus ?? (() => {}) },
+          setWidget: {
+            value: (key: string, content: unknown, options?: { placement?: string }) => {
+              if (!onWidget) return;
+              if (content === undefined) {
+                onWidget(key, undefined, options?.placement);
+                return;
+              }
+              if (Array.isArray(content)) {
+                onWidget(key, content as string[], options?.placement);
+                return;
+              }
+              const component = (content as (tui: unknown, theme: ReturnType<typeof makeMockTheme>) => { render: (width: number) => string[] })(
+                { requestRender() {} },
+                makeMockTheme(),
+              );
+              onWidget(key, component.render(200), options?.placement);
+            },
+          },
           theme: { value: makeMockTheme() },
         })
       : undefined;
@@ -370,6 +390,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     modelRegistry,
     tui = false,
     onStatus,
+    onWidget,
     projectTrusted = false,
     persistedSession = false,
     sessionManager,
@@ -379,6 +400,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     modelRegistry: ModelRegistry;
     tui?: boolean;
     onStatus?: (key: string, text: string | undefined) => void;
+    onWidget?: (key: string, lines: string[] | undefined, placement: string | undefined) => void;
     projectTrusted?: boolean;
     persistedSession?: boolean;
     sessionManager?: SessionManager;
@@ -402,6 +424,8 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       ui: {
         getAllThemes: () => (tui ? [{ name: "test", path: "test-theme.json" }] : []),
         setStatus: (key: string, text: string | undefined) => onStatus?.(key, text),
+        setWidget: (key: string, lines: string[] | undefined, options?: { placement?: string }) =>
+          onWidget?.(key, lines, options?.placement),
         theme,
       },
     };

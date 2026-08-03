@@ -124,10 +124,10 @@ describe("pi-subagent workflow integration", () => {
     disposeSession(session);
   });
 
-  it("shows completed Workflow counts and child usage in the footer", async () => {
+  it("shows completed Workflow counts and child usage in the widget", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     registration.setResponses([fauxAssistantMessage("workflow usage done")]);
-    const statuses: Array<{ key: string; text: string | undefined }> = [];
+    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const script = `export const meta = { name: 'footer_flow', description: 'Footer flow' };\nreturn await agent('report usage', { label: 'usage' });`;
 
     await executeWorkflow(
@@ -137,13 +137,16 @@ describe("pi-subagent workflow integration", () => {
         hasUI: true,
         model,
         modelRegistry,
-        onStatus: (key, text) => statuses.push({ key, text }),
+        onWidget: (key, lines) => widgets.push({ key, lines }),
       }),
     );
 
-    const footer = statuses.filter((status) => status.key === "pi-flow").at(-1)?.text ?? "";
-    expect(footer).toContain("pi-flow [0/0] agents [1/1] workflows");
-    expect(footer).toMatch(/↑\S+ ↓\S+ (?:R\S+ |W\S+ )*CH\d+\.\d%/);
+    const flowWidgets = widgets.filter((widget) => widget.key === "pi-flow");
+    expect(flowWidgets.some((widget) => widget.lines?.some((line) => line.includes("Workflow(footer_flow)")))).toBe(true);
+    expect(flowWidgets.at(-1)?.lines).toHaveLength(1);
+    const line = flowWidgets.at(-1)?.lines?.[0] ?? "";
+    expect(line).toContain("pi-flow idle · 0 agents and 1 workflow done");
+    expect(line).toMatch(/↑\S+ ↓\S+ (?:R\S+ |W\S+ )*CH\d+\.\d%/);
     disposeSession(session);
   });
 
