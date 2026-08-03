@@ -25,7 +25,7 @@ Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI*
 | **`Agent`** | One focused, resumable specialist or several independent specialists in parallel. |
 | **`workflow`** | Parallel or staged child agents, branching, structured results, saved orchestration, and replay. |
 
-Every call routes through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
+Every subagent runs through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
 
 ## Get started in 30 seconds
 
@@ -90,8 +90,8 @@ Inspect the UI and recommend specific improvements.
 
 - [Pi](https://github.com/earendil-works/pi)
 - Node.js 22.19 or newer
-- [Codex CLI](https://github.com/openai/codex) only for `backend: codex`
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) only for `backend: claude`
+- [Codex CLI](https://github.com/openai/codex), installed and authenticated only for `backend: codex`
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), installed and authenticated only for `backend: claude`
 
 Pi-backed specialists require no external CLI.
 

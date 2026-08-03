@@ -209,7 +209,7 @@ describe("pi-subagent background concurrency", () => {
     await waitUntil(() => widgets.some((lines) =>
       lines?.includes("◌ Pi Agent(general-purpose: Queued) queued") === true));
 
-    await session.extensionRunner.emit({ type: "session_shutdown", reason: "shutdown" });
+    await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 
     expect(widgets.at(-1)).toBeUndefined();
     expect(widgets.slice(-2).some((lines) => lines?.some((line) => line.includes("queued")))).toBe(false);
