@@ -232,7 +232,7 @@ Inline workflows can also be resumed with `resumeFromTaskId`: unchanged earlier 
 | **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles, not hidden per-call overrides. |
 | **Session-scoped lifecycle** | Background work survives the launching turn, stops with its owning Pi session, and remains bounded by the global timeout. |
 | **Compact visibility** | The footer shows completed/total Agent and Workflow counts plus cumulative input/output tokens, cache hit rate, and cost. |
-| **Inspectable workflows** | Saved and generated workflows remain ordinary JavaScript files with task journals that retain workflow logs and agent failure details. Nonfatal agent failures also appear as warnings in the terminal result. |
+| **Inspectable workflows** | Saved and generated workflows remain ordinary JavaScript files with task journals that retain workflow logs and agent failure details. |
 
 Tune runtime guardrails when needed:
 

@@ -242,8 +242,7 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
       makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }),
     );
 
-    expect(notification).toMatchObject({ status: "completed", name: "slow-flow" });
-    expect(notification.content).toMatch(/null[\s\S]*workflow warnings:[\s\S]*(timed out|timeout)/i);
+    expect(notification).toMatchObject({ status: "completed", name: "slow-flow", content: "null" });
     expect(Date.now() - started).toBeGreaterThanOrEqual(20);
     const entries = readFileSync(
       join(workflowStateDir(tempDir), `task-${accepted.task_id}.jsonl`),
@@ -279,9 +278,10 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
     await waitUntil(() => childStarted || undefined);
     await session.reload();
 
-    const terminal = sessionManager.getEntries().find((entry: any) =>
-      entry.type === "custom_message" && entry.details?.task_id === accepted.task_id)?.details;
-    expect(terminal).toMatchObject({ status: "failed", content: "Pi session shut down" });
+    const terminalEntry = sessionManager.getEntries().find((entry) =>
+      entry.type === "custom_message" && entry.customType === TASK_NOTIFICATION_TYPE);
+    const terminal = terminalEntry?.type === "custom_message" ? terminalEntry.details : undefined;
+    expect(terminal).toMatchObject({ status: "failed", task_id: accepted.task_id, content: "Pi session shut down" });
     expect(taskNotifications(session).find((item) => item.task_id === accepted.task_id)).toBeUndefined();
     expect(rootNotificationCalls).toBe(0);
     disposeSession(session);

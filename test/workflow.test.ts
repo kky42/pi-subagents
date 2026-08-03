@@ -268,7 +268,7 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
     const completed: string[] = [];
     await expect(
       runWorkflow(
-        `${META}agent('a', { label: 'a' }).then(() => agent('b', { label: 'b' }).then(() => log('b done')));\nreturn 'early';`,
+        `${META}agent('a', { label: 'a' }).then(() => agent('b', { label: 'b' }).then(() => log('b done'))).catch(() => {});\nreturn 'early';`,
         {
           cwd: "/tmp",
           limiter: new ConcurrencyLimiter(4),

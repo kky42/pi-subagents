@@ -69,7 +69,6 @@ export function createWorkflowTool(
             toolCallId: taskId,
             onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:agent:${index}`, usage, telemetry),
           });
-          const warnings: string[] = [];
 
           try {
             const result = await runWorkflow(script, {
@@ -87,9 +86,6 @@ export function createWorkflowTool(
               },
               onAgentResult: async (event) => {
                 runner.restoreSessionBinding(event);
-                if (event.error) {
-                  warnings.push(`agent ${event.label} failed: ${event.error}`);
-                }
                 await journalWriter?.appendAgentResult(event);
               },
             });
@@ -100,7 +96,7 @@ export function createWorkflowTool(
             }
             return {
               name: result.meta.name,
-              content: workflowContent(result.result, warnings),
+              content: workflowContent(result.result),
             };
           } catch (error) {
             try {
@@ -150,10 +146,6 @@ function initialWorkflowName(params: WorkflowToolParams): string {
   return "workflow";
 }
 
-function workflowContent(result: unknown, warnings: string[]): string {
-  const content = typeof result === "string" ? result : JSON.stringify(result) ?? "null";
-  if (warnings.length === 0) {
-    return content;
-  }
-  return `${content}\n\nWorkflow warnings:\n${warnings.join("\n")}`;
+function workflowContent(result: unknown): string {
+  return typeof result === "string" ? result : JSON.stringify(result) ?? "null";
 }

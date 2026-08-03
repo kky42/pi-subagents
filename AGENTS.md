@@ -70,7 +70,7 @@
 - The root prompt includes the complete effective saved-workflow roster (`name`, `description`) with no count or description truncation and shows an explicit empty roster when none exist. Put both summary and “when to use” routing guidance in `description`; do not include script bodies in the prompt.
 - Inline workflow tasks auto-persist their script under the current persisted session's workflow directory. Public task results do not expose script paths or journal paths.
 - Workflow `task_id` is also its replay and journal identity. `workflow({ resumeFromTaskId, args })` replays the persisted script; adding `scriptPath` permits an edited script. Successful cached agent results are reused for the longest unchanged prefix, then execution continues live. Cached fingerprints include prompt, label, phase, `subagent_type`, `session_key` when present, and schema; journals retain backend-native IDs for keyed continuation.
-- Replay rejects a source task only while that task remains active. A journal still marked `running` after its task is no longer active is recoverable. Journals retain workflow logs and agent failure details, and successful workflows surface nonfatal agent failures as terminal warnings.
+- Replay rejects a source task only while that task remains active. A journal still marked `running` after its task is no longer active is recoverable. Journals retain workflow logs and agent failure details without changing successful Workflow terminal content.
 - No status polling, steering, dynamic command registration, nested workflow calls, model override, or worktree isolation is provided.
 
 ## CI and release workflow

@@ -356,9 +356,9 @@ describe("pi-subagent background progress and status", () => {
 
     await session.extensionRunner.emit({ type: "session_shutdown", reason: "new" });
     expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([]);
-    expect(sessionManager.getEntries().find((entry: any) =>
-      entry.type === "custom_message" && entry.details?.task_id === oldAccepted.details.task_id)?.details,
-    ).toMatchObject({
+    const terminalEntry = sessionManager.getEntries().find((entry) =>
+      entry.type === "custom_message" && entry.customType === "pi-flow-task-notification");
+    expect(terminalEntry?.type === "custom_message" ? terminalEntry.details : undefined).toMatchObject({
       status: "failed",
       task_id: oldAccepted.details.task_id,
       content: "Pi session shut down",
