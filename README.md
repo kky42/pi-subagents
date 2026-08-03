@@ -102,7 +102,7 @@ The lower-level `@kky42/pi-flow/runtime` export remains available for consumers 
 
 - **Use the right model for each lane.** A single task can combine different models, harnesses, prompts, and toolsets.
 - **Work in parallel.** Fan out repository exploration, research, review, or migration analysis while keeping one coordinator.
-- **Keep delegation visible.** Pi's activity widget shows active Agent/Workflow tasks alongside cumulative child tokens, cache hits, and cost, then collapses to one idle summary line when they finish.
+- **Keep delegation visible.** The below-editor activity widget complements Pi's native footer while background work runs.
 - **Continue a specialist when needed.** Every direct Agent returns a `session_key`; reuse it to continue the same backend conversation for review-and-revise loops.
 - **Reuse successful orchestration.** Save trusted workflows globally or per project and invoke them later by name.
 - **Stay harness-native.** Pi children use Pi tools; Codex and Claude children use their own CLI capabilities.
@@ -232,8 +232,10 @@ Inline workflows can also be resumed with `resumeFromTaskId`: unchanged earlier 
 | **Bounded concurrency** | Direct agents and workflow agents share one global concurrency limit; excess work queues internally and drains as slots free. |
 | **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles, not hidden per-call overrides. |
 | **Session-scoped lifecycle** | Background work survives the launching turn, stops with its owning Pi session, and remains bounded by the global timeout. |
-| **Compact visibility** | A five-line activity widget shows active Agent and Workflow details plus cumulative input/output tokens, cache hit rate, and cost, then collapses to one idle summary line. |
+| **Compact visibility** | The below-editor activity widget keeps active tasks and cumulative child usage visible without replacing Pi's native footer. |
 | **Inspectable workflows** | Saved and generated workflows remain ordinary JavaScript files with task journals that retain workflow logs and agent failure details. |
+
+While tasks are active, the widget uses at most five lines: one summary, up to three top-level Agent or Workflow details, and an overflow line when needed. The summary updates cumulative session input/output tokens, cache hit rate, and cost across direct subagents and Workflow children. Agent details show backend, profile, label, duration, normalized event count, and per-call usage. Workflow details show name, duration, finished/launched child count, and aggregate child usage. A top-level detail disappears as soon as its task terminates; after the last task terminates, the widget collapses to exactly one idle line with session totals.
 
 Tune runtime guardrails when needed:
 
