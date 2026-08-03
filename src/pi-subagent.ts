@@ -379,10 +379,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       sessionKeyLocks: new SessionKeyLocks(),
     };
     const statusState = createFlowStatusState();
-    const pendingNotifications = new Map<string, TerminalTaskEnvelope>();
+    const pendingNotifications = new Map<string, { envelope: TerminalTaskEnvelope; submitted: boolean }>();
     let statusContext: ExtensionContext | undefined;
     let notificationSessionManager: SessionManager | undefined;
-    let agentSettling = false;
+    let notificationDeliveryPaused = false;
     const taskNotificationMessage = (envelope: TerminalTaskEnvelope) => ({
       customType: TASK_NOTIFICATION_CUSTOM_TYPE,
       content: JSON.stringify(envelope),
@@ -403,9 +403,22 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         triggerTurn: true,
       });
     };
+    const submitTaskNotifications = (includeSubmitted: boolean) => {
+      if (notificationSessionManager) {
+        return;
+      }
+      const batch = [...pendingNotifications.values()]
+        .filter((notification) => includeSubmitted || !notification.submitted);
+      for (const notification of batch) {
+        notification.submitted = true;
+      }
+      for (const notification of batch) {
+        sendTaskNotification(notification.envelope);
+      }
+    };
     const persistPendingNotifications = (sessionManager: SessionManager) => {
-      for (const envelope of pendingNotifications.values()) {
-        persistTaskNotification(sessionManager, envelope);
+      for (const notification of pendingNotifications.values()) {
+        persistTaskNotification(sessionManager, notification.envelope);
       }
       pendingNotifications.clear();
     };
@@ -415,9 +428,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           persistTaskNotification(notificationSessionManager, envelope);
           return;
         }
-        pendingNotifications.set(envelope.task_id, envelope);
-        if (!agentSettling) {
-          sendTaskNotification(envelope);
+        pendingNotifications.set(envelope.task_id, { envelope, submitted: false });
+        if (!notificationDeliveryPaused) {
+          submitTaskNotifications(false);
         }
       },
       onCountsChange: (counts) => {
@@ -487,7 +500,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
       pendingNotifications.clear();
       notificationSessionManager = undefined;
-      agentSettling = false;
+      notificationDeliveryPaused = false;
       statusContext = ctx;
       syncRuntimeOptions();
       rootState.sessionBindings.clear();
@@ -511,16 +524,14 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
     });
 
+    pi.on("agent_start", () => {
+      notificationDeliveryPaused = false;
+      submitTaskNotifications(false);
+    });
+
     pi.on("agent_settled", () => {
-      setImmediate(() => {
-        agentSettling = false;
-        if (notificationSessionManager) {
-          return;
-        }
-        for (const envelope of pendingNotifications.values()) {
-          sendTaskNotification(envelope);
-        }
-      });
+      notificationDeliveryPaused = false;
+      submitTaskNotifications(true);
     });
 
     pi.on("session_before_tree", async (_event, ctx) => {
@@ -545,7 +556,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.on("session_tree", (_event, ctx) => {
       taskManager = createTaskManager();
       pendingNotifications.clear();
-      agentSettling = false;
+      notificationDeliveryPaused = false;
       statusContext = ctx;
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
@@ -555,10 +566,11 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     });
 
     pi.on("agent_end", async (_event, ctx) => {
+      notificationDeliveryPaused = true;
       if (ctx.mode === "print" || ctx.mode === "json") {
         await getTaskManager().waitForIdle();
+        submitTaskNotifications(false);
       }
-      agentSettling = true;
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
@@ -579,6 +591,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     });
 
     pi.on("before_agent_start", (event, ctx) => {
+      notificationDeliveryPaused = true;
       statusContext = ctx;
       const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
       const savedWorkflows = listSavedWorkflows({

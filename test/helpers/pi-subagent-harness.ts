@@ -41,6 +41,7 @@ export type TaskEnvelope = {
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 type CreateSessionOptions = {
   extensionFactories?: ExtensionFactory[];
+  onStatus?: (key: string, text: string | undefined) => void;
   maxConcurrentSubagents?: number;
   maxConcurrentSubagentsFlag?: string;
   subagentTimeoutMs?: number;
@@ -169,6 +170,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
   async function createSession(options: CreateSessionOptions = {}) {
     const {
       extensionFactories = [],
+      onStatus,
       maxConcurrentSubagents,
       maxConcurrentSubagentsFlag,
       subagentTimeoutMs,
@@ -227,7 +229,13 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       resourceLoader,
     });
     trackSession(session);
-    await session.bindExtensions({ mode });
+    const uiContext = onStatus
+      ? Object.create(session.extensionRunner.getUIContext(), {
+          setStatus: { value: onStatus },
+          theme: { value: makeMockTheme() },
+        })
+      : undefined;
+    await session.bindExtensions({ mode, uiContext });
 
     return { session, registration, model, models, modelRegistry, sessionManager };
   }

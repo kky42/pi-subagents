@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getSubagentProfiles } from "../src/profiles.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../src/core/spawn.ts";
@@ -19,6 +20,12 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<vo
     }
     await delay(5);
   }
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 describe("pi-subagent background progress and status", () => {
@@ -156,45 +163,54 @@ describe("pi-subagent background progress and status", () => {
     disposeSession(session);
   });
 
-  it("delivers a task completed while the root agent settles exactly once", async () => {
-    let releaseChild!: () => void;
-    const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
-    let firstAgentEnd = true;
-    const settlingExtension: ExtensionFactory = (pi) => {
-      pi.on("agent_end", async () => {
-        if (!firstAgentEnd) {
-          return;
-        }
-        firstAgentEnd = false;
-        releaseChild();
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      });
-    };
+  it("delivers a completion after Pi's final queue check exactly once", async () => {
+    const childGate = deferred();
+    const postRunChecked = deferred();
+    const finishPostRun = deferred();
+    const taskFinished = deferred();
+    const terminalDelivered = deferred();
     const { session, registration } = await createSession({
       mode: "tui",
-      extensionFactories: [settlingExtension],
+      onStatus: (_key, text) => {
+        if (text?.includes("[1/1] agents")) {
+          taskFinished.resolve();
+        }
+      },
     });
     let notificationContexts = 0;
-    let terminalDelivered!: () => void;
-    const terminalMessage = new Promise<void>((resolve) => { terminalDelivered = resolve; });
+    let notificationCopies = 0;
+    const originalHandlePostAgentRun = (session as any)._handlePostAgentRun.bind(session);
+    let interceptedPostRun = false;
+    (session as any)._handlePostAgentRun = async () => {
+      const shouldContinue = await originalHandlePostAgentRun();
+      if (!shouldContinue && !interceptedPostRun) {
+        interceptedPostRun = true;
+        postRunChecked.resolve();
+        await finishPostRun.promise;
+      }
+      return shouldContinue;
+    };
     const unsubscribe = session.subscribe((event) => {
       if (
         event.type === "message_end" &&
         event.message.role === "custom" &&
         event.message.customType === "pi-flow-task-notification"
       ) {
-        terminalDelivered();
+        terminalDelivered.resolve();
       }
     });
 
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
       if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
-        await childGate;
+        await childGate.promise;
         return fauxAssistantMessage("settling child done");
       }
-      if (serialized.includes("settling child done")) {
+      const notifications = context.messages.filter((message) =>
+        JSON.stringify(message).includes("settling child done"));
+      if (notifications.length > 0) {
         notificationContexts++;
+        notificationCopies += notifications.length;
         return fauxAssistantMessage("notification handled");
       }
       if (!serialized.includes('"toolName":"Agent"')) {
@@ -205,8 +221,13 @@ describe("pi-subagent background progress and status", () => {
       return fauxAssistantMessage("task launched");
     });
 
-    await session.prompt("Launch one background task.");
-    await terminalMessage;
+    const prompt = session.prompt("Launch one background task.");
+    await postRunChecked.promise;
+    childGate.resolve();
+    await taskFinished.promise;
+    finishPostRun.resolve();
+    await prompt;
+    await terminalDelivered.promise;
     await session.waitForIdle();
     unsubscribe();
 
@@ -214,6 +235,103 @@ describe("pi-subagent background progress and status", () => {
       message.role === "toolResult" && message.toolName === "Agent") as any;
     expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
     expect(notificationContexts).toBe(1);
+    expect(notificationCopies).toBe(1);
+    disposeSession(session);
+  });
+
+  it("steers a completion into an automatic continuation's next model context", async () => {
+    const childGate = deferred();
+    const toolBatchStarted = deferred();
+    const finishToolBatch = deferred();
+    const taskFinished = deferred();
+    const terminalDelivered = deferred();
+    const toolExtension: ExtensionFactory = (pi) => {
+      pi.registerTool({
+        name: "settling_gate",
+        label: "settling_gate",
+        description: "Hold an automatic continuation tool batch",
+        parameters: Type.Object({}),
+        async execute() {
+          toolBatchStarted.resolve();
+          await finishToolBatch.promise;
+          return {
+            content: [{ type: "text" as const, text: "tool batch complete" }],
+            details: {},
+          };
+        },
+      });
+    };
+    const { session, registration } = await createSession({
+      mode: "tui",
+      extensionFactories: [toolExtension],
+      onStatus: (_key, text) => {
+        if (text?.includes("[1/1] agents")) {
+          taskFinished.resolve();
+        }
+      },
+    });
+    let queueAutomaticContinuation = true;
+    let notificationContexts = 0;
+    let notificationCopies = 0;
+    let modelResponsesBeforeNotification = 0;
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "agent_end" && queueAutomaticContinuation) {
+        queueAutomaticContinuation = false;
+        void session.steer("automatic continuation");
+      }
+      if (
+        event.type === "message_end" &&
+        event.message.role === "custom" &&
+        event.message.customType === "pi-flow-task-notification"
+      ) {
+        terminalDelivered.resolve();
+      }
+    });
+
+    setContextRoutingResponses(registration, async (context) => {
+      const serialized = JSON.stringify(context.messages);
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+        await childGate.promise;
+        return fauxAssistantMessage("continuation child done");
+      }
+      const notifications = context.messages.filter((message) =>
+        JSON.stringify(message).includes("continuation child done"));
+      if (notifications.length > 0) {
+        notificationContexts++;
+        notificationCopies += notifications.length;
+        return fauxAssistantMessage("notification handled");
+      }
+      if (serialized.includes("automatic continuation")) {
+        if (!serialized.includes('"toolName":"settling_gate"')) {
+          return fauxAssistantMessage([fauxToolCall("settling_gate", {})], { stopReason: "toolUse" });
+        }
+        modelResponsesBeforeNotification++;
+        return fauxAssistantMessage("continued without notification");
+      }
+      if (!serialized.includes('"toolName":"Agent"')) {
+        return fauxAssistantMessage([
+          fauxToolCall("Agent", { description: "Continuation child", prompt: "Wait for tool batch." }),
+        ], { stopReason: "toolUse" });
+      }
+      return fauxAssistantMessage("task launched");
+    });
+
+    const prompt = session.prompt("Launch one background task.");
+    await toolBatchStarted.promise;
+    childGate.resolve();
+    await taskFinished.promise;
+    finishToolBatch.resolve();
+    await prompt;
+    await terminalDelivered.promise;
+    await session.waitForIdle();
+    unsubscribe();
+
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as any;
+    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
+    expect(modelResponsesBeforeNotification).toBe(0);
+    expect(notificationContexts).toBe(1);
+    expect(notificationCopies).toBe(1);
     disposeSession(session);
   });
 
