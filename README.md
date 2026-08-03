@@ -70,7 +70,7 @@ Or ask for staged orchestration:
 Use a workflow to classify each changed file by risk, run a risk-specific review, and return structured results.
 ```
 
-Pi launches each `Agent` or `workflow` call as a background task, continues independent work, and receives the result later through a correlated task notification. `task_id` is the stable correlation identity; `name` is descriptive and may become more specific after a Workflow source loads. In `pi -p`, Pi waits for those tasks and notification turns before exiting. Navigating to another session-tree branch aborts active PiFlow tasks and records their failed terminal notifications on the originating branch.
+Pi launches each `Agent` or `workflow` call as a background task, continues independent work, and receives the result later through a correlated task notification. `task_id` is the stable correlation identity; `name` is descriptive and may become more specific after a Workflow source loads. An `accepted` envelope only confirms launch, so dependent work must wait for the matching terminal notification. PiFlow retains terminal notifications until delivery or session-boundary persistence, and `pi -p` waits for tasks and notification turns before exiting. Navigating to another session-tree branch aborts active tasks and records their failed terminal notifications on the originating branch. Session shutdown records the same failures without starting a replacement model turn.
 
 ## Headless execution
 
@@ -221,7 +221,7 @@ Saved workflows live in:
 - `~/.pi/agent/workflows/*.js` for global workflows
 - `.pi/workflows/*.js` for workflows in trusted projects
 
-Inline workflows can also be resumed with `resumeFromTaskId`: unchanged earlier agent calls reuse their journaled results, while changed or new calls run live. Workflow scripts can assign local `session_key` values such as `worker` and `reviewer` when internal agents need iterative conversations.
+Inline workflows can also be resumed with `resumeFromTaskId`: unchanged earlier agent calls reuse their journaled results, while changed or new calls run live. Replay rejects a task that is still active, but a journal left marked running after its task is gone remains recoverable. Workflow scripts can assign local `session_key` values such as `worker` and `reviewer` when internal agents need iterative conversations.
 
 ## Built for real work
 
@@ -232,7 +232,7 @@ Inline workflows can also be resumed with `resumeFromTaskId`: unchanged earlier 
 | **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles, not hidden per-call overrides. |
 | **Session-scoped lifecycle** | Background work survives the launching turn, stops with its owning Pi session, and remains bounded by the global timeout. |
 | **Compact visibility** | The footer shows completed/total Agent and Workflow counts plus cumulative input/output tokens, cache hit rate, and cost. |
-| **Inspectable workflows** | Saved and generated workflows remain ordinary JavaScript files with task journals rather than opaque orchestration state. |
+| **Inspectable workflows** | Saved and generated workflows remain ordinary JavaScript files with task journals that retain workflow logs and agent failure details. Nonfatal agent failures also appear as warnings in the terminal result. |
 
 Tune runtime guardrails when needed:
 

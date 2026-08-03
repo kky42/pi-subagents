@@ -146,7 +146,7 @@ Existing orchestration remains supported:
 - structured output
 - repeated Worker and Reviewer turns using stable workflow-local session keys
 
-A Workflow sends one terminal notification for the outer task. Do not send foreground notifications for every internal agent call. Internal progress remains internal to the Workflow runtime, UI, and journal.
+A Workflow sends one terminal notification for the outer task. Do not send foreground notifications for every internal agent call. Internal progress remains in the Workflow runtime and journal.
 
 Remove the separate Workflow run ID concept. The Workflow `task_id` is also its journal and replay identity. Rename `resumeFromRunId` to `resumeFromTaskId` and do not expose a duplicate `run_id` field.
 
