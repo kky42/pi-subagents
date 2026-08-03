@@ -136,6 +136,33 @@ describe("BackgroundTaskManager", () => {
     ]);
   });
 
+  it("prefers the recorded abort reason when a task resolves during abort", async () => {
+    const notifications: TerminalTaskEnvelope[] = [];
+    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
+    const started = deferred<void>();
+
+    const accepted = manager.start({
+      taskType: "workflow",
+      name: "late success",
+      run: (signal) => {
+        started.resolve();
+        return new Promise<string>((resolve) => {
+          signal.addEventListener("abort", () => resolve("ignored success"), { once: true });
+        });
+      },
+    });
+    await started.promise;
+    await manager.abortAll("Pi session tree changed");
+
+    expect(notifications).toEqual([{
+      task_id: accepted.task_id,
+      task_type: "workflow",
+      status: "failed",
+      name: "late success",
+      content: "Pi session tree changed",
+    }]);
+  });
+
   it("aborts tasks and emits failed notifications during session shutdown", async () => {
     const notifications: TerminalTaskEnvelope[] = [];
     const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });

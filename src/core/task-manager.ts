@@ -116,8 +116,8 @@ export class BackgroundTaskManager {
         return options.run(controller.signal, taskId);
       })
       .then(
-        (result) => this.finish(options, accepted, "completed", result),
-        (error) => this.finish(options, accepted, "failed", errorMessage(error)),
+        (result) => this.finish(options, accepted, controller.signal, "completed", result),
+        (error) => this.finish(options, accepted, controller.signal, "failed", errorMessage(error)),
       )
       .finally(() => {
         this.active.delete(taskId);
@@ -165,16 +165,19 @@ export class BackgroundTaskManager {
   private finish(
     options: StartTaskOptions,
     accepted: AcceptedTaskEnvelope,
+    signal: AbortSignal,
     status: "completed" | "failed",
     value: string | TaskRunResult,
   ): void {
-    const result = typeof value === "string" ? { content: value } : value;
+    const terminalStatus = signal.aborted ? "failed" : status;
+    const terminalValue = signal.aborted ? errorMessage(signal.reason) : value;
+    const result = typeof terminalValue === "string" ? { content: terminalValue } : terminalValue;
     const name = result.name ?? accepted.name;
     const envelope: TerminalTaskEnvelope = options.taskType === "agent"
       ? {
           task_id: accepted.task_id,
           task_type: "agent",
-          status,
+          status: terminalStatus,
           session_key: options.sessionKey,
           name,
           content: result.content,
@@ -182,7 +185,7 @@ export class BackgroundTaskManager {
       : {
           task_id: accepted.task_id,
           task_type: "workflow",
-          status,
+          status: terminalStatus,
           name,
           content: result.content,
         };

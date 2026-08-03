@@ -270,13 +270,26 @@ describe("pi-subagent background progress and status", () => {
   });
 
   it("persists failed terminal notifications when extension reload aborts tasks", async () => {
-    const { session, registration, model, modelRegistry, sessionManager } = await createSession({ mode: "tui" });
+    const { session, registration, sessionManager } = await createSession({ mode: "tui" });
     let childStarted = false;
     let rootNotificationCalls = 0;
+    let rootContinuationStarted = false;
+    let releaseRoot!: () => void;
     setContextRoutingResponses(registration, (context, options) => {
       if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
-        rootNotificationCalls++;
-        return fauxAssistantMessage("notification observed");
+        const serialized = JSON.stringify(context.messages);
+        if (serialized.includes("pi-flow-task-notification")) {
+          rootNotificationCalls++;
+        }
+        if (!serialized.includes('"toolName":"Agent"')) {
+          return fauxAssistantMessage([
+            fauxToolCall("Agent", { description: "Reload child", prompt: "Wait until reload." }),
+          ], { stopReason: "toolUse" });
+        }
+        rootContinuationStarted = true;
+        return new Promise((resolve) => {
+          releaseRoot = () => resolve(fauxAssistantMessage("task launched"));
+        });
       }
       childStarted = true;
       return new Promise((resolve) => {
@@ -287,25 +300,16 @@ describe("pi-subagent background progress and status", () => {
         options.signal?.addEventListener("abort", () => resolve(fauxAssistantMessage("aborted child")), { once: true });
       });
     });
-    const tool = session.getToolDefinition("Agent") as any;
-    const accepted = await tool.execute(
-      "reload-call",
-      { description: "Reload child", prompt: "Wait until reload." },
-      undefined,
-      undefined,
-      makeExecutionContext({ hasUI: false, model, modelRegistry }),
-    );
-    await waitUntil(() => childStarted);
+    const prompt = session.prompt("Launch one background task before reload.");
+    await waitUntil(() => childStarted && rootContinuationStarted);
+    const accepted = session.messages.find((message: any) =>
+      message.role === "toolResult" && message.toolName === "Agent") as any;
 
     await session.reload();
+    releaseRoot();
+    await prompt;
 
-    expect(taskNotifications(session, accepted.details.task_id)).toEqual([
-      expect.objectContaining({
-        status: "failed",
-        task_id: accepted.details.task_id,
-        content: "Pi session shut down",
-      }),
-    ]);
+    expect(taskNotifications(session, accepted.details.task_id)).toEqual([]);
     const terminalEntry = sessionManager.getEntries().find((entry: any) =>
       entry.type === "custom_message" &&
       entry.customType === "pi-flow-task-notification" &&
@@ -320,7 +324,7 @@ describe("pi-subagent background progress and status", () => {
   });
 
   it("starts Agent and workflow tasks after a reused extension session boundary", async () => {
-    const { session, registration, model, modelRegistry } = await createSession({ mode: "tui" });
+    const { session, registration, model, modelRegistry, sessionManager } = await createSession({ mode: "tui" });
     let oldChildStarted = false;
     setContextRoutingResponses(registration, (context, options) => {
       if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
@@ -351,13 +355,14 @@ describe("pi-subagent background progress and status", () => {
     await waitUntil(() => oldChildStarted);
 
     await session.extensionRunner.emit({ type: "session_shutdown", reason: "new" });
-    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([
-      expect.objectContaining({
-        status: "failed",
-        task_id: oldAccepted.details.task_id,
-        content: "Pi session shut down",
-      }),
-    ]);
+    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([]);
+    expect(sessionManager.getEntries().find((entry: any) =>
+      entry.type === "custom_message" && entry.details?.task_id === oldAccepted.details.task_id)?.details,
+    ).toMatchObject({
+      status: "failed",
+      task_id: oldAccepted.details.task_id,
+      content: "Pi session shut down",
+    });
     await session.extensionRunner.emit({ type: "session_start", reason: "new" });
 
     setContextRoutingResponses(registration, (providerContext) => {
@@ -390,13 +395,7 @@ describe("pi-subagent background progress and status", () => {
 
     expect(agentTerminal).toMatchObject({ status: "completed", content: "new session child done" });
     expect(workflowTerminal).toMatchObject({ status: "completed", content: "new session child done" });
-    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([
-      expect.objectContaining({
-        status: "failed",
-        task_id: oldAccepted.details.task_id,
-        content: "Pi session shut down",
-      }),
-    ]);
+    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([]);
     disposeSession(session);
   });
 

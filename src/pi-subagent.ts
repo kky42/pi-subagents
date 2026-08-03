@@ -4,6 +4,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
   type ExtensionFactory,
+  type SessionManager,
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -380,15 +381,20 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     const statusState = createFlowStatusState();
     const pendingNotifications = new Map<string, TerminalTaskEnvelope>();
     let statusContext: ExtensionContext | undefined;
-    let persistNotifications = false;
+    let notificationSessionManager: SessionManager | undefined;
     const taskNotificationMessage = (envelope: TerminalTaskEnvelope) => ({
       customType: TASK_NOTIFICATION_CUSTOM_TYPE,
       content: JSON.stringify(envelope),
       display: true,
       details: envelope,
     });
-    const persistTaskNotification = (envelope: TerminalTaskEnvelope) => {
-      pi.sendMessage(taskNotificationMessage(envelope));
+    const persistTaskNotification = (sessionManager: SessionManager, envelope: TerminalTaskEnvelope) => {
+      sessionManager.appendCustomMessageEntry(
+        TASK_NOTIFICATION_CUSTOM_TYPE,
+        JSON.stringify(envelope),
+        true,
+        envelope,
+      );
     };
     const sendTaskNotification = (envelope: TerminalTaskEnvelope) => {
       pi.sendMessage(taskNotificationMessage(envelope), {
@@ -396,16 +402,16 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         triggerTurn: true,
       });
     };
-    const persistPendingNotifications = () => {
+    const persistPendingNotifications = (sessionManager: SessionManager) => {
       for (const envelope of pendingNotifications.values()) {
-        persistTaskNotification(envelope);
+        persistTaskNotification(sessionManager, envelope);
       }
       pendingNotifications.clear();
     };
     const createTaskManager = () => new BackgroundTaskManager({
       notify: (envelope) => {
-        if (persistNotifications) {
-          persistTaskNotification(envelope);
+        if (notificationSessionManager) {
+          persistTaskNotification(notificationSessionManager, envelope);
           return;
         }
         pendingNotifications.set(envelope.task_id, envelope);
@@ -477,7 +483,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         taskManagerNeedsReset = false;
       }
       pendingNotifications.clear();
-      persistNotifications = false;
+      notificationSessionManager = undefined;
       statusContext = ctx;
       syncRuntimeOptions();
       rootState.sessionBindings.clear();
@@ -503,7 +509,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.on("agent_settled", () => {
       setImmediate(() => {
-        if (persistNotifications) {
+        if (notificationSessionManager) {
           return;
         }
         for (const envelope of pendingNotifications.values()) {
@@ -518,12 +524,13 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         return;
       }
       const hadActiveTasks = manager.hasActiveTasks();
-      persistNotifications = true;
+      const sessionManager = ctx.sessionManager as SessionManager;
+      notificationSessionManager = sessionManager;
       try {
         await manager.abortAll("Pi session tree changed");
-        persistPendingNotifications();
+        persistPendingNotifications(sessionManager);
       } finally {
-        persistNotifications = false;
+        notificationSessionManager = undefined;
       }
       if (hadActiveTasks && ctx.hasUI) {
         ctx.ui.notify("PiFlow aborted background tasks before changing branches", "warning");
@@ -550,12 +557,13 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.on("session_shutdown", async (_event, ctx) => {
       const endingTaskManager = getTaskManager();
       taskManagerNeedsReset = true;
-      persistNotifications = true;
+      const sessionManager = ctx.sessionManager as SessionManager;
+      notificationSessionManager = sessionManager;
       try {
         await endingTaskManager.shutdown();
-        persistPendingNotifications();
+        persistPendingNotifications(sessionManager);
       } finally {
-        persistNotifications = false;
+        notificationSessionManager = undefined;
       }
       if (ctx.hasUI) {
         ctx.ui.setStatus(STATUS_KEY, undefined);

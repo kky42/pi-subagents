@@ -257,7 +257,7 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
   });
 
   it("persists a failed Workflow notification when reload aborts it", async () => {
-    const { session, registration, model, modelRegistry } = await createSession({ mode: "tui" });
+    const { session, registration, model, modelRegistry, sessionManager } = await createSession({ mode: "tui" });
     let childStarted = false;
     let rootNotificationCalls = 0;
     setContextRoutingResponses(registration, (providerContext, options) => {
@@ -279,8 +279,10 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
     await waitUntil(() => childStarted || undefined);
     await session.reload();
 
-    const terminal = taskNotifications(session).find((item) => item.task_id === accepted.task_id);
+    const terminal = sessionManager.getEntries().find((entry: any) =>
+      entry.type === "custom_message" && entry.details?.task_id === accepted.task_id)?.details;
     expect(terminal).toMatchObject({ status: "failed", content: "Pi session shut down" });
+    expect(taskNotifications(session).find((item) => item.task_id === accepted.task_id)).toBeUndefined();
     expect(rootNotificationCalls).toBe(0);
     disposeSession(session);
   });
