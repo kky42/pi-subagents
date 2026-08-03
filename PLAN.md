@@ -189,7 +189,7 @@ A background task must retain its limiter slot for its actual execution lifetime
 
 ### Notification delivery
 
-Use a custom Pi message, not a user message. Retain each terminal envelope until Pi emits `message_end` for its custom message. Queue it as steering immediately so Pi delivers it after the current assistant tool calls and before the next model call. If Pi clears the queue before delivery, `agent_settled` retries any retained envelopes.
+Use a custom Pi message, not a user message. Normal terminal delivery makes exactly one steering send so Pi delivers it after the current assistant tool calls and before the next model call. Retain the sent envelope in memory until Pi emits `message_end` for its custom message; that acknowledgement only removes the in-memory envelope. Unacknowledged envelopes are retained solely so session-tree changes and shutdown can persist them on the originating session. Explicit queue clearing intentionally discards model delivery and is not retried.
 
 ```ts
 pi.sendMessage(
