@@ -66,7 +66,7 @@ Or ask for staged orchestration:
 Use a workflow to classify each changed file by risk, run a risk-specific review, and return structured results.
 ```
 
-Pi decides how to invoke `Agent` or `workflow`, shows live progress, and returns the combined result in the same conversation.
+Pi decides how to invoke `Agent` or `workflow`, shows live progress, and receives each terminal result for synthesis in the same conversation.
 
 ## Headless execution
 
@@ -97,8 +97,8 @@ The lower-level `@kky42/pi-flow/runtime` export remains available for consumers 
 
 - **Use the right model for each lane.** A single task can combine different models, harnesses, prompts, and toolsets.
 - **Work in parallel.** Fan out repository exploration, research, review, or migration analysis while keeping one coordinator.
-- **Keep delegation visible.** Pi's TUI shows queued and running agents, recent activity, duration, tokens, cache hits, and cost when available.
-- **Continue a specialist when needed.** A caller-chosen `session_key` resumes the same backend conversation for review-and-revise loops.
+- **Keep delegation visible.** Pi's TUI activity widget shows active task counts, direct-Agent events, Workflow child progress, duration, cumulative tokens, cache hits, and cost when available.
+- **Continue a specialist when needed.** Each direct Agent returns a `session_key`; reuse it to resume that backend conversation, or supply a stable key on the first call.
 - **Reuse successful orchestration.** Save trusted workflows globally or per project and invoke them later by name.
 - **Stay harness-native.** Pi children use Pi tools; Codex and Claude children use their own CLI capabilities.
 
@@ -163,7 +163,7 @@ Inspect the frontend changes and recommend specific, high-impact improvements.
 
 ## Use a focused subagent
 
-A fresh call starts a clean child conversation in the same working directory. Parent messages and tool results are not copied, so Pi sends a self-contained task.
+A fresh call starts a clean, resumable child conversation in the same working directory. Parent messages and tool results are not copied, so Pi sends a self-contained task. The call immediately returns an accepted task envelope. If `session_key` is omitted, that envelope contains a generated key that can be reused after the matching terminal notification arrives.
 
 ```ts
 Agent({
@@ -217,11 +217,11 @@ Inline workflows can also be resumed by replay: unchanged earlier agent calls re
 
 | Behavior | What it means |
 | --- | --- |
-| **Foreground execution** | `Agent` and `workflow` return only after delegated work completes; there is no hidden background job or polling system. |
-| **Bounded concurrency** | Direct agents and workflow agents share one global concurrency limit; excess work queues visibly. |
+| **Background execution** | `Agent` and `workflow` immediately return a compact accepted envelope, then send one correlated terminal notification when the task completes or fails. There is no status polling or steering API. |
+| **Bounded concurrency** | Direct agents and workflow agents share one global concurrency limit; excess work queues until slots become free. |
 | **Profile-based routing** | Backend, model, thinking, prompt, and Pi tool access are selected by named profiles—not hidden per-call overrides. |
 | **Cancellation and timeouts** | Aborts propagate to child processes, and a global timeout prevents stalled subagents from running forever. |
-| **Usage visibility** | Completed rows expose duration, input/output tokens, cache reads/writes, cache-hit rate, and known or estimated cost. |
+| **Usage visibility** | Active detail rows show duration and available usage; completed details disappear while the final one-line idle summary retains cumulative tokens, cache hits, and cost. |
 | **Inspectable workflows** | Saved and generated workflows are ordinary JavaScript files with journals, rather than opaque orchestration state. |
 
 Tune runtime guardrails when needed:
