@@ -84,7 +84,7 @@ Inspect the UI and recommend specific improvements.
 - **Multi-backend.** Mix Pi, Codex CLI, and Claude Code through simple profiles.
 - **Real orchestration.** Workflows support parallel stages, pipelines, branching, schemas, saved scripts, and replay.
 - **Resumable specialists.** Reuse a direct Agent's `session_key` to continue its backend conversation.
-- **Visible progress.** Pi's TUI shows active tasks, Workflow child progress, tokens, cache usage, and cost, then collapses to one idle line.
+- **Visible progress.** Pi's TUI distinguishes queued from running direct Agents, folds each Workflow's child progress into one row, and reports cumulative tokens, cache usage, and cost when available. The widget stays within five lines while active and collapses to one idle line.
 
 ## Requirements
 

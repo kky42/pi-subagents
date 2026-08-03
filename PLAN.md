@@ -20,7 +20,7 @@ Expose only three statuses to the foreground agent:
 - `completed`: the task finished successfully
 - `failed`: the task did not complete successfully
 
-The task manager may track `queued` and `running` internally, but must not expose them to the foreground agent.
+The extension may track `queued` and `running` internally, but must not expose them to the foreground agent.
 
 ### Agent messages
 
@@ -160,7 +160,7 @@ Add one small extension-owned task manager shared by Agent and Workflow tools. I
 - active task promises
 - task type and name
 - Agent session key when applicable
-- internal queued/running state
+- task completion counts
 - task-scoped `AbortController`
 - terminal notification delivery
 - waiting until no accepted tasks remain
@@ -226,7 +226,7 @@ Background tasks are scoped to the current Pi session.
 - Abort active tasks when their owning session is shut down or replaced.
 - Abort active tasks before session-tree navigation and persist their failed notifications on the originating branch.
 - Persist failed notifications without triggering a model turn during session shutdown.
-- Prevent a task from notifying a different session or tree branch after a switch.
+- Persist retained notifications on the originating branch before session-tree navigation. Do not additionally wait for a terminal notification that Pi is already processing or add recovery machinery for that rare race.
 - Clear task and session-key state only after owned tasks are stopped.
 
 Keep the existing global subagent timeout as the execution guardrail.
@@ -265,7 +265,7 @@ Add deterministic coverage for:
 - task ID replaces run ID in journal replay
 - TUI/RPC does not block at `agent_end`
 - print/JSON waits for tasks and processes terminal notifications before returning
-- session replacement or shutdown cannot leak notifications into another session
+- session replacement and shutdown abort owned tasks, persist retained notifications on the originating session, and reset task state
 - usage and telemetry remain available internally but are absent from model-facing envelopes
 
 Run `npm run check`, then manually exercise one TUI launch and one `pi -p` launch with a real Agent and Workflow before considering the change complete.
