@@ -304,6 +304,15 @@ function emptyTokenUsage(): ClaudeTokenUsage {
   };
 }
 
+function addTokenUsage(total: ClaudeTokenUsage, increment: ClaudeTokenUsage): ClaudeTokenUsage {
+  return {
+    inputTokens: total.inputTokens + increment.inputTokens,
+    cacheReadInputTokens: total.cacheReadInputTokens + increment.cacheReadInputTokens,
+    cacheCreationInputTokens: total.cacheCreationInputTokens + increment.cacheCreationInputTokens,
+    outputTokens: total.outputTokens + increment.outputTokens,
+  };
+}
+
 function hasChildExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -361,6 +370,7 @@ export async function spawnClaudeSubagent(params: {
   });
   const progress = emitter.progress;
   let latestRawUsage = emptyTokenUsage();
+  let cumulativeAssistantUsage = emptyTokenUsage();
   let latestCostUsd: number | undefined;
   let latestUsage: SubagentUsage | undefined;
   let latestTelemetry: SubagentTelemetry | undefined;
@@ -407,7 +417,10 @@ export async function spawnClaudeSubagent(params: {
       emitter.addActivity(activity);
       emitter.emitSoon();
     }
-    const usage = extractClaudeUsage(event);
+    const extractedUsage = extractClaudeUsage(event);
+    const usage = event.type === "assistant" && extractedUsage
+      ? (cumulativeAssistantUsage = addTokenUsage(cumulativeAssistantUsage, extractedUsage))
+      : extractedUsage;
     const cost = extractClaudeCostUsd(event);
     if (usage || cost !== undefined) {
       publishUsage(usage, cost);

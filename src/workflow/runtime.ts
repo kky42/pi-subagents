@@ -179,6 +179,7 @@ export async function runWorkflow<T = unknown>(
       schema: opts.schema,
     };
     const fingerprint = fingerprintWorkflowAgentCall(call);
+    options.onAgentQueued?.({ index, label, phase: assignedPhase, subagentType, sessionKey: opts.sessionKey, prompt: taskPrompt });
     const cachedResult = state.resumePrefixActive ? resumeAgentResults[index - 1] : undefined;
     if (cachedResult?.index === index && cachedResult.fingerprint === fingerprint && !cachedResult.failed) {
       call.sessionId = cachedResult.sessionId;
@@ -193,7 +194,6 @@ export async function runWorkflow<T = unknown>(
     // Queue on session_key serialization first, then on the shared global cap.
     // Same-key followers stay queued and do not occupy a global subagent slot
     // while waiting for the earlier turn in that child conversation to finish.
-    options.onAgentQueued?.({ index, label, phase: assignedPhase, subagentType, sessionKey: opts.sessionKey, prompt: taskPrompt });
     const runLiveAgent = async () => {
       const release = await limiter.acquire(compositeSignal);
       try {
@@ -210,20 +210,31 @@ export async function runWorkflow<T = unknown>(
     let result: unknown;
     let failed = false;
     let failureMessage: string | undefined;
+    let ended = false;
+    const endAgent = () => {
+      if (ended) {
+        return;
+      }
+      ended = true;
+      options.onAgentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
+    };
     try {
       result = options.serializeAgent
         ? await options.serializeAgent(opts.sessionKey, runLiveAgent)
         : await runLiveAgent();
     } catch (error) {
+      failed = true;
       if (options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error)) {
+        try {
+          endAgent();
+        } catch {}
         throw error;
       }
       failureMessage = error instanceof Error ? error.message : String(error);
       log(`agent ${label} failed: ${failureMessage}`);
       result = null;
-      failed = true;
     }
-    options.onAgentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
+    endAgent();
     await recordAgentResult({ ...call, index, fingerprint, result, failed, error: failureMessage, cached: false });
     return result;
   };
@@ -442,4 +453,3 @@ function normalizeWorkflowLimits(limits: Partial<WorkflowLimits> | undefined): W
   }
   return normalized;
 }
-

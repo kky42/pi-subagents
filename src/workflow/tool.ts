@@ -29,7 +29,6 @@ interface WorkflowStatusCallbacks {
   start(ctx: ExtensionContext, taskId: string, name: string): void;
   rename(ctx: ExtensionContext, taskId: string, name: string): void;
   queueAgent(ctx: ExtensionContext, taskId: string): void;
-  startCachedAgent(ctx: ExtensionContext, taskId: string): void;
   finishAgent(ctx: ExtensionContext, taskId: string): void;
   refresh(ctx: ExtensionContext): void;
   finish(taskId: string): void;
@@ -95,11 +94,6 @@ export function createWorkflowTool(
                 runAgent: runner.runAgent,
                 resumeAgentResults,
                 onAgentQueued: () => options.status?.queueAgent(ctx, taskId),
-                onAgentStart: (event) => {
-                  if (event.cached) {
-                    options.status?.startCachedAgent(ctx, taskId);
-                  }
-                },
                 onAgentEnd: () => options.status?.finishAgent(ctx, taskId),
                 onLog: (message) => {
                   if (journalWriter) {

@@ -335,6 +335,56 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     });
   });
 
+  it("publishes cumulative live usage and replaces it with the terminal aggregate", async () => {
+    const binDir = join(tempDir, "bin-claude-cumulative-usage");
+    mkdirSync(binDir, { recursive: true });
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 100, cache_read_input_tokens: 10, cache_creation_input_tokens: 5, output_tokens: 20 } } }));
+console.log(JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 40, cache_read_input_tokens: 4, cache_creation_input_tokens: 1, output_tokens: 10 } } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', total_cost_usd: 0.42, modelUsage: { sonnet: { inputTokens: 160, cacheReadInputTokens: 20, cacheCreationInputTokens: 5, outputTokens: 30, costUSD: 0.42 } } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+    const updates: Array<{ usage: ReturnType<typeof claudeUsageToSubagentUsage>; telemetry: { tokensKnown: boolean; costKnown: boolean } }> = [];
+
+    const result = await spawnClaudeSubagent({
+      toolCallId: "claude-cumulative-usage",
+      description: "Claude cumulative usage",
+      prompt: "Report multiple usage events.",
+      profile: {
+        name: "claude-cumulative-usage",
+        description: "Claude cumulative usage profile.",
+        backend: "claude",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: (usage, telemetry) => updates.push({ usage, telemetry }),
+    });
+
+    expect(result.details.status).toBe("done");
+    expect(updates.map(({ usage }) => usage.totalTokens)).toEqual([135, 190, 215, 215]);
+    expect(updates.every((update, index) => index === 0 || update.usage.totalTokens >= updates[index - 1].usage.totalTokens)).toBe(true);
+    expect(updates.at(-1)?.usage).toMatchObject({
+      input: 160,
+      output: 30,
+      cacheRead: 20,
+      cacheWrite: 5,
+      totalTokens: 215,
+      cost: { total: 0.42 },
+    });
+    expect(updates.map(({ telemetry }) => telemetry)).toEqual([
+      expect.objectContaining({ tokensKnown: true, costKnown: false }),
+      expect.objectContaining({ tokensKnown: true, costKnown: false }),
+      expect.objectContaining({ tokensKnown: true, costKnown: true }),
+      expect.objectContaining({ tokensKnown: true, costKnown: true }),
+    ]);
+  });
+
   it("kills a claude child if abort lands after process spawn", async () => {
     const binDir = join(tempDir, "bin-claude-abort-race");
     const markerPath = join(tempDir, "claude-child-completed");

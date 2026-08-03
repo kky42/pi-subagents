@@ -443,9 +443,6 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
       refreshStatus(ctx);
     };
-    const startCachedWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
-      queueWorkflowAgent(ctx, taskId);
-    };
     const finishWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
       const workflow = statusState.activeWorkflows.get(taskId);
       if (workflow) {
@@ -491,7 +488,6 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
             start: startWorkflowStatus,
             rename: renameWorkflowStatus,
             queueAgent: queueWorkflowAgent,
-            startCachedAgent: startCachedWorkflowAgent,
             finishAgent: finishWorkflowAgent,
             refresh: refreshStatus,
             finish: finishTaskStatus,

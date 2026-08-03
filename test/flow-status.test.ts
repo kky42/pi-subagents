@@ -1,8 +1,10 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   buildFlowStatusLines,
   createFlowStatusState,
   MAX_FLOW_STATUS_LINES,
+  publishFlowStatus,
   recordFlowUsage,
 } from "../src/core/flow-status.ts";
 import type { SubagentTelemetry, SubagentUsage } from "../src/types.ts";
@@ -60,6 +62,55 @@ describe("flow status display", () => {
     expect(lines.some((line) => line.includes("Codex Agent(context-gather: task 0) 32s · 1 event · ↑100 ↓10 CH0.0%"))).toBe(true);
     expect(lines.filter((line) => line.includes("Workflow("))).toHaveLength(1);
     expect(lines.at(-1)).toBe("… 2 more agents, 1 more workflow");
+  });
+
+  it("truncates themed TUI output to a narrow terminal width", () => {
+    const state = createFlowStatusState();
+    state.tasks = {
+      agent: { finished: 0, total: 4 },
+      workflow: { finished: 0, total: 1 },
+    };
+    for (let index = 0; index < 4; index++) {
+      state.activeAgents.set(`agent-${index}`, {
+        id: `agent-${index}`,
+        name: `long-running-agent-${index}`,
+        subagentType: "general-purpose",
+        backend: "pi",
+        startedAt: index,
+        eventCount: 100 + index,
+      });
+    }
+    state.activeWorkflows.set("workflow-1", {
+      id: "workflow-1",
+      name: "long-running-workflow",
+      startedAt: 10,
+      finishedAgents: 2,
+      totalAgents: 8,
+    });
+    let widget: unknown;
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        setWidget: (_key: string, content: unknown) => {
+          widget = content;
+        },
+      },
+    } as unknown as ExtensionContext;
+
+    publishFlowStatus(ctx, state);
+    const component = (widget as (tui: unknown, theme: { fg: (color: string, text: string) => string }) => { render: (width: number) => string[] })(
+      {},
+      { fg: (_color, text) => `\u001b[36m${text}\u001b[39m` },
+    );
+    const width = 24;
+    const lines = component.render(width);
+    const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+
+    expect(lines).toHaveLength(MAX_FLOW_STATUS_LINES);
+    expect(lines.every((line) => line.includes("\u001b["))).toBe(true);
+    expect(plainLines.every((line) => line.length <= width)).toBe(true);
+    expect(plainLines.some((line) => line.endsWith("..."))).toBe(true);
   });
 
   it("removes active detail in idle state and keeps cumulative usage", () => {

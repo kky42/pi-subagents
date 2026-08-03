@@ -445,6 +445,113 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
     ).rejects.toThrow(/abort/i);
   });
 
+  it("pairs queue and end callbacks for successful and nonfatal calls", async () => {
+    const queued: number[] = [];
+    const ended: Array<{ index: number; failed?: boolean }> = [];
+    const result = await runWorkflow(
+      `${META}return await parallel([() => agent('ok', { label: 'ok' }), () => agent('bad', { label: 'bad' })]);`,
+      {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(2),
+        runAgent: async (call) => {
+          if (call.label === "bad") {
+            throw new Error("expected failure");
+          }
+          return "ok";
+        },
+        onAgentQueued: (event) => queued.push(event.index),
+        onAgentEnd: (event) => ended.push({ index: event.index, failed: event.failed }),
+      },
+    );
+
+    expect(result.result).toEqual(["ok", null]);
+    expect(queued.sort()).toEqual([1, 2]);
+    expect(ended.sort((left, right) => left.index - right.index)).toEqual([
+      { index: 1, failed: false },
+      { index: 2, failed: true },
+    ]);
+  });
+
+  it("ends a queued call exactly once when the workflow aborts", async () => {
+    const controller = new AbortController();
+    const limiter = new ConcurrencyLimiter(1);
+    const release = await limiter.acquire();
+    const queued: number[] = [];
+    const started: number[] = [];
+    const ended: Array<{ index: number; failed?: boolean }> = [];
+    const run = runWorkflow(`${META}return await agent('x', { label: 'queued' });`, {
+      cwd: "/tmp",
+      limiter,
+      runAgent: echo,
+      signal: controller.signal,
+      onAgentQueued: (event) => queued.push(event.index),
+      onAgentStart: (event) => started.push(event.index),
+      onAgentEnd: (event) => ended.push({ index: event.index, failed: event.failed }),
+    });
+
+    await waitUntil(() => limiter.pendingCount === 1);
+    controller.abort();
+    release();
+    await expect(run).rejects.toThrow(/abort/i);
+    expect(queued).toEqual([1]);
+    expect(started).toEqual([]);
+    expect(ended).toEqual([{ index: 1, failed: true }]);
+  });
+
+  it("ends an in-flight call exactly once when the workflow aborts", async () => {
+    const controller = new AbortController();
+    const queued: number[] = [];
+    const started: number[] = [];
+    const ended: Array<{ index: number; failed?: boolean }> = [];
+
+    await expect(
+      runWorkflow(`${META}return await agent('x', { label: 'running' });`, {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(1),
+        runAgent: async () => {
+          controller.abort();
+          return "late";
+        },
+        signal: controller.signal,
+        onAgentQueued: (event) => queued.push(event.index),
+        onAgentStart: (event) => started.push(event.index),
+        onAgentEnd: (event) => ended.push({ index: event.index, failed: event.failed }),
+      }),
+    ).rejects.toThrow(/abort/i);
+
+    expect(queued).toEqual([1]);
+    expect(started).toEqual([1]);
+    expect(ended).toEqual([{ index: 1, failed: true }]);
+  });
+
+  it("ends a queued call exactly once when the workflow fails fatally", async () => {
+    const queued: number[] = [];
+    const ended: Array<{ index: number; failed?: boolean }> = [];
+
+    await expect(
+      runWorkflow(`${META}return await parallel([() => agent('first'), () => agent('over-limit')]);`, {
+        cwd: "/tmp",
+        limiter: new ConcurrencyLimiter(1),
+        runAgent: async (_call, signal) => {
+          await new Promise<void>((resolve) => {
+            if (!signal || signal.aborted) {
+              resolve();
+              return;
+            }
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return "late";
+        },
+        limits: { maxAgentCalls: 1 },
+        onAgentQueued: (event) => queued.push(event.index),
+        onAgentEnd: (event) => ended.push({ index: event.index, failed: event.failed }),
+      }),
+    ).rejects.toThrow(/maximum workflow agent calls exceeded/);
+
+    expect(queued).toEqual([1]);
+    expect(ended).toEqual([{ index: 1, failed: true }]);
+  });
+
   it("does not settle an aborted workflow before active agents release limiter slots", async () => {
     const controller = new AbortController();
     const limiter = new ConcurrencyLimiter(1);
@@ -622,6 +729,8 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
 
     const secondRunEvents: any[] = [];
     const livePrompts: string[] = [];
+    const queued: number[] = [];
+    const ended: Array<{ index: number; cached?: boolean }> = [];
     const secondRun = await runWorkflow(
       `${META}const a = await agent('first', { label: 'one' });\nconst b = await agent('second changed', { label: 'two' });\nreturn [a, b];`,
       {
@@ -635,12 +744,19 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
         onAgentResult: (event) => {
           secondRunEvents.push(event);
         },
+        onAgentQueued: (event) => queued.push(event.index),
+        onAgentEnd: (event) => ended.push({ index: event.index, cached: event.cached }),
       },
     );
 
     expect(secondRun.result).toEqual(["first:live1", "second changed:live2"]);
     expect(livePrompts).toEqual(["second changed"]);
     expect(secondRunEvents.map((event) => event.cached)).toEqual([true, false]);
+    expect(queued).toEqual([1, 2]);
+    expect(ended).toEqual([
+      { index: 1, cached: true },
+      { index: 2, cached: false },
+    ]);
   });
 
   it("does not replay cached failed agent results on resume", async () => {
