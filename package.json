@@ -46,6 +46,7 @@
     "e2e:workflow-features": "node scripts/e2e/workflow-features.mjs",
     "e2e:prompt-routing": "node scripts/e2e/prompt-routing.mjs",
     "e2e:duplicate-messages": "node scripts/e2e/duplicate-messages.mjs",
+    "e2e:background-idle": "node scripts/e2e/background-idle.mjs",
     "e2e:session-key-resume": "node scripts/e2e/session-key-resume.mjs",
     "test": "vitest run",
     "prepack": "npm run build:dist"

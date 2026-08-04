@@ -78,7 +78,7 @@
 ## CI and release workflow
 
 - CI lives in `.github/workflows/ci.yml` and runs on pull requests plus pushes to `main`. It installs with `npm ci` and runs `npm run check` on Node 22.x and 24.x.
-- Real-model E2E scripts are intentionally not part of required CI because they can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, `npm run e2e:prompt-routing` when prompt or routing guidance changes, `npm run e2e:duplicate-messages` when foreground/background message behavior changes, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
+- Real-model E2E scripts are intentionally not part of required CI because they can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, `npm run e2e:prompt-routing` when prompt or routing guidance changes, `npm run e2e:duplicate-messages` when foreground/background message behavior changes, `npm run e2e:background-idle` when background waiting guidance changes, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
 - Real-model E2E drivers must fail the harness when a child process cannot start, times out, or exits nonzero. Do not classify process failures as inconclusive model behavior.
 - Every real-model E2E driver must install the guard from `scripts/e2e/lib/deepseek-claude-env.mjs` so any Claude Code process routes through DeepSeek's Anthropic-compatible endpoint with isolated settings. Drivers must fail fast without `DEEPSEEK_API_KEY`/`DEEPSEEK_API_TOKEN` (or `--deepseek-api-key-env`) and must not fall back to Anthropic login or another Claude Code provider.
 - There is intentionally no automated npm publish workflow right now; do not create tags expecting GitHub Actions to publish, and do not add an `NPM_TOKEN`-based workflow unless the user asks.
@@ -122,6 +122,10 @@ The appended PiFlow prompt owns shared lifecycle semantics, the ad-hoc workflow 
 ### Duplicate-message observation E2E
 
 `scripts/e2e/duplicate-messages.mjs` preserves the real RPC scenario that exposed identical foreground text blocks while PiFlow subagents were active. It pins the foreground to `openai-codex/gpt-5.6-sol` with `xhigh` thinking, uses delayed Pi-backed `openai-codex/gpt-5.6-luna` expert children, and records text-block phases, multi-block responses, exact duplicates, notification timing, delegation counts, and foreground reads. Duplicate and multi-block observations never affect exit status; process failures, timeouts, and incomplete accepted-task delivery do.
+
+### Background-idle behavior E2E
+
+`scripts/e2e/background-idle.mjs` runs a real RPC session in a temporary working directory with foreground Bash enabled and one deliberately delayed Pi-backed child. The user prompt specifies the delegated task but no waiting strategy. The command fails if the foreground invokes Bash between task acceptance and its terminal notification, if lifecycle correlation is incomplete, or if the final response omits the delegated result.
 
 ### run_workflow tool (v2)
 

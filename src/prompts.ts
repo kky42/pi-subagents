@@ -40,6 +40,8 @@ export function buildFlowPrompt(
 
 \`run_agent\` and \`run_workflow\` calls return an \`accepted\` task immediately and continue in the background; you receive one notification when each task completes or fails.
 
+Never sleep or poll while waiting for a background task. Continue independent useful work; if none remains, take no further action solely to wait. The completion notification will arrive automatically.
+
 ${WORKFLOW_AUTHORING_GUIDE}
 
 Registered subagents:
