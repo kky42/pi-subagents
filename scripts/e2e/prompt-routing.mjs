@@ -340,7 +340,13 @@ function analyzeJsonl(text) {
           const script = typeof input.script === "string" ? input.script : "";
           analysis.workflowCalls.push({
             group,
-            source: script ? "inline" : input.name ? "saved" : "path",
+            source: script
+              ? "inline"
+              : typeof input.script_path === "string"
+                ? "path"
+                : typeof input.resume_from_task_id === "string"
+                  ? "replay"
+                  : "saved",
             pipeline: script.includes("pipeline("),
             parallel: script.includes("parallel("),
             schema: /\bschema\s*:/.test(script),

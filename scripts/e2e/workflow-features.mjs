@@ -423,6 +423,11 @@ function observeWorkflow(s, session) {
     JSON.stringify(terminal),
   );
   s.check(
+    "accepted and terminal names match",
+    terminal?.name === accepted.name,
+    JSON.stringify({ accepted: accepted.name, terminal: terminal?.name }),
+  );
+  s.check(
     "terminal envelope is compact",
     JSON.stringify(Object.keys(terminal ?? {}).sort()) === JSON.stringify(["content", "name", "status", "task_id", "task_type"]),
     JSON.stringify(terminal),
@@ -436,8 +441,11 @@ function observeWorkflow(s, session) {
 }
 
 function inlinePrompt(script, args) {
+  const name = script.match(/\bname\s*:\s*['"]([^'"]+)['"]/)?.[1];
+  if (!name) throw new Error("inline workflow fixture has no meta.name");
   return [
     "Use the workflow tool now. Call it with the `script` parameter set to EXACTLY the following JavaScript, verbatim - do not modify it, do not wrap it in markdown fences.",
+    `Set the tool's \`name\` parameter to "${name}".`,
     args ? `Also set the tool's \`args\` parameter to this JSON value: ${JSON.stringify(args)}` : "",
     "Do not change any files in the repository.",
     "",
@@ -460,6 +468,7 @@ function resumePrompt(taskId, args) {
   return [
     "Replay the feature_probe workflow from its persisted task journal and reuse its cached results.",
     "Call the workflow tool with these exact parameters and no script_path:",
+    '- name: "feature_probe"',
     `- resume_from_task_id: "${taskId}"`,
     `- args: ${JSON.stringify(args)}`,
     "Wait for the matching terminal task notification, then report its result.",
@@ -622,7 +631,7 @@ async function scenarioSavedName(ctx) {
 }
 
 async function scenarioResume(ctx) {
-  const s = makeScenario("resume-by-replay via { resume_from_task_id }");
+  const s = makeScenario("resume-by-replay via { name, resume_from_task_id }");
   if (!ctx.kitchen) {
     s.check("kitchen-sink task available to resume", false, "kitchen-sink scenario did not persist a task");
     return { scenario: s };

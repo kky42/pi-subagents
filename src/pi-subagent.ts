@@ -446,13 +446,6 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       });
       refreshStatus(ctx);
     };
-    const renameWorkflowStatus = (ctx: ExtensionContext, taskId: string, name: string) => {
-      const workflow = statusState.activeWorkflows.get(taskId);
-      if (workflow) {
-        workflow.name = name;
-      }
-      refreshStatus(ctx);
-    };
     const queueWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
       const workflow = statusState.activeWorkflows.get(taskId);
       if (workflow) {
@@ -504,7 +497,6 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
           getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
           status: {
             start: startWorkflowStatus,
-            rename: renameWorkflowStatus,
             queueAgent: queueWorkflowAgent,
             finishAgent: finishWorkflowAgent,
             refresh: refreshStatus,

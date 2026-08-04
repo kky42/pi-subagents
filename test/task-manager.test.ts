@@ -115,7 +115,7 @@ describe("BackgroundTaskManager", () => {
     const accepted = manager.start({
       taskType: "workflow",
       name: "review_flow",
-      run: async () => ({ name: "review_flow", content: "review passed" }),
+      run: async () => "review passed",
     });
     await manager.waitForIdle();
 

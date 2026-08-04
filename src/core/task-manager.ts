@@ -56,11 +56,6 @@ export interface TaskCounts {
   workflow: { finished: number; total: number };
 }
 
-export interface TaskRunResult {
-  content: string;
-  name?: string;
-}
-
 type AgentTaskOptions = {
   taskType: "agent";
   label: string;
@@ -71,7 +66,7 @@ type AgentTaskOptions = {
 type WorkflowTaskOptions = {
   taskType: "workflow";
   name: string;
-  run: (signal: AbortSignal, taskId: string) => Promise<string | TaskRunResult>;
+  run: (signal: AbortSignal, taskId: string) => Promise<string>;
 };
 
 type StartTaskOptions = AgentTaskOptions | WorkflowTaskOptions;
@@ -180,11 +175,10 @@ export class BackgroundTaskManager {
     accepted: AcceptedTaskEnvelope,
     signal: AbortSignal,
     status: "completed" | "failed",
-    value: string | TaskRunResult,
+    value: string,
   ): void {
     const terminalStatus = signal.aborted ? "failed" : status;
-    const terminalValue = signal.aborted ? errorMessage(signal.reason) : value;
-    const result = typeof terminalValue === "string" ? { content: terminalValue } : terminalValue;
+    const content = signal.aborted ? errorMessage(signal.reason) : value;
     const envelope: TerminalTaskEnvelope = options.taskType === "agent"
       ? {
           task_id: accepted.task_id,
@@ -192,14 +186,14 @@ export class BackgroundTaskManager {
           status: terminalStatus,
           session_key: options.sessionKey,
           label: options.label,
-          content: result.content,
+          content,
         }
       : {
           task_id: accepted.task_id,
           task_type: "workflow",
           status: terminalStatus,
-          name: result.name ?? options.name,
-          content: result.content,
+          name: options.name,
+          content,
         };
 
     this.counts[options.taskType].finished++;

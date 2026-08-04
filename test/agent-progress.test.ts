@@ -788,6 +788,7 @@ describe("pi-subagent background progress and status", () => {
     const workflowAccepted = await workflowTool.execute(
       "new-session-workflow",
       {
+        name: "new_session",
         script: "export const meta = { name: 'new_session', description: 'Run after a new session' };\nreturn await agent('Complete after the session boundary.', { label: 'worker' });",
       },
       undefined,

@@ -27,7 +27,6 @@ import {
 
 interface WorkflowStatusCallbacks {
   start(ctx: ExtensionContext, taskId: string, name: string): void;
-  rename(ctx: ExtensionContext, taskId: string, name: string): void;
   queueAgent(ctx: ExtensionContext, taskId: string): void;
   finishAgent(ctx: ExtensionContext, taskId: string): void;
   refresh(ctx: ExtensionContext): void;
@@ -53,14 +52,16 @@ export function createWorkflowTool(
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
     parameters: workflowToolParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const name = requiredWorkflowName(params);
+      const normalizedParams = { ...params, name };
       const taskManager = options.getTaskManager();
       const accepted = taskManager.start({
         taskType: "workflow",
-        name: initialWorkflowName(params),
+        name,
         run: async (signal, taskId) => {
-          options.status?.start(ctx, taskId, initialWorkflowName(params));
+          options.status?.start(ctx, taskId, name);
           try {
-            const prepared = await prepareWorkflowToolSource(params, ctx, taskId, (resumeTaskId) =>
+            const prepared = await prepareWorkflowToolSource(normalizedParams, ctx, taskId, (resumeTaskId) =>
               taskManager.isActive(resumeTaskId));
             if (!prepared.ok) {
               throw new Error(prepared.details.error);
@@ -68,11 +69,9 @@ export function createWorkflowTool(
 
             const {
               script,
-              metaName,
               journalWriter,
               resumeAgentResults,
             } = prepared.value;
-            options.status?.rename(ctx, taskId, metaName);
             const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
             const runner = createWorkflowAgentRunner({
               profiles,
@@ -86,7 +85,7 @@ export function createWorkflowTool(
 
             try {
               const result = await runWorkflow(script, {
-                args: params.args,
+                args: normalizedParams.args,
                 cwd: ctx.cwd,
                 signal,
                 limiter: options.getLimiter(),
@@ -110,10 +109,7 @@ export function createWorkflowTool(
               } catch {
                 // A completed workflow result remains valid when only replay journaling fails.
               }
-              return {
-                name: result.meta.name,
-                content: workflowContent(result.result),
-              };
+              return workflowContent(result.result);
             } catch (error) {
               try {
                 await journalWriter?.fail(error instanceof Error ? error.message : String(error));
@@ -133,7 +129,7 @@ export function createWorkflowTool(
       if (context.executionStarted) {
         return new Text("", 0, 0);
       }
-      const name = initialWorkflowName(args);
+      const name = typeof args.name === "string" ? args.name.trim() : "";
       return new Text(`${theme.bold("Workflow")} ${theme.fg("muted", name)}`, 0, 0);
     },
     renderResult(result, _options, theme) {
@@ -147,22 +143,12 @@ export function createWorkflowTool(
   });
 }
 
-function initialWorkflowName(params: WorkflowToolParams): string {
+function requiredWorkflowName(params: WorkflowToolParams): string {
   const name = typeof params.name === "string" ? params.name.trim() : "";
-  if (name) {
-    return name;
+  if (!name) {
+    throw new Error("Workflow name must contain non-whitespace characters");
   }
-  if (typeof params.script === "string" && params.script.trim()) {
-    const prefix = params.script.slice(0, 4096);
-    const match = prefix.match(
-      /^\s*(?:```(?:js|javascript)?\s*)?export\s+const\s+meta\s*=\s*\{[\s\S]*?\bname\s*:\s*(['"])([a-z0-9][a-z0-9_-]*)\1/i,
-    );
-    return match?.[2] ?? "workflow";
-  }
-  if (typeof params.script_path === "string" && params.script_path.trim()) {
-    return params.script_path.trim().split(/[\\/]/).at(-1)?.replace(/\.js$/i, "") || "workflow";
-  }
-  return "workflow";
+  return name;
 }
 
 function workflowContent(result: unknown): string {

@@ -1012,9 +1012,9 @@ describe("workflow tool rendering", () => {
 
   it("renders the call label and hides it once execution starts", () => {
     const theme = makeMockTheme();
-    const before = renderToText(tool.renderCall({ script: "export const meta = {}" }, theme, { executionStarted: false }));
+    const before = renderToText(tool.renderCall({ name: "audit", script: "export const meta = {}" }, theme, { executionStarted: false }));
     expect(before).toContain("Workflow");
-    const after = renderToText(tool.renderCall({ script: "..." }, theme, { executionStarted: true }));
+    const after = renderToText(tool.renderCall({ name: "audit", script: "..." }, theme, { executionStarted: true }));
     expect(after.trim()).toBe("");
   });
 
