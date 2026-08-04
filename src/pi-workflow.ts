@@ -6,25 +6,60 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { ConcurrencyLimiter } from "../core/concurrency.ts";
-import { filterProfilesForModelRegistry } from "../core/model.ts";
+import { Type, type Static } from "typebox";
+import type { ConcurrencyLimiter } from "./core/concurrency.ts";
+import { filterProfilesForModelRegistry } from "./core/model.ts";
 import {
   BackgroundTaskManager,
   taskToolResult,
   type WorkflowAcceptedTaskEnvelope,
-} from "../core/task-manager.ts";
-import { getSubagentProfiles } from "../profiles.ts";
-import type { SubagentTelemetry, SubagentUsage } from "../types.ts";
-import { createWorkflowSubagentRunner } from "./subagent-runner.ts";
-import { runWorkflow } from "./runtime.ts";
-import {
-  prepareWorkflowToolSource,
-  WORKFLOW_PROMPT_GUIDELINES,
-  WORKFLOW_PROMPT_SNIPPET,
-  WORKFLOW_TOOL_DESCRIPTION,
-  workflowToolParameters,
-  type WorkflowToolParams,
-} from "./source.ts";
+} from "./core/task-manager.ts";
+import { getSubagentProfiles } from "./profiles.ts";
+import type { SubagentTelemetry, SubagentUsage } from "./types.ts";
+import { runWorkflow } from "./workflow/runtime.ts";
+import { prepareWorkflowToolSource } from "./workflow/source.ts";
+import { createWorkflowSubagentRunner } from "./workflow/subagent-runner.ts";
+
+const WORKFLOW_PROMPT_SNIPPET = "Orchestrate dependent or larger multi-agent work";
+
+const WORKFLOW_PROMPT_GUIDELINES = [
+  "Always provide name. Omit script and script_path to run that saved workflow; replay with the same name and resume_from_task_id.",
+  "Only run trusted workflow scripts; worker VM isolation detects stalls but is not a security boundary.",
+];
+
+const WORKFLOW_TOOL_DESCRIPTION = [
+  "Use run_workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, replay, or larger fan-out.",
+  "Run a matching saved workflow when available; otherwise provide a trusted ad-hoc script.",
+].join(" ");
+
+export const workflowToolParameters = Type.Object({
+  name: Type.String({
+    minLength: 1,
+    pattern: ".*\\S.*",
+    description: "Workflow meta.name; required and must match the selected script, path, or replay journal.",
+  }),
+  script: Type.Optional(
+    Type.String({
+      description: "Trusted ad-hoc workflow JavaScript source whose meta.name matches name; do not include explanatory prose.",
+    }),
+  ),
+  script_path: Type.Optional(
+    Type.String({
+      description: "Path to a trusted saved or session-persisted workflow script whose meta.name matches name.",
+    }),
+  ),
+  args: Type.Optional(
+    Type.Any({ description: "Optional JSON value exposed unchanged to the workflow as the global `args`." }),
+  ),
+  resume_from_task_id: Type.Optional(
+    Type.String({
+      description:
+        "Prior workflow task ID to replay with the same name. Add script_path for an edited replay; the longest unchanged successful prefix is reused.",
+    }),
+  ),
+}, { additionalProperties: false });
+
+export type WorkflowToolParams = Static<typeof workflowToolParameters>;
 
 interface WorkflowStatusCallbacks {
   start(ctx: ExtensionContext, taskId: string, name: string): void;

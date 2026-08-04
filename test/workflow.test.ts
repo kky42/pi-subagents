@@ -7,6 +7,8 @@ import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { SessionKeyLocks } from "../src/core/session-key.ts";
 import { BackgroundTaskManager } from "../src/core/task-manager.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
+import { createRunWorkflowTool } from "../src/pi-workflow.ts";
+import { INLINE_WORKFLOW_EXAMPLE } from "../src/prompts.ts";
 import {
   parseWorkflowScript,
   runWorkflow,
@@ -14,8 +16,6 @@ import {
   type WorkflowSubagentRunner,
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
-import { INLINE_WORKFLOW_EXAMPLE } from "../src/workflow/source.ts";
-import { createRunWorkflowTool } from "../src/workflow/tool.ts";
 import { loadWorkflowJournal, persistWorkflowScript } from "../src/workflow/journal.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
 

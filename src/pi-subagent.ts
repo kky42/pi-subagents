@@ -56,7 +56,7 @@ import type {
   SubagentUsage,
 } from "./types.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
-import { createRunWorkflowTool } from "./workflow/tool.ts";
+import { createRunWorkflowTool } from "./pi-workflow.ts";
 
 const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 12;
 const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;

@@ -1,5 +1,5 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type, type Static } from "typebox";
+import type { WorkflowToolParams } from "../pi-workflow.ts";
 import {
   createWorkflowJournalWriter,
   createWorkflowTaskIdentity,
@@ -12,77 +12,6 @@ import {
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "./registry.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
 import type { WorkflowCachedSubagentResult } from "./types.ts";
-
-export const WORKFLOW_PROMPT_SNIPPET = "Orchestrate dependent or larger multi-agent work";
-
-export const WORKFLOW_PROMPT_GUIDELINES = [
-  "Always provide name. Omit script and script_path to run that saved workflow; replay with the same name and resume_from_task_id.",
-  "Only run trusted workflow scripts; worker VM isolation detects stalls but is not a security boundary.",
-];
-
-export const WORKFLOW_TOOL_DESCRIPTION = [
-  "Use run_workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, replay, or larger fan-out.",
-  "Run a matching saved workflow when available; otherwise provide a trusted ad-hoc script.",
-].join(" ");
-
-export const INLINE_WORKFLOW_EXAMPLE = `export const meta = { name: 'inspect_items', description: 'Inspect items in two turns' };
-const replySchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['text'],
-  properties: { text: { type: 'string' } },
-};
-const results = await pipeline(
-  args?.items ?? ['src', 'test'],
-  (item, _original, index) => run_agent('Inspect ' + item, {
-    label: 'inspect-' + index,
-    phase: 'inspect',
-    profile: 'general-purpose',
-    session_key: 'item-' + index,
-    schema: replySchema,
-  }),
-  async (first, item, index) => {
-    if (!first) return { item, first: null, followup: null };
-    const followup = await run_agent('Continue with one-sentence advice.', {
-      label: 'followup-' + index,
-      phase: 'followup',
-      profile: 'general-purpose',
-      session_key: 'item-' + index,
-      schema: replySchema,
-    });
-    return { item, first: first.text, followup: followup?.text ?? null };
-  },
-);
-return { results };`;
-
-export const workflowToolParameters = Type.Object({
-  name: Type.String({
-    minLength: 1,
-    pattern: ".*\\S.*",
-    description: "Workflow meta.name; required and must match the selected script, path, or replay journal.",
-  }),
-  script: Type.Optional(
-    Type.String({
-      description: "Trusted ad-hoc workflow JavaScript source whose meta.name matches name; do not include explanatory prose.",
-    }),
-  ),
-  script_path: Type.Optional(
-    Type.String({
-      description: "Path to a trusted saved or session-persisted workflow script whose meta.name matches name.",
-    }),
-  ),
-  args: Type.Optional(
-    Type.Any({ description: "Optional JSON value exposed unchanged to the workflow as the global `args`." }),
-  ),
-  resume_from_task_id: Type.Optional(
-    Type.String({
-      description:
-        "Prior workflow task ID to replay with the same name. Add script_path for an edited replay; the longest unchanged successful prefix is reused.",
-    }),
-  ),
-}, { additionalProperties: false });
-
-export type WorkflowToolParams = Static<typeof workflowToolParameters>;
 
 export type PreparedWorkflowToolSource = {
   script: string;

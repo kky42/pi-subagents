@@ -1,6 +1,35 @@
 import type { SubagentProfile } from "./types.ts";
-import { INLINE_WORKFLOW_EXAMPLE } from "./workflow/source.ts";
 import type { SavedWorkflow } from "./workflow/registry.ts";
+
+export const INLINE_WORKFLOW_EXAMPLE = `export const meta = { name: 'inspect_items', description: 'Inspect items in two turns' };
+const replySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['text'],
+  properties: { text: { type: 'string' } },
+};
+const results = await pipeline(
+  args?.items ?? ['src', 'test'],
+  (item, _original, index) => run_agent('Inspect ' + item, {
+    label: 'inspect-' + index,
+    phase: 'inspect',
+    profile: 'general-purpose',
+    session_key: 'item-' + index,
+    schema: replySchema,
+  }),
+  async (first, item, index) => {
+    if (!first) return { item, first: null, followup: null };
+    const followup = await run_agent('Continue with one-sentence advice.', {
+      label: 'followup-' + index,
+      phase: 'followup',
+      profile: 'general-purpose',
+      session_key: 'item-' + index,
+      schema: replySchema,
+    });
+    return { item, first: first.text, followup: followup?.text ?? null };
+  },
+);
+return { results };`;
 
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
   const lines = [...profiles.values()]
