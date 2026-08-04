@@ -25,6 +25,7 @@
 - `general-purpose` adds no role prompt.
 - Do not replace pi's base system prompt in v1.
 - Every top-level `Agent` call is a background task. A valid call immediately returns a compact `accepted` envelope with `task_id`, `task_type`, `status`, `session_key`, and `name`; one later custom notification returns `completed` or `failed` with the same identifiers and plain-text `content`. There is no model-facing polling, steering, scheduling, per-call model override, or per-call thinking override.
+- PiFlow emits versioned `pi-flow:task-state` events on Pi's synchronous event bus when an Agent or Workflow is accepted and immediately before its terminal notification. The payload contains only `version`, `task_id`, `task_type`, and `status`, allowing other extensions to coordinate without depending on PiFlow internals.
 - Retain each terminal envelope until Pi emits `message_end` for its custom message. Before session-tree navigation or shutdown, bind persistence to the owning session, abort owned tasks, append every retained or newly failed notification, then reset task state. Shutdown persistence must not trigger a model turn or replacement session.
 - Tool calls accept only `description`, `prompt`, optional `subagent_type`, and optional `session_key`; backend/model/thinking selection is profile-based.
 - Subagent timeout is a global operator-facing guardrail (`subagentTimeoutMs` / `--subagent-timeout-ms`), not a per-call Agent or workflow `agent()` parameter. The runtime timeout is owned by `spawnSubagent` after callers acquire a concurrency slot, so queue time does not count against it.
@@ -76,7 +77,7 @@
 ## CI and release workflow
 
 - CI lives in `.github/workflows/ci.yml` and runs on pull requests plus pushes to `main`. It installs with `npm ci` and runs `npm run check` on Node 22.x and 24.x.
-- E2E scripts are intentionally not part of required CI because they use real models and can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, `npm run e2e:prompt-routing` when prompt or routing guidance changes, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
+- Real-model E2E scripts are intentionally not part of required CI because they can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, `npm run e2e:prompt-routing` when prompt or routing guidance changes, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
 - Real-model E2E drivers must fail the harness when a child process cannot start, times out, or exits nonzero. Do not classify process failures as inconclusive model behavior.
 - Every real-model E2E driver must install the guard from `scripts/e2e/lib/deepseek-claude-env.mjs` so any Claude Code process routes through DeepSeek's Anthropic-compatible endpoint with isolated settings. Drivers must fail fast without `DEEPSEEK_API_KEY`/`DEEPSEEK_API_TOKEN` (or `--deepseek-api-key-env`) and must not fall back to Anthropic login or another Claude Code provider.
 - There is intentionally no automated npm publish workflow right now; do not create tags expecting GitHub Actions to publish, and do not add an `NPM_TOKEN`-based workflow unless the user asks.

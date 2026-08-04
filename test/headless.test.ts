@@ -6,16 +6,17 @@ const sdkState = vi.hoisted(() => ({ provider: "configured", model: "model-a", a
 vi.mock("@earendil-works/pi-coding-agent", async (original) => ({
   ...(await original()),
   getAgentDir: () => "/tmp/pi-flow-headless-agent",
-  AuthStorage: { create: () => ({}) },
   SettingsManager: { create: () => ({
     getDefaultProvider: () => sdkState.provider,
     getDefaultModel: () => sdkState.model,
     getDefaultThinkingLevel: () => "medium",
   }) },
-  ModelRegistry: { create: () => ({
-    find: (provider: string, model: string) => provider === "configured" && model === "model-a" ? { provider, id: model } : undefined,
-    getAvailable: async () => sdkState.available,
-  }) },
+  ModelRuntime: { create: async () => ({ getAvailable: async () => sdkState.available }) },
+  ModelRegistry: class {
+    find(provider: string, model: string) {
+      return provider === "configured" && model === "model-a" ? { provider, id: model } : undefined;
+    }
+  },
 }));
 vi.mock("../src/core/spawn.ts", async (original) => ({ ...(await original()), spawnSubagent: spawn }));
 vi.mock("../src/profiles.ts", () => ({

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { AuthStorage, getAgentDir, ModelRegistry, SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, ModelRegistry, ModelRuntime, SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ConcurrencyLimiter } from "./src/core/concurrency.ts";
 import { getSubagentProfiles } from "./src/profiles.ts";
 import type { SubagentBackend, SubagentUsage } from "./src/types.ts";
@@ -32,15 +32,18 @@ export class HeadlessWorkflowError extends Error {
 /** Execute a trusted pi-flow script without an ExtensionContext or TUI. */
 export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOptions): Promise<HeadlessWorkflowResult<T>> {
   const agentDir = getAgentDir();
-  const auth = AuthStorage.create(join(agentDir, "auth.json"));
-  const modelRegistry = ModelRegistry.create(auth, join(agentDir, "models.json"));
+  const modelRuntime = await ModelRuntime.create({
+    authPath: join(agentDir, "auth.json"),
+    modelsPath: join(agentDir, "models.json"),
+  });
+  const modelRegistry = new ModelRegistry(modelRuntime);
   const settings = SettingsManager.create(options.cwd, agentDir);
   const defaultProvider = settings.getDefaultProvider();
   const defaultModel = settings.getDefaultModel();
   const configuredModel = defaultProvider && defaultModel
     ? modelRegistry.find(defaultProvider, defaultModel)
     : undefined;
-  const model = configuredModel ?? (await modelRegistry.getAvailable())[0];
+  const model = configuredModel ?? (await modelRuntime.getAvailable())[0];
   const ctx = { cwd: options.cwd, modelRegistry, model } as ExtensionContext;
   const usage: HeadlessUsage = {
     input: 0,

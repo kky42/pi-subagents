@@ -163,6 +163,7 @@ describe("pi-subagent background concurrency", () => {
     ]);
     await waitUntil(() => widgets.some((lines) =>
       lines?.includes("◌ Pi Agent(general-purpose: Shared B) queued") === true));
+    await waitUntil(() => started === 1);
     expect(started).toBe(1);
     expect(widgets.some((lines) => lines?.some((line) =>
       line.includes("Pi Agent(general-purpose: Shared A) 0s · 0 events")) === true)).toBe(true);

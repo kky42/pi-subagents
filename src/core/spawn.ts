@@ -21,6 +21,7 @@ import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
 import type { SubagentProfile, SubagentTelemetry, SubagentToolDetails, SubagentUsage } from "../types.ts";
 import { createTimeoutSignal, markSubagentTimedOut } from "./timeout.ts";
+import { createChildModelRuntime } from "./model-runtime.ts";
 
 /**
  * The delegation tools a spawned child must never receive, so subagents cannot
@@ -244,6 +245,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
   const agentDir = getAgentDir();
   const cwd = ctx.cwd;
   let childSession: PiSubagentSessionResolution;
+  let modelRuntime: Awaited<ReturnType<typeof createChildModelRuntime>>;
   try {
     childSession = params.persistSession === true
       ? await resolvePiSubagentSession({
@@ -252,6 +254,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
           requestedSessionId: params.sessionId,
         })
       : { sessionManager: SessionManager.inMemory(cwd), sessionId: undefined };
+    modelRuntime = await createChildModelRuntime(ctx.modelRegistry, model, agentDir);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return textResult(`Subagent "${description}" (${subagentType}) failed: ${message}`, {
@@ -285,7 +288,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
     agentDir,
     model,
     thinkingLevel: thinkingLevel as NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"],
-    modelRegistry: ctx.modelRegistry,
+    modelRuntime,
     settingsManager,
     sessionManager: childSession.sessionManager,
     resourceLoader,

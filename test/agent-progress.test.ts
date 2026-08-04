@@ -43,7 +43,15 @@ describe("pi-subagent background progress and status", () => {
   });
 
   it("returns an accepted envelope without live tool updates or waiting for the child", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
+    const taskStates: unknown[] = [];
+    const taskStateObserver: ExtensionFactory = (pi) => {
+      pi.events.on("pi-flow:task-state", (event) => {
+        taskStates.push(event);
+      });
+    };
+    const { session, registration, model, modelRegistry } = await createSession({
+      extensionFactories: [taskStateObserver],
+    });
     const tool = session.getToolDefinition("Agent") as any;
     const updates: unknown[] = [];
     const terminalDelivered = deferred();
@@ -94,6 +102,12 @@ describe("pi-subagent background progress and status", () => {
     expect(JSON.parse(result.content[0].text)).toEqual(result.details);
     expect(result).not.toHaveProperty("usage");
     expect(updates).toEqual([]);
+    expect(taskStates).toEqual([{
+      version: 1,
+      task_id: result.details.task_id,
+      task_type: "agent",
+      status: "accepted",
+    }]);
 
     release();
     await terminalDelivered.promise;
@@ -106,6 +120,20 @@ describe("pi-subagent background progress and status", () => {
     });
     expect(notificationContexts).toBe(1);
     expect(notificationCopies).toBe(1);
+    expect(taskStates).toEqual([
+      {
+        version: 1,
+        task_id: result.details.task_id,
+        task_type: "agent",
+        status: "accepted",
+      },
+      {
+        version: 1,
+        task_id: result.details.task_id,
+        task_type: "agent",
+        status: "completed",
+      },
+    ]);
     unsubscribe();
     disposeSession(session);
   });

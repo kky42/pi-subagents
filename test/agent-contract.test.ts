@@ -1,10 +1,10 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -201,10 +201,13 @@ describe("pi-subagent agent contract", () => {
       models: [{ id: "faux-thinker", name: "Faux Thinker", reasoning: true }],
     });
     const model = faux.getModel("faux-thinker") as Model<string>;
-    const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-    authStorage.setRuntimeApiKey(model.provider, "test-api-key");
-    const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+    });
+    const modelRegistry = new ModelRegistry(modelRuntime);
     const registration = installFauxProvider(modelRegistry, faux);
+    await modelRuntime.setRuntimeApiKey(model.provider, "test-api-key", { allowNetwork: false });
     registrations.push(registration);
     const settingsManager = SettingsManager.inMemory({});
     const sessionManager = SessionManager.inMemory(cwd);
@@ -224,8 +227,7 @@ describe("pi-subagent agent contract", () => {
     const { session } = await createAgentSession({
       cwd,
       agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       model,
       thinkingLevel: "high",
       settingsManager,

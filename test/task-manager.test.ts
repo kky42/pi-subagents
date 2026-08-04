@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BackgroundTaskManager,
   taskToolResult,
+  type TaskStateEvent,
   type TerminalTaskEnvelope,
 } from "../src/core/task-manager.ts";
 
@@ -55,9 +56,61 @@ describe("BackgroundTaskManager", () => {
     expect(manager.getCounts().agent).toEqual({ finished: 1, total: 1 });
   });
 
+  it("publishes accepted and terminal task states around notification delivery", async () => {
+    const run = deferred<string>();
+    const states: TaskStateEvent[] = [];
+    const order: string[] = [];
+    const manager = new BackgroundTaskManager({
+      onTaskState: (event) => {
+        states.push(event);
+        order.push(event.status);
+      },
+      notify: () => {
+        order.push("notification");
+      },
+    });
+
+    const accepted = manager.start({
+      taskType: "agent",
+      name: "coordinate extensions",
+      sessionKey: "coordination",
+      run: () => run.promise,
+    });
+
+    expect(states).toEqual([{
+      version: 1,
+      task_id: accepted.task_id,
+      task_type: "agent",
+      status: "accepted",
+    }]);
+
+    run.resolve("done");
+    await manager.waitForIdle();
+
+    expect(states).toEqual([
+      {
+        version: 1,
+        task_id: accepted.task_id,
+        task_type: "agent",
+        status: "accepted",
+      },
+      {
+        version: 1,
+        task_id: accepted.task_id,
+        task_type: "agent",
+        status: "completed",
+      },
+    ]);
+    expect(order).toEqual(["accepted", "completed", "notification"]);
+  });
+
   it("uses one compact Workflow envelope without a session key", async () => {
     const notifications: TerminalTaskEnvelope[] = [];
-    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
+    const states: TaskStateEvent[] = [];
+    const manager = new BackgroundTaskManager({
+      notify: (envelope) => notifications.push(envelope),
+      onTaskState: (event) => states.push(event),
+    });
 
     const accepted = manager.start({
       taskType: "workflow",
@@ -67,6 +120,20 @@ describe("BackgroundTaskManager", () => {
     await manager.waitForIdle();
 
     expect(Object.keys(accepted).sort()).toEqual(["name", "status", "task_id", "task_type"]);
+    expect(states).toEqual([
+      {
+        version: 1,
+        task_id: accepted.task_id,
+        task_type: "workflow",
+        status: "accepted",
+      },
+      {
+        version: 1,
+        task_id: accepted.task_id,
+        task_type: "workflow",
+        status: "completed",
+      },
+    ]);
     expect(notifications).toEqual([{
       task_id: accepted.task_id,
       task_type: "workflow",

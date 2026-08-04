@@ -34,6 +34,7 @@ import {
 import {
   BackgroundTaskManager,
   TASK_NOTIFICATION_CUSTOM_TYPE,
+  TASK_STATE_EVENT,
   taskToolResult,
   type AgentAcceptedTaskEnvelope,
   type TerminalTaskEnvelope,
@@ -366,6 +367,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       pendingNotifications.clear();
     };
     const createTaskManager = () => new BackgroundTaskManager({
+      onTaskState: (event) => {
+        pi.events.emit(TASK_STATE_EVENT, event);
+      },
       notify: (envelope) => {
         statusState.activeAgents.delete(envelope.task_id);
         statusState.activeWorkflows.delete(envelope.task_id);

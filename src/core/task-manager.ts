@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
 
 export const TASK_NOTIFICATION_CUSTOM_TYPE = "pi-flow-task-notification";
+export const TASK_STATE_EVENT = "pi-flow:task-state";
 
 export type TaskType = "agent" | "workflow";
 export type PublicTaskStatus = "accepted" | "completed" | "failed";
+
+export interface TaskStateEvent {
+  version: 1;
+  task_id: string;
+  task_type: TaskType;
+  status: PublicTaskStatus;
+}
 
 interface TaskEnvelopeBase {
   task_id: string;
@@ -68,6 +76,7 @@ type StartTaskOptions = AgentTaskOptions | WorkflowTaskOptions;
 export interface BackgroundTaskManagerOptions {
   notify: (envelope: TerminalTaskEnvelope) => void;
   onCountsChange?: (counts: TaskCounts) => void;
+  onTaskState?: (event: TaskStateEvent) => void;
 }
 
 interface ActiveTask {
@@ -125,6 +134,7 @@ export class BackgroundTaskManager {
 
     this.active.set(taskId, { controller, promise });
     this.publishCounts();
+    this.publishTaskState(accepted);
     return accepted;
   }
 
@@ -192,8 +202,22 @@ export class BackgroundTaskManager {
 
     this.counts[options.taskType].finished++;
     this.publishCounts();
+    this.publishTaskState(envelope);
     try {
       this.options.notify(envelope);
+    } catch {
+      return;
+    }
+  }
+
+  private publishTaskState(envelope: TaskEnvelope): void {
+    try {
+      this.options.onTaskState?.({
+        version: 1,
+        task_id: envelope.task_id,
+        task_type: envelope.task_type,
+        status: envelope.status,
+      });
     } catch {
       return;
     }

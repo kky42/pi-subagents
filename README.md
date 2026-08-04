@@ -86,9 +86,24 @@ Inspect the UI and recommend specific improvements.
 - **Resumable specialists.** Reuse a direct Agent's `session_key` to continue its backend conversation.
 - **Visible progress.** Pi's TUI distinguishes queued from running direct Agents, folds each Workflow's child progress into one row, and reports cumulative tokens, cache usage, and cost when available. The widget stays within five lines while active and collapses to one idle line.
 
+## Extension coordination events
+
+PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an Agent or Workflow is accepted and immediately before its terminal notification:
+
+```ts
+{
+  version: 1,
+  task_id: string,
+  task_type: "agent" | "workflow",
+  status: "accepted" | "completed" | "failed"
+}
+```
+
+Other extensions can track accepted task IDs until their matching completed or failed events without depending on PiFlow internals.
+
 ## Requirements
 
-- [Pi](https://github.com/earendil-works/pi)
+- [Pi](https://github.com/earendil-works/pi) 0.83.0 or newer
 - Node.js 22.19 or newer
 - [Codex CLI](https://github.com/openai/codex), installed and authenticated only for `backend: codex`
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), installed and authenticated only for `backend: claude`

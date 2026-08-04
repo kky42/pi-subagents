@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   type ExtensionFactory,
   ModelRegistry,
+  ModelRuntime,
   SessionManager,
   SettingsManager,
   Theme,
@@ -187,11 +187,14 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     const models = modelDefs.map((def) => faux.getModel(def.id) as Model<string>);
     const model = defaultModelId ? (faux.getModel(defaultModelId) as Model<string>) : models[0];
 
-    const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-    authStorage.setRuntimeApiKey(model.provider, "test-api-key");
     writeModelsJson(models);
-    const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+    });
+    const modelRegistry = new ModelRegistry(modelRuntime);
     const registration = installFauxProvider(modelRegistry, faux);
+    await modelRuntime.setRuntimeApiKey(model.provider, "test-api-key", { allowNetwork: false });
     registrations.push(registration);
     const settingsManager = SettingsManager.inMemory({});
     const sessionManager = SessionManager.inMemory(cwd);
@@ -222,8 +225,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     const { session } = await createAgentSession({
       cwd,
       agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       model,
       thinkingLevel,
       settingsManager,
@@ -257,7 +259,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       : undefined;
     await session.bindExtensions({ mode, uiContext });
 
-    return { session, registration, model, models, modelRegistry, sessionManager };
+    return { session, registration, model, models, modelRegistry, modelRuntime, sessionManager };
   }
 
   function setContextRoutingResponses(
