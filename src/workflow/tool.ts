@@ -159,8 +159,8 @@ function initialWorkflowName(params: WorkflowToolParams): string {
     );
     return match?.[2] ?? "workflow";
   }
-  if (typeof params.scriptPath === "string" && params.scriptPath.trim()) {
-    return params.scriptPath.trim().split(/[\\/]/).at(-1)?.replace(/\.js$/i, "") || "workflow";
+  if (typeof params.script_path === "string" && params.script_path.trim()) {
+    return params.script_path.trim().split(/[\\/]/).at(-1)?.replace(/\.js$/i, "") || "workflow";
   }
   return "workflow";
 }

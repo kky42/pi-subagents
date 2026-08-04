@@ -56,6 +56,7 @@ describe("pi-subagent agent contract", () => {
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
     const schema = tool?.parameters as {
       required?: string[];
+      additionalProperties?: boolean;
       properties: Record<string, { description?: string }>;
     } | undefined;
     const properties = schema?.properties ?? {};
@@ -64,6 +65,7 @@ describe("pi-subagent agent contract", () => {
     expect(tool?.description).toContain("return its task ID immediately");
     expect(tool?.promptGuidelines).toBeUndefined();
     expect(schema?.required).toEqual(["label", "prompt"]);
+    expect(schema?.additionalProperties).toBe(false);
     expect(Object.keys(properties).sort()).toEqual(["label", "prompt", "session_key", "subagent_type"]);
     expectDescribedProperties(properties);
     expect(properties.session_key?.description).toContain("effective session_key is returned");
@@ -76,6 +78,7 @@ describe("pi-subagent agent contract", () => {
     const tool = session.getAllTools().find((candidate) => candidate.name === "workflow");
     const schema = tool?.parameters as {
       required?: string[];
+      additionalProperties?: boolean;
       properties: Record<string, { description?: string }>;
     } | undefined;
     const properties = schema?.properties ?? {};
@@ -83,7 +86,8 @@ describe("pi-subagent agent contract", () => {
     expect(tool?.description.trim().length).toBeGreaterThan(0);
     expect(tool?.promptGuidelines).toBeUndefined();
     expect(schema?.required ?? []).toEqual([]);
-    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resumeFromTaskId", "script", "scriptPath"]);
+    expect(schema?.additionalProperties).toBe(false);
+    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resume_from_task_id", "script", "script_path"]);
     expectDescribedProperties(properties);
 
     disposeSession(session);

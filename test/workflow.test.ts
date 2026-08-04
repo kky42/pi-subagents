@@ -283,17 +283,20 @@ return await agent('second', { schema: { type: 'object', required: ['answer'], p
   });
 
 
-  it("defaults subagent_type to general-purpose and passes an explicit type through", async () => {
-    const seen: string[] = [];
+  it("normalizes labels and subagent_type before applying defaults", async () => {
+    const seen: Array<{ label: string; subagentType: string }> = [];
     const runAgent: WorkflowAgentRunner = async (call) => {
-      seen.push(call.subagentType);
+      seen.push({ label: call.label, subagentType: call.subagentType });
       return call.label;
     };
     await runWorkflow(
-      `${META}await agent('a', { label: 'one' });\nawait agent('b', { label: 'two', subagent_type: 'custom-agent' });\nreturn null;`,
+      `${META}await agent('a', { label: ' one ', subagent_type: ' custom-agent ' });\nawait agent('b', { label: '   ', subagent_type: '   ' });\nreturn null;`,
       { cwd: "/tmp", limiter: new ConcurrencyLimiter(4), runAgent },
     );
-    expect(seen).toEqual(["general-purpose", "custom-agent"]);
+    expect(seen).toEqual([
+      { label: "one", subagentType: "custom-agent" },
+      { label: "agent 2", subagentType: "general-purpose" },
+    ]);
   });
 
   it("passes normalized workflow agent session_key through to the shared subagent runner", async () => {

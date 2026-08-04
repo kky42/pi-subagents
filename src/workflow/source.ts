@@ -17,7 +17,7 @@ export const WORKFLOW_PROMPT_SNIPPET = "Run a saved or ad-hoc multi-agent JavaSc
 
 export const WORKFLOW_TOOL_DESCRIPTION = [
   "Launch a trusted JavaScript workflow as a background task and return its task ID immediately.",
-  "Provide exactly one source: `name`, `scriptPath`, or `script`; a prior workflow can instead be replayed with `resumeFromTaskId`.",
+  "Provide exactly one source: `name`, `script_path`, or `script`; a prior workflow can instead be replayed with `resume_from_task_id`.",
   "Subagent calls share PiFlow's bounded concurrency and queue when full.",
   "Only run trusted scripts; worker VM isolation detects stalls but is not a security boundary.",
 ].join(" ");
@@ -72,7 +72,7 @@ export const workflowToolParameters = Type.Object({
         "Registered saved-workflow meta.name. Create reusable workflows as valid .js files under ~/.pi/agent/workflows/ or a trusted project's .pi/workflows/. meta.name must match [a-z0-9][a-z0-9_-]*; the filename may differ.",
     }),
   ),
-  scriptPath: Type.Optional(
+  script_path: Type.Optional(
     Type.String({
       description:
         "Saved or session-persisted .js workflow path resolving inside an allowed global, trusted-project, or current-session workflow root.",
@@ -81,13 +81,13 @@ export const workflowToolParameters = Type.Object({
   args: Type.Optional(
     Type.Any({ description: "Optional JSON value exposed unchanged to the workflow as the global `args`." }),
   ),
-  resumeFromTaskId: Type.Optional(
+  resume_from_task_id: Type.Optional(
     Type.String({
       description:
-        "Optional prior workflow task ID for replay. Use it alone to replay the persisted script, or with `scriptPath` to replay an edited script. Successful cached agent results are reused for the longest unchanged call prefix, then execution continues live.",
+        "Optional prior workflow task ID for replay. Use it alone to replay the persisted script, or with `script_path` to replay an edited script. Successful cached agent results are reused for the longest unchanged call prefix, then execution continues live.",
     }),
   ),
-});
+}, { additionalProperties: false });
 
 export type WorkflowToolParams = Static<typeof workflowToolParameters>;
 
@@ -144,13 +144,13 @@ function sourceError(
 function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext): WorkflowSource {
   const inlineScript = typeof params.script === "string" && params.script.trim() ? params.script : undefined;
   const savedName = typeof params.name === "string" && params.name.trim() ? params.name.trim() : undefined;
-  const scriptPath = typeof params.scriptPath === "string" && params.scriptPath.trim() ? params.scriptPath.trim() : undefined;
+  const scriptPath = typeof params.script_path === "string" && params.script_path.trim() ? params.script_path.trim() : undefined;
   const sourceCount = Number(Boolean(inlineScript)) + Number(Boolean(savedName)) + Number(Boolean(scriptPath));
   if (sourceCount !== 1) {
     return {
       ok: false,
       message:
-        "Workflow requires exactly one non-empty source: `script` for an ad-hoc workflow, `name` for a saved workflow, or `scriptPath` for a persisted script.",
+        "Workflow requires exactly one non-empty source: `script` for an ad-hoc workflow, `name` for a saved workflow, or `script_path` for a persisted script.",
       warnings: [],
     };
   }
@@ -220,13 +220,13 @@ export async function prepareWorkflowToolSource(
   taskId: string,
   isTaskActive: (taskId: string) => boolean = () => false,
 ): Promise<PrepareWorkflowToolSourceResult> {
-  const resumeFromTaskId = typeof params.resumeFromTaskId === "string" && params.resumeFromTaskId.trim()
-    ? params.resumeFromTaskId.trim()
+  const resumeFromTaskId = typeof params.resume_from_task_id === "string" && params.resume_from_task_id.trim()
+    ? params.resume_from_task_id.trim()
     : undefined;
-  const hasExplicitReplayScriptPath = typeof params.scriptPath === "string" && params.scriptPath.trim().length > 0;
+  const hasExplicitReplayScriptPath = typeof params.script_path === "string" && params.script_path.trim().length > 0;
   const sessionWorkflowDir = getSessionWorkflowDir(ctx);
   if (resumeFromTaskId && (params.script || params.name)) {
-    const message = "Cannot resume workflow: resumeFromTaskId may only be used alone or with scriptPath.";
+    const message = "Cannot resume workflow: resume_from_task_id may only be used alone or with script_path.";
     return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
   }
 
@@ -255,7 +255,7 @@ export async function prepareWorkflowToolSource(
       const message = `Cannot resume workflow: task ${resumeFromTaskId} has no persisted script.`;
       return sourceError(message, { name: resumeJournal.name ?? "workflow", error: message, resumeFromTaskId });
     }
-    sourceParams = { ...params, scriptPath: resumeJournal.scriptPath };
+    sourceParams = { ...params, script_path: resumeJournal.scriptPath };
   }
 
   const source = resolveWorkflowSource(sourceParams, ctx);

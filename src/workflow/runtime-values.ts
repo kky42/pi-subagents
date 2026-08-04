@@ -1,4 +1,7 @@
+import { normalizeAgentLabel, normalizeAgentSubagentType } from "../core/agent-values.ts";
 import { normalizeSessionKey } from "../core/session-key.ts";
+
+const AGENT_OPTION_KEYS = new Set(["label", "phase", "subagent_type", "session_key", "schema"]);
 
 export interface NormalizedAgentOptions {
   label?: string;
@@ -27,12 +30,14 @@ function optionalString(value: unknown, name: string): string | undefined {
 
 export function normalizeAgentOptions(value: unknown): NormalizedAgentOptions {
   if (value === undefined || value === null) return {};
-  if (typeof value !== "object") throw new TypeError("agent options must be an object");
+  if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("agent options must be an object");
   const options = value as Record<string, unknown>;
+  const unknownKey = Object.keys(options).find((key) => !AGENT_OPTION_KEYS.has(key));
+  if (unknownKey) throw new TypeError(`unknown agent option: ${unknownKey}`);
   return {
-    label: optionalString(options.label, "agent label"),
+    label: normalizeAgentLabel(optionalString(options.label, "agent label")),
     phase: optionalString(options.phase, "agent phase"),
-    subagentType: optionalString(options.subagent_type, "agent subagent_type"),
+    subagentType: normalizeAgentSubagentType(optionalString(options.subagent_type, "agent subagent_type")),
     sessionKey: normalizeSessionKey(optionalString(options.session_key, "agent session_key")),
     schema: options.schema,
   };

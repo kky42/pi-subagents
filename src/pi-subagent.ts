@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
+import { normalizeAgentLabel, normalizeAgentSubagentType } from "./core/agent-values.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { getBackendAgentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
@@ -61,7 +62,8 @@ const AGENT_PROMPT_SNIPPET = "Launch one focused background subagent task";
 
 const agentToolParameters = Type.Object({
   label: Type.String({
-    description: "Short task label, ideally 3-5 words; not sent as the child task.",
+    minLength: 1,
+    description: "Short non-empty task label, ideally 3-5 words; not sent as the child task.",
   }),
   prompt: Type.String({
     description:
@@ -79,7 +81,7 @@ const agentToolParameters = Type.Object({
         "Optional subagent conversation key. Reuse a session_key returned by an earlier Agent call to continue that child conversation. Omit to start a new conversation; the effective session_key is returned.",
     }),
   ),
-});
+}, { additionalProperties: false });
 
 type AgentToolParams = Static<typeof agentToolParameters>;
 
@@ -130,13 +132,6 @@ function normalizeSubagentTimeoutMs(value: number | string | boolean | undefined
     throw new Error(`${label} must be a non-negative integer`);
   }
   return parsed;
-}
-
-function normalizeSubagentType(value: string | undefined): SubagentType {
-  if (value === undefined || value.trim() === "") {
-    return "general-purpose";
-  }
-  return value.trim();
 }
 
 function getSessionKeyBinding(
@@ -200,9 +195,12 @@ function createAgentTool(
     executionMode: "parallel",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const state = getState();
-      const subagentType = normalizeSubagentType(params.subagent_type);
+      const subagentType = normalizeAgentSubagentType(params.subagent_type) ?? "general-purpose";
       const sessionKey = normalizeSessionKey(params.session_key) ?? createSessionKey();
-      const label = params.label.trim() || params.label;
+      const label = normalizeAgentLabel(params.label);
+      if (!label) {
+        throw new Error("Agent label must contain non-whitespace characters");
+      }
       const accepted = options.getTaskManager().start({
         taskType: "agent",
         label,
@@ -291,9 +289,9 @@ function createAgentTool(
       if (context.executionStarted) {
         return new Text("", 0, 0);
       }
-      const subagentType = normalizeSubagentType(args.subagent_type);
+      const subagentType = normalizeAgentSubagentType(args.subagent_type) ?? "general-purpose";
       const backend = getProfileBackend(subagentType);
-      const label = typeof args.label === "string" ? args.label.trim() : "";
+      const label = normalizeAgentLabel(args.label) ?? "";
       return new Text(
         `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", subagentType)}${label ? ` ${theme.fg("dim", label)}` : ""}`,
         0,

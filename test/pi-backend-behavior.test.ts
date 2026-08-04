@@ -45,7 +45,7 @@ Custom Code Searcher Role`);
       session,
       registration,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
-      { label: "Find auth files", subagent_type: "code-searcher", prompt: "Search for the auth flow." },
+      { label: " Find auth files ", subagent_type: " code-searcher ", prompt: "Search for the auth flow." },
       async (context, options, selectedModel) => {
         childContext = context;
         childOptions = options;
@@ -54,7 +54,11 @@ Custom Code Searcher Role`);
       },
     );
 
-    expect(accepted.details).toMatchObject({ status: "accepted", session_key: expect.stringMatching(/^session_/) });
+    expect(accepted.details).toMatchObject({
+      status: "accepted",
+      session_key: expect.stringMatching(/^session_/),
+      label: "Find auth files",
+    });
     expect(terminal).toEqual({ ...accepted.details, status: "completed", content: "found auth.ts" });
     expect(childModel?.id).toBe("faux-fast");
     expect((childOptions as { reasoning?: string } | undefined)?.reasoning).toBeUndefined();

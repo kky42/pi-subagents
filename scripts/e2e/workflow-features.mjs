@@ -459,8 +459,8 @@ function savedNamePrompt(name) {
 function resumePrompt(taskId, args) {
   return [
     "Replay the feature_probe workflow from its persisted task journal and reuse its cached results.",
-    "Call the workflow tool with these exact parameters and no scriptPath:",
-    `- resumeFromTaskId: "${taskId}"`,
+    "Call the workflow tool with these exact parameters and no script_path:",
+    `- resume_from_task_id: "${taskId}"`,
     `- args: ${JSON.stringify(args)}`,
     "Wait for the matching terminal task notification, then report its result.",
   ].join("\n");
@@ -622,7 +622,7 @@ async function scenarioSavedName(ctx) {
 }
 
 async function scenarioResume(ctx) {
-  const s = makeScenario("resume-by-replay via { resumeFromTaskId }");
+  const s = makeScenario("resume-by-replay via { resume_from_task_id }");
   if (!ctx.kitchen) {
     s.check("kitchen-sink task available to resume", false, "kitchen-sink scenario did not persist a task");
     return { scenario: s };

@@ -327,7 +327,7 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
       savedPath,
       `export const meta = { name: 'saved-review', description: 'Edited saved workflow' };\nreturn await agent('changed workflow task', { label: 'changed' });`,
     );
-    const replay = await executeWorkflow(session, { resumeFromTaskId: accepted.task_id }, context);
+    const replay = await executeWorkflow(session, { resume_from_task_id: accepted.task_id }, context);
     expect(replay.accepted.name).toBe("workflow");
     expect(replay.notification).toMatchObject({ status: "completed", name: "saved-review", content: "saved child done" });
     expect(registration.getPendingResponseCount()).toBe(0);
@@ -356,18 +356,18 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
     disposeSession(session);
   });
 
-  it("rejects resumeFromTaskId with inline or named sources", async () => {
+  it("rejects resume_from_task_id with inline or named sources", async () => {
     const { session, model, modelRegistry } = await createSession();
     const script = `export const meta = { name: 'resume_inline', description: 'resume misuse' };\nreturn await agent('x');`;
 
     const { notification } = await executeWorkflow(
       session,
-      { script, resumeFromTaskId: "task_previous" },
+      { script, resume_from_task_id: "task_previous" },
       makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }),
     );
 
     expect(notification.status).toBe("failed");
-    expect(notification.content).toContain("resumeFromTaskId may only be used alone or with scriptPath");
+    expect(notification.content).toContain("resume_from_task_id may only be used alone or with script_path");
 
     disposeSession(session);
   });
@@ -393,7 +393,7 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
 
     const replayResult = await tool.execute(
       "workflow-active-replay",
-      { resumeFromTaskId: first.task_id },
+      { resume_from_task_id: first.task_id },
       undefined,
       undefined,
       context,
@@ -423,7 +423,7 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
       .join("\n");
     writeFileSync(journalPath, runningJournal);
 
-    const replay = await executeWorkflow(session, { resumeFromTaskId: first.accepted.task_id }, context);
+    const replay = await executeWorkflow(session, { resume_from_task_id: first.accepted.task_id }, context);
 
     expect(replay.notification).toMatchObject({ status: "completed", content: "journaled result" });
     expect(registration.getPendingResponseCount()).toBe(0);
@@ -441,7 +441,7 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
     const scriptPath = join(stateDir, readdirSync(stateDir).find((name) => name.endsWith(".js")) ?? "");
     writeFileSync(scriptPath, readFileSync(scriptPath, "utf8").replace("original prompt", "mutated prompt"));
 
-    const replay = await executeWorkflow(session, { resumeFromTaskId: first.accepted.task_id }, context);
+    const replay = await executeWorkflow(session, { resume_from_task_id: first.accepted.task_id }, context);
 
     expect(replay.notification.status).toBe("failed");
     expect(replay.notification.content).toContain(`persisted script for task ${first.accepted.task_id} has changed`);
@@ -449,7 +449,7 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
     disposeSession(session);
   });
 
-  it("persists inline scripts and replays an edited scriptPath by task ID", async () => {
+  it("persists inline scripts and replays an edited script_path by task ID", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
     registration.setResponses([fauxAssistantMessage("first v1"), fauxAssistantMessage("second v1")]);
@@ -466,7 +466,7 @@ return [a, b];`;
     expect(existsSync(scriptPath)).toBe(true);
     expect(existsSync(join(stateDir, `task-${first.accepted.task_id}.jsonl`))).toBe(true);
 
-    const unchanged = await executeWorkflow(session, { resumeFromTaskId: first.accepted.task_id }, context);
+    const unchanged = await executeWorkflow(session, { resume_from_task_id: first.accepted.task_id }, context);
     expect(unchanged.notification.status).toBe("completed");
     expect(JSON.parse(unchanged.notification.content)).toEqual(["first v1", "second v1"]);
 
@@ -475,7 +475,7 @@ return [a, b];`;
 
     const second = await executeWorkflow(
       session,
-      { scriptPath, resumeFromTaskId: first.accepted.task_id },
+      { script_path: scriptPath, resume_from_task_id: first.accepted.task_id },
       context,
     );
 
