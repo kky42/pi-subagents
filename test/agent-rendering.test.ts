@@ -13,11 +13,13 @@ describe("pi-subagent rendering", () => {
 
   function captureRenderers() {
     let agentTool: any;
+    let workflowTool: any;
     let notificationRenderer: any;
     const flags = new Map<string, boolean | string>();
     const mockApi: any = {
       registerTool: (tool: any) => {
         if (tool.name === "Agent") agentTool = tool;
+        if (tool.name === "workflow") workflowTool = tool;
       },
       registerMessageRenderer: (customType: string, renderer: unknown) => {
         if (customType === "pi-flow-task-notification") notificationRenderer = renderer;
@@ -31,7 +33,7 @@ describe("pi-subagent rendering", () => {
       getThinkingLevel: () => "high",
     };
     createSubagentExtension()(mockApi);
-    return { agentTool, notificationRenderer };
+    return { agentTool, workflowTool, notificationRenderer };
   }
 
   it("renders zero cache hits and unknown cost explicitly", () => {
@@ -73,14 +75,27 @@ describe("pi-subagent rendering", () => {
         status: "accepted",
         session_key: "session_123",
         name: "Find auth files",
+        display: {
+          backend: "pi",
+          profile: "code-searcher",
+        },
+      },
+    }, {}, theme, {}));
+    const legacyResult = renderToText(agentTool.renderResult({
+      content: [{ type: "text", text: "accepted" }],
+      details: {
+        task_id: "task_old",
+        task_type: "agent",
+        status: "accepted",
+        session_key: "session_old",
+        name: "Old task",
       },
     }, {}, theme, {}));
 
-    expect(call).toContain("Pi Agent");
-    expect(call).toContain("code-searcher");
-    expect(call).toContain("Find auth files");
+    expect(call.trimEnd()).toBe("Pi Agent(code-searcher: Find auth files)");
     expect(runningCall).toBe("");
-    expect(result.trimEnd()).toBe("Agent Find auth files accepted task_123");
+    expect(result.trimEnd()).toBe("Pi Agent(code-searcher: Find auth files) accepted task_123");
+    expect(legacyResult.trimEnd()).toBe("Agent(Old task) accepted task_old");
     expect(result).not.toContain("session_123");
   });
 
@@ -94,6 +109,10 @@ describe("pi-subagent rendering", () => {
       session_key: "session_done",
       name: "Inspect auth",
       content: "Detailed child result",
+      display: {
+        backend: "codex",
+        profile: "reviewer",
+      },
     };
     const failed = {
       task_id: "task_failed",
@@ -102,16 +121,52 @@ describe("pi-subagent rendering", () => {
       session_key: "session_failed",
       name: "Inspect tests",
       content: "Provider failed",
+      display: {
+        backend: "claude",
+        profile: "test-reviewer",
+      },
     };
 
     const compact = renderToText(notificationRenderer({ details: completed }, { expanded: false }, theme));
     const expanded = renderToText(notificationRenderer({ details: completed }, { expanded: true }, theme));
     const failure = renderToText(notificationRenderer({ details: failed }, { expanded: false }, theme));
 
-    expect(compact.trimEnd()).toBe("✓ Agent Inspect auth task_done");
+    expect(compact.trimEnd()).toBe("✓ Codex Agent(reviewer: Inspect auth) completed task_done");
     expect(compact).not.toContain("Detailed child result");
     expect(expanded).toContain("Detailed child result");
-    expect(failure).toContain("✗ Agent Inspect tests task_failed");
+    expect(failure).toContain("✗ Claude Agent(test-reviewer: Inspect tests) failed task_failed");
     expect(failure).toContain("Provider failed");
+  });
+
+  it("renders Workflow calls and notifications with the parenthesized name", () => {
+    const { workflowTool, notificationRenderer } = captureRenderers();
+    const theme = makeMockTheme();
+    const call = renderToText(workflowTool.renderCall(
+      { name: "review_flow" },
+      theme,
+      { executionStarted: false },
+    ));
+    const result = renderToText(workflowTool.renderResult({
+      content: [{ type: "text", text: "accepted" }],
+      details: {
+        task_id: "task_workflow",
+        task_type: "workflow",
+        status: "accepted",
+        name: "review_flow",
+      },
+    }, {}, theme, {}));
+    const notification = renderToText(notificationRenderer({
+      details: {
+        task_id: "task_workflow",
+        task_type: "workflow",
+        status: "completed",
+        name: "review_flow",
+        content: "Workflow result",
+      },
+    }, { expanded: false }, theme));
+
+    expect(call.trimEnd()).toBe("Workflow(review_flow)");
+    expect(result.trimEnd()).toBe("Workflow(review_flow) accepted task_workflow");
+    expect(notification.trimEnd()).toBe("✓ Workflow(review_flow) completed task_workflow");
   });
 });

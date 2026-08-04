@@ -98,8 +98,18 @@ describe("pi-subagent background progress and status", () => {
       status: "accepted",
       session_key: expect.stringMatching(/^session_[a-f0-9]+$/),
       name: "Research config",
+      display: {
+        backend: "pi",
+        profile: "general-purpose",
+      },
     });
-    expect(JSON.parse(result.content[0].text)).toEqual(result.details);
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      task_id: result.details.task_id,
+      task_type: "agent",
+      status: "accepted",
+      session_key: result.details.session_key,
+      name: "Research config",
+    });
     expect(result).not.toHaveProperty("usage");
     expect(updates).toEqual([]);
     expect(taskStates).toEqual([{

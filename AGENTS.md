@@ -103,6 +103,7 @@ Interactive tmux TUI runs use `deepseek/deepseek-v4-flash` with high thinking an
 
 - `background-ui`: validated immediate accepted receipts, independent root turns, and correlated terminal notifications in an interactive tmux run.
 - `activity-widget`: a real Pi 0.83.0 TUI run with DeepSeek launched four Agents and two Workflows. The active widget stayed within five lines, removed each completed task's detail immediately, updated cumulative child usage while other tasks remained active, and collapsed to one idle line. A real RPC run emitted matching `setWidget` active/idle payloads with `belowEditor` placement, one terminal notification, and no stderr.
+- `task-ui`: a real Pi 0.83.0 TUI run with `openai-codex/gpt-5.6-luna` validated `Pi Agent(profile: description) accepted/completed task_id` and `Workflow(name) accepted/completed task_id` across live background execution and terminal notifications.
 - `width`: previously validated eight parallel foreground delegations under the old contract.
 - `proactive-multirepo-v3`: validated two-repo parallel Agent fan-out under the previous routing contract.
 - `proactive-fanout-v3`: validated three-lane TODO/FIXME/skipped-test Agent fan-out under the previous routing contract.

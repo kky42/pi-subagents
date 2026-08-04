@@ -11,7 +11,11 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
-import { getBackendAgentLabel } from "./core/display.ts";
+import {
+  getAgentDisplayDescriptor,
+  getBackendAgentLabel,
+  type AgentDisplayMetadata,
+} from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import {
   assertBindingMatchesProfile,
@@ -95,10 +99,19 @@ interface DelegationState {
   sessionKeyLocks: SessionKeyLocks;
 }
 
+interface AgentAcceptedTaskUiDetails extends AgentAcceptedTaskEnvelope {
+  display?: AgentDisplayMetadata;
+}
+
+type TaskNotificationUiDetails = TerminalTaskEnvelope & {
+  display?: AgentDisplayMetadata;
+};
+
 interface CreateAgentToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
+  rememberAgentDisplay: (taskId: string, display: AgentDisplayMetadata) => void;
   queueAgentStatus: (ctx: ExtensionContext, agent: QueuedAgentStatus) => void;
   startAgentStatus: (ctx: ExtensionContext, taskId: string) => void;
   updateAgentProgress: (ctx: ExtensionContext, taskId: string, eventCount: number) => void;
@@ -181,11 +194,26 @@ function getProfileBackend(subagentType: SubagentType): SubagentBackend | undefi
   return getSubagentProfiles(getAgentDir()).get(subagentType)?.backend;
 }
 
-function renderTaskNotification(envelope: TerminalTaskEnvelope, expanded: boolean, theme: Theme): Text {
-  const label = envelope.task_type === "agent" ? "Agent" : "Workflow";
-  const color = envelope.status === "completed" ? "success" : "error";
-  const summary = `${theme.fg(color, envelope.status === "completed" ? "✓" : "✗")} ${theme.bold(label)} ${theme.fg("muted", envelope.name)} ${theme.fg("dim", envelope.task_id)}`;
-  const text = expanded || envelope.status === "failed" ? `${summary}\n${envelope.content}` : summary;
+function renderAgentIdentity(display: AgentDisplayMetadata | undefined, name: string, theme: Theme): string {
+  if (!display) {
+    return `${theme.bold("Agent")}${theme.fg("muted", `(${name})`)}`;
+  }
+  const label = getBackendAgentLabel(display.backend);
+  const descriptor = getAgentDisplayDescriptor(display.profile, name);
+  return `${theme.bold(label)}${theme.fg("muted", `(${descriptor})`)}`;
+}
+
+function renderWorkflowIdentity(name: string, theme: Theme): string {
+  return `${theme.bold("Workflow")}${theme.fg("muted", `(${name})`)}`;
+}
+
+function renderTaskNotification(details: TaskNotificationUiDetails, expanded: boolean, theme: Theme): Text {
+  const identity = details.task_type === "agent"
+    ? renderAgentIdentity(details.display, details.name, theme)
+    : renderWorkflowIdentity(details.name, theme);
+  const color = details.status === "completed" ? "success" : "error";
+  const summary = `${theme.fg(color, details.status === "completed" ? "✓" : "✗")} ${identity} ${theme.fg("dim", `${details.status} ${details.task_id}`)}`;
+  const text = expanded || details.status === "failed" ? `${summary}\n${details.content}` : summary;
   return new Text(text, 0, 0);
 }
 
@@ -207,6 +235,10 @@ function createAgentTool(
       const subagentType = normalizeSubagentType(params.subagent_type);
       const sessionKey = normalizeSessionKey(params.session_key) ?? createSessionKey();
       const name = params.description.trim() || params.description;
+      const display: AgentDisplayMetadata = {
+        backend: getProfileBackend(subagentType),
+        profile: subagentType,
+      };
       const accepted = options.getTaskManager().start({
         taskType: "agent",
         name,
@@ -289,25 +321,26 @@ function createAgentTool(
           }
         },
       });
-      return taskToolResult(accepted);
+      options.rememberAgentDisplay(accepted.task_id, display);
+      const result = taskToolResult(accepted);
+      return {
+        ...result,
+        details: { ...accepted, display },
+      };
     },
     renderCall(args, theme, context) {
       if (context.executionStarted) {
         return new Text("", 0, 0);
       }
-      const subagentType = normalizeSubagentType(args.subagent_type);
-      const backend = getProfileBackend(subagentType);
+      const profile = normalizeSubagentType(args.subagent_type);
+      const display = { backend: getProfileBackend(profile), profile };
       const description = typeof args.description === "string" ? args.description.trim() : "";
-      return new Text(
-        `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", subagentType)}${description ? ` ${theme.fg("dim", description)}` : ""}`,
-        0,
-        0,
-      );
+      return new Text(renderAgentIdentity(display, description, theme), 0, 0);
     },
     renderResult(result, _options, theme) {
-      const details = result.details as AgentAcceptedTaskEnvelope;
+      const details = result.details as AgentAcceptedTaskUiDetails;
       return new Text(
-        `${theme.bold("Agent")} ${theme.fg("muted", details.name)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
+        `${renderAgentIdentity(details.display, details.name, theme)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
         0,
         0,
       );
@@ -349,20 +382,25 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     };
     const statusState = createFlowStatusState();
     const pendingNotifications = new Map<string, TerminalTaskEnvelope>();
+    const agentDisplayByTaskId = new Map<string, AgentDisplayMetadata>();
     let statusContext: ExtensionContext | undefined;
     let notificationSessionManager: SessionManager | undefined;
+    const taskNotificationDetails = (envelope: TerminalTaskEnvelope): TaskNotificationUiDetails => {
+      const display = envelope.task_type === "agent" ? agentDisplayByTaskId.get(envelope.task_id) : undefined;
+      return display ? { ...envelope, display } : envelope;
+    };
     const taskNotificationMessage = (envelope: TerminalTaskEnvelope) => ({
       customType: TASK_NOTIFICATION_CUSTOM_TYPE,
       content: JSON.stringify(envelope),
       display: true,
-      details: envelope,
+      details: taskNotificationDetails(envelope),
     });
     const persistTaskNotification = (sessionManager: SessionManager, envelope: TerminalTaskEnvelope) => {
       sessionManager.appendCustomMessageEntry(
         TASK_NOTIFICATION_CUSTOM_TYPE,
         JSON.stringify(envelope),
         true,
-        envelope,
+        taskNotificationDetails(envelope),
       );
     };
     const persistPendingNotifications = (sessionManager: SessionManager) => {
@@ -487,14 +525,15 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       refreshStatus(ctx);
     };
 
-    pi.registerMessageRenderer<TerminalTaskEnvelope>(TASK_NOTIFICATION_CUSTOM_TYPE, (message, { expanded }, theme) => {
-      const envelope = message.details as TerminalTaskEnvelope;
-      return renderTaskNotification(envelope, expanded, theme);
+    pi.registerMessageRenderer<TaskNotificationUiDetails>(TASK_NOTIFICATION_CUSTOM_TYPE, (message, { expanded }, theme) => {
+      const details = message.details as TaskNotificationUiDetails;
+      return renderTaskNotification(details, expanded, theme);
     });
     pi.registerTool(createAgentTool(syncRuntimeOptions, {
       getTaskManager,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
+      rememberAgentDisplay: (taskId, display) => agentDisplayByTaskId.set(taskId, display),
       queueAgentStatus,
       startAgentStatus,
       updateAgentProgress,
@@ -527,6 +566,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         taskManagerNeedsReset = false;
       }
       pendingNotifications.clear();
+      agentDisplayByTaskId.clear();
       notificationSessionManager = undefined;
       statusContext = ctx;
       syncRuntimeOptions();
@@ -549,7 +589,9 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         event.message.details !== null &&
         "task_id" in event.message.details
       ) {
-        pendingNotifications.delete(String(event.message.details.task_id));
+        const taskId = String(event.message.details.task_id);
+        pendingNotifications.delete(taskId);
+        agentDisplayByTaskId.delete(taskId);
       }
     });
 
@@ -575,6 +617,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     pi.on("session_tree", (_event, ctx) => {
       taskManager = createTaskManager();
       pendingNotifications.clear();
+      agentDisplayByTaskId.clear();
       statusContext = ctx;
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
@@ -602,6 +645,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         notificationSessionManager = undefined;
       }
       clearActiveFlowTasks(statusState);
+      agentDisplayByTaskId.clear();
       if (ctx.hasUI) {
         ctx.ui.setStatus(FLOW_STATUS_KEY, undefined);
         ctx.ui.setWidget(FLOW_STATUS_KEY, undefined);

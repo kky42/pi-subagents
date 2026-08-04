@@ -6,7 +6,7 @@ import type {
   SubagentUsage,
 } from "../types.ts";
 import type { TaskCounts } from "./task-manager.ts";
-import { getBackendAgentLabel } from "./display.ts";
+import { formatAgentDisplayLabel } from "./display.ts";
 import {
   formatDuration,
   formatUsage,
@@ -152,14 +152,12 @@ function spinner(now: number): string {
 }
 
 function activeAgentLine(state: FlowStatusState, agent: ActiveAgentStatus, now: number): DetailLine {
-  const descriptor = agent.name
-    ? `${agent.subagentType}: ${agent.name}`
-    : agent.subagentType;
+  const label = formatAgentDisplayLabel({ backend: agent.backend, profile: agent.subagentType }, agent.name);
   if (agent.executionState === "queued") {
     return {
       kind: "agent",
       sortAt: agent.queuedAt,
-      text: `◌ ${getBackendAgentLabel(agent.backend)}(${descriptor}) queued`,
+      text: `◌ ${label} queued`,
     };
   }
   const call = state.calls.get(agent.id);
@@ -168,7 +166,7 @@ function activeAgentLine(state: FlowStatusState, agent: ActiveAgentStatus, now: 
   return {
     kind: "agent",
     sortAt: agent.queuedAt,
-    text: `${spinner(now)} ${getBackendAgentLabel(agent.backend)}(${descriptor}) ${formatDuration(now - agent.startedAt)} · ${events}${usage}`,
+    text: `${spinner(now)} ${label} ${formatDuration(now - agent.startedAt)} · ${events}${usage}`,
   };
 }
 

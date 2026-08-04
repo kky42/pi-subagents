@@ -1024,8 +1024,7 @@ describe("workflow tool rendering", () => {
       name: "audit",
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: JSON.stringify(details) }], details }, {}, theme));
-    expect(text).toContain("Workflow audit");
-    expect(text).toContain("accepted task_123");
+    expect(text).toContain("Workflow(audit) accepted task_123");
     expect(text).not.toContain("agent");
   });
 
@@ -1038,7 +1037,7 @@ describe("workflow tool rendering", () => {
       name: "review",
     };
     const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "hidden workflow result" }], details }, {}, theme));
-    expect(text).toContain("Workflow review accepted task_secret");
+    expect(text).toContain("Workflow(review) accepted task_secret");
     expect(text).not.toContain("hidden workflow result");
   });
 });

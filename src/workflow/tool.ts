@@ -136,12 +136,12 @@ export function createWorkflowTool(
         return new Text("", 0, 0);
       }
       const name = initialWorkflowName(args);
-      return new Text(`${theme.bold("Workflow")} ${theme.fg("muted", name)}`, 0, 0);
+      return new Text(`${theme.bold("Workflow")}${theme.fg("muted", `(${name})`)}`, 0, 0);
     },
     renderResult(result, _options, theme) {
       const details = result.details as WorkflowAcceptedTaskEnvelope;
       return new Text(
-        `${theme.bold("Workflow")} ${theme.fg("muted", details.name)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
+        `${theme.bold("Workflow")}${theme.fg("muted", `(${details.name})`)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
         0,
         0,
       );

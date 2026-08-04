@@ -68,6 +68,14 @@ describe("pi-subagent background concurrency", () => {
     expect(first.details.status).toBe("accepted");
     expect(second.details.status).toBe("accepted");
     expect(first.details.task_id).not.toBe(second.details.task_id);
+    expect(first.details.display).toEqual({ backend: "pi", profile: "general-purpose" });
+    expect(JSON.parse(first.content[0].text)).toEqual({
+      task_id: first.details.task_id,
+      task_type: "agent",
+      status: "accepted",
+      session_key: first.details.session_key,
+      name: "First",
+    });
     await waitUntil(() => started === 1 && widgets.some((lines) =>
       lines?.includes("◌ Pi Agent(general-purpose: Second) queued") === true));
     expect(started).toBe(1);
@@ -88,6 +96,16 @@ describe("pi-subagent background concurrency", () => {
       waitForTaskNotification(session, second.details.task_id),
     ]);
     expect(terminals.map((item) => item.status)).toEqual(["completed", "completed"]);
+    expect(terminals).toEqual([
+      expect.objectContaining({ display: { backend: "pi", profile: "general-purpose" } }),
+      expect.objectContaining({ display: { backend: "pi", profile: "general-purpose" } }),
+    ]);
+    const notificationMessages = session.messages.filter((message: any) =>
+      message.role === "custom" && message.customType === "pi-flow-task-notification");
+    expect(notificationMessages).toHaveLength(2);
+    for (const message of notificationMessages as any[]) {
+      expect(JSON.parse(message.content)).not.toHaveProperty("display");
+    }
     expect(started).toBe(2);
     expect(maximum).toBe(1);
     disposeSession(session);
