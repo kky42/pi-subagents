@@ -53,7 +53,7 @@ export interface SubagentTelemetry {
 
 export interface SubagentProgressNode {
   id: string;
-  description: string;
+  label: string;
   subagentType: SubagentType | "unknown";
   backend?: SubagentBackend;
   status: SubagentRunStatus;
@@ -67,7 +67,7 @@ export interface SubagentProgressNode {
 }
 
 export interface SubagentToolDetails {
-  description: string;
+  label: string;
   subagentType: SubagentType | "unknown";
   backend?: SubagentBackend;
   status: SubagentRunStatus;

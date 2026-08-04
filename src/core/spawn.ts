@@ -112,7 +112,7 @@ async function resolvePiSubagentSession({
  */
 export interface SpawnSubagentParams {
   toolCallId: string;
-  description: string;
+  label: string;
   prompt: string;
   profile: SubagentProfile;
   model?: NonNullable<ExtensionContext["model"]>;
@@ -137,13 +137,13 @@ export interface SpawnSubagentParams {
 
 function rewriteTimeoutResult(
   result: AgentToolResult,
-  params: { description: string; profile: SubagentProfile; timeoutMs: number },
+  params: { label: string; profile: SubagentProfile; timeoutMs: number },
 ): AgentToolResult {
   const details = markSubagentTimedOut(result.details as SubagentToolDetails, params.timeoutMs);
   const message = details.error;
-  return textResult(`Subagent "${params.description}" (${params.profile.name}) aborted: ${message}`, {
+  return textResult(`Subagent "${params.label}" (${params.profile.name}) aborted: ${message}`, {
     ...details,
-    description: params.description,
+    label: params.label,
     subagentType: params.profile.name,
     backend: params.profile.backend,
     status: "aborted",
@@ -151,7 +151,7 @@ function rewriteTimeoutResult(
 }
 
 export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentToolResult> {
-  const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.description);
+  const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.label);
   let result: AgentToolResult;
   try {
     result = await spawnSubagentRuntime({ ...params, signal: timeout.signal });
@@ -160,7 +160,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
   }
   return timeout.timedOut()
     ? rewriteTimeoutResult(result, {
-        description: params.description,
+        label: params.label,
         profile: params.profile,
         timeoutMs: params.timeoutMs,
       })
@@ -171,7 +171,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
   if (params.profile.backend === "codex") {
     return spawnCodexSubagent({
       toolCallId: params.toolCallId,
-      description: params.description,
+      label: params.label,
       prompt: params.prompt,
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
@@ -189,7 +189,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
   if (params.profile.backend === "claude") {
     return spawnClaudeSubagent({
       toolCallId: params.toolCallId,
-      description: params.description,
+      label: params.label,
       prompt: params.prompt,
       profile: params.profile,
       thinkingLevel: params.thinkingLevel,
@@ -205,8 +205,8 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
     });
   }
   if (!params.model) {
-    return textResult(`Subagent "${params.description}" (${params.profile.name}) failed: No model is selected.`, {
-      description: params.description,
+    return textResult(`Subagent "${params.label}" (${params.profile.name}) failed: No model is selected.`, {
+      label: params.label,
       subagentType: params.profile.name,
       backend: params.profile.backend,
       status: "error",
@@ -215,7 +215,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
   }
   const {
     toolCallId,
-    description,
+    label,
     prompt,
     profile,
     model,
@@ -235,7 +235,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
   const taskPrompt = params.appendInstructions ? `${prompt}\n\n${params.appendInstructions}` : prompt;
   const emitter = createProgressEmitter({
     toolCallId,
-    description,
+    label,
     subagentType,
     backend: profile.backend,
     enabled: progressEnabled,
@@ -258,8 +258,8 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
     modelRuntime = await createChildModelRuntime(ctx.modelRegistry, model, agentDir);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return textResult(`Subagent "${description}" (${subagentType}) failed: ${message}`, {
-      description,
+    return textResult(`Subagent "${label}" (${subagentType}) failed: ${message}`, {
+      label,
       subagentType,
       backend: profile.backend,
       status: "error",
@@ -365,8 +365,8 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       progress.telemetry = telemetry;
       progress.endedAt = Date.now();
     }
-    return textResult(`Subagent "${description}" (${subagentType}) completed:\n\n${result}`, {
-      description,
+    return textResult(`Subagent "${label}" (${subagentType}) completed:\n\n${result}`, {
+      label,
       subagentType,
       backend: profile.backend,
       status: "done",
@@ -388,8 +388,8 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${description}" (${subagentType}) ${verb}: ${message}`, {
-      description,
+    return textResult(`Subagent "${label}" (${subagentType}) ${verb}: ${message}`, {
+      label,
       subagentType,
       backend: profile.backend,
       status,

@@ -56,7 +56,7 @@ beforeEach(() => {
 describe("canonical workflow agent runner", () => {
   it("omits standard tool usage when telemetry is unavailable", () => {
     expect(textResult("done", {
-      description: "unknown",
+      label: "unknown",
       subagentType: "reviewer",
       status: "done",
     })).not.toHaveProperty("usage");
@@ -157,12 +157,12 @@ describe("headless workflow", () => {
 
   it("computes aggregate cache hit rate from cumulative child usage", async () => {
     spawn.mockImplementation(async (params) => {
-      const first = params.description === "one";
+      const first = params.label === "one";
       const usage = first
         ? { input: 50, output: 1, cacheRead: 50, cacheWrite: 0, totalTokens: 101, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
         : { input: 100, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 101, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
       params.onUsage(usage, { tokensKnown: true, costKnown: false, costBreakdownKnown: false });
-      return { content: [], details: { status: "done", result: params.description }, usage };
+      return { content: [], details: { status: "done", result: params.label }, usage };
     });
     const result = await executeWorkflow({
       cwd: process.cwd(),

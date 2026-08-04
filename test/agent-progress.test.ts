@@ -86,7 +86,7 @@ describe("pi-subagent background progress and status", () => {
 
     const result = await tool.execute(
       "detached-call",
-      { description: "Research config", prompt: "Inspect config loading." },
+      { label: "Research config", prompt: "Inspect config loading." },
       undefined,
       (update: unknown) => updates.push(update),
       makeExecutionContext({ hasUI: true, model, modelRegistry, tui: true }),
@@ -97,7 +97,7 @@ describe("pi-subagent background progress and status", () => {
       task_type: "agent",
       status: "accepted",
       session_key: expect.stringMatching(/^session_[a-f0-9]+$/),
-      name: "Research config",
+      label: "Research config",
     });
     expect(JSON.parse(result.content[0].text)).toEqual(result.details);
     expect(result).not.toHaveProperty("usage");
@@ -150,7 +150,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Interactive child", prompt: "Wait for release." }),
+          fauxToolCall("Agent", { label: "Interactive child", prompt: "Wait for release." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage(serialized.includes("interactive child done") ? "notification handled" : "task launched");
@@ -181,7 +181,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "RPC child", prompt: "Wait for release." }),
+          fauxToolCall("Agent", { label: "RPC child", prompt: "Wait for release." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage(serialized.includes("rpc child done") ? "notification handled" : "task launched");
@@ -268,7 +268,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Active batch child", prompt: "Wait during the active tool batch." }),
+          fauxToolCall("Agent", { label: "Active batch child", prompt: "Wait during the active tool batch." }),
           fauxToolCall("active_gate", {}),
         ], { stopReason: "toolUse" });
       }
@@ -327,7 +327,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Cleared child", prompt: "Wait while the root response is active." }),
+          fauxToolCall("Agent", { label: "Cleared child", prompt: "Wait while the root response is active." }),
         ], { stopReason: "toolUse" });
       }
       rootProviderActive.resolve();
@@ -424,7 +424,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Settling child", prompt: "Wait for agent_end." }),
+          fauxToolCall("Agent", { label: "Settling child", prompt: "Wait for agent_end." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage("task launched");
@@ -526,7 +526,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Continuation child", prompt: "Wait for tool batch." }),
+          fauxToolCall("Agent", { label: "Continuation child", prompt: "Wait for tool batch." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage("task launched");
@@ -567,7 +567,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Branch child", prompt: "Wait during tree navigation." }),
+          fauxToolCall("Agent", { label: "Branch child", prompt: "Wait during tree navigation." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage("task launched");
@@ -614,7 +614,7 @@ describe("pi-subagent background progress and status", () => {
     const next = await tool.execute(
       "new-branch-call",
       {
-        description: "New branch child",
+        label: "New branch child",
         prompt: "Start fresh after navigation.",
         session_key: accepted.details.session_key,
       },
@@ -652,7 +652,7 @@ describe("pi-subagent background progress and status", () => {
       }
       if (!serialized.includes('"toolName":"Agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Print child", prompt: "Wait for release." }),
+          fauxToolCall("Agent", { label: "Print child", prompt: "Wait for release." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage(serialized.includes(`${mode} child done`) ? `${mode} notification handled` : "task launched");
@@ -686,7 +686,7 @@ describe("pi-subagent background progress and status", () => {
         }
         if (!serialized.includes('"toolName":"Agent"')) {
           return fauxAssistantMessage([
-            fauxToolCall("Agent", { description: "Reload child", prompt: "Wait until reload." }),
+            fauxToolCall("Agent", { label: "Reload child", prompt: "Wait until reload." }),
           ], { stopReason: "toolUse" });
         }
         rootContinuationStarted = true;
@@ -750,7 +750,7 @@ describe("pi-subagent background progress and status", () => {
     const oldAgentTool = session.getToolDefinition("Agent") as any;
     const oldAccepted = await oldAgentTool.execute(
       "old-session-call",
-      { description: "Old session child", prompt: "Wait for the session boundary." },
+      { label: "Old session child", prompt: "Wait for the session boundary." },
       undefined,
       undefined,
       context,
@@ -777,7 +777,7 @@ describe("pi-subagent background progress and status", () => {
     const agentTool = session.getToolDefinition("Agent") as any;
     const agentAccepted = await agentTool.execute(
       "new-session-agent",
-      { description: "New session agent", prompt: "Complete after the session boundary." },
+      { label: "New session agent", prompt: "Complete after the session boundary." },
       undefined,
       undefined,
       context,
@@ -818,7 +818,7 @@ describe("pi-subagent background progress and status", () => {
     controller.abort();
     const accepted = await tool.execute(
       "pre-aborted-call",
-      { description: "Detached child", prompt: "Run despite the foreground signal." },
+      { label: "Detached child", prompt: "Run despite the foreground signal." },
       controller.signal,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
@@ -843,7 +843,7 @@ describe("pi-subagent background progress and status", () => {
     const tool = session.getToolDefinition("Agent") as any;
     const accepted = await tool.execute(
       "timeout-call",
-      { description: "Slow child", prompt: "Take too long." },
+      { label: "Slow child", prompt: "Take too long." },
       undefined,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
@@ -863,7 +863,7 @@ describe("pi-subagent background progress and status", () => {
     const progressUpdates: unknown[] = [];
     const result = await spawnSubagent({
       toolCallId: "internal-progress",
-      description: "Internal child",
+      label: "Internal child",
       prompt: "Inspect internals.",
       profile,
       model,
@@ -894,7 +894,7 @@ describe("pi-subagent background progress and status", () => {
     ]);
     const result = await spawnSubagent({
       toolCallId: "provider-error",
-      description: "Research config",
+      label: "Research config",
       prompt: "Inspect config loading.",
       profile,
       model,
@@ -928,7 +928,7 @@ describe("pi-subagent background progress and status", () => {
       session,
       registration,
       context,
-      { description: "Usage child", prompt: "Report usage." },
+      { label: "Usage child", prompt: "Report usage." },
       async () => fauxAssistantMessage("usage child done"),
     );
 

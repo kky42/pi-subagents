@@ -39,7 +39,7 @@ describe("flow status display", () => {
     for (let index = 0; index < 4; index++) {
       state.activeAgents.set(`agent-${index}`, {
         id: `agent-${index}`,
-        name: `task ${index}`,
+        label: `task ${index}`,
         subagentType: index === 0 ? "context-gather" : "expert",
         backend: index === 0 ? "codex" : "pi",
         executionState: "running",
@@ -77,7 +77,7 @@ describe("flow status display", () => {
     };
     state.activeAgents.set("queued-agent", {
       id: "queued-agent",
-      name: "waiting",
+      label: "waiting",
       subagentType: "general-purpose",
       backend: "pi",
       executionState: "queued",
@@ -85,7 +85,7 @@ describe("flow status display", () => {
     });
     state.activeAgents.set("running-agent", {
       id: "running-agent",
-      name: "working",
+      label: "working",
       subagentType: "reviewer",
       backend: "codex",
       executionState: "running",
@@ -122,7 +122,7 @@ describe("flow status display", () => {
     };
     state.activeAgents.set("agent", {
       id: "agent",
-      name: "working",
+      label: "working",
       subagentType: "general-purpose",
       backend: "pi",
       executionState: "running",
@@ -174,7 +174,7 @@ describe("flow status display", () => {
       state.activeAgents.set(`agent-${index}`, index === 3
         ? {
             id: `agent-${index}`,
-            name: `long-queued-agent-${index}`,
+            label: `long-queued-agent-${index}`,
             subagentType: "general-purpose",
             backend: "pi",
             executionState: "queued",
@@ -182,7 +182,7 @@ describe("flow status display", () => {
           }
         : {
             id: `agent-${index}`,
-            name: `long-running-agent-${index}`,
+            label: `long-running-agent-${index}`,
             subagentType: "general-purpose",
             backend: "pi",
             executionState: "running",
@@ -232,7 +232,7 @@ describe("flow status display", () => {
     };
     state.activeAgents.set("stale", {
       id: "stale",
-      name: "must not render",
+      label: "must not render",
       subagentType: "expert",
       backend: "pi",
       executionState: "running",

@@ -54,7 +54,7 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
     call.sessionId = binding?.sessionId;
     const result = await spawnSubagent({
       toolCallId: `${options.toolCallId ?? "headless"}:agent:${index}`,
-      description: call.label,
+      label: call.label,
       prompt: call.prompt,
       profile,
       model,

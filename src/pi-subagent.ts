@@ -60,8 +60,8 @@ const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
 const AGENT_PROMPT_SNIPPET = "Launch one focused background subagent task";
 
 const agentToolParameters = Type.Object({
-  description: Type.String({
-    description: "Short task name, ideally 3-5 words; not sent as the child task.",
+  label: Type.String({
+    description: "Short task label, ideally 3-5 words; not sent as the child task.",
   }),
   prompt: Type.String({
     description:
@@ -178,9 +178,10 @@ function getProfileBackend(subagentType: SubagentType): SubagentBackend | undefi
 }
 
 function renderTaskNotification(envelope: TerminalTaskEnvelope, expanded: boolean, theme: Theme): Text {
-  const label = envelope.task_type === "agent" ? "Agent" : "Workflow";
+  const taskTypeLabel = envelope.task_type === "agent" ? "Agent" : "Workflow";
+  const taskLabel = envelope.task_type === "agent" ? envelope.label : envelope.name;
   const color = envelope.status === "completed" ? "success" : "error";
-  const summary = `${theme.fg(color, envelope.status === "completed" ? "✓" : "✗")} ${theme.bold(label)} ${theme.fg("muted", envelope.name)} ${theme.fg("dim", envelope.task_id)}`;
+  const summary = `${theme.fg(color, envelope.status === "completed" ? "✓" : "✗")} ${theme.bold(taskTypeLabel)} ${theme.fg("muted", taskLabel)} ${theme.fg("dim", envelope.task_id)}`;
   const text = expanded || envelope.status === "failed" ? `${summary}\n${envelope.content}` : summary;
   return new Text(text, 0, 0);
 }
@@ -201,10 +202,10 @@ function createAgentTool(
       const state = getState();
       const subagentType = normalizeSubagentType(params.subagent_type);
       const sessionKey = normalizeSessionKey(params.session_key) ?? createSessionKey();
-      const name = params.description.trim() || params.description;
+      const label = params.label.trim() || params.label;
       const accepted = options.getTaskManager().start({
         taskType: "agent",
-        name,
+        label,
         sessionKey,
         run: async (signal, taskId) => {
           const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
@@ -219,7 +220,7 @@ function createAgentTool(
 
           options.queueAgentStatus(ctx, {
             id: taskId,
-            name,
+            label,
             subagentType,
             backend: profile.backend,
             executionState: "queued",
@@ -236,7 +237,7 @@ function createAgentTool(
                 options.startAgentStatus(ctx, taskId);
                 const spawned = await spawnSubagent({
                   toolCallId: taskId,
-                  description: name,
+                  label,
                   prompt: params.prompt,
                   profile,
                   model,
@@ -292,9 +293,9 @@ function createAgentTool(
       }
       const subagentType = normalizeSubagentType(args.subagent_type);
       const backend = getProfileBackend(subagentType);
-      const description = typeof args.description === "string" ? args.description.trim() : "";
+      const label = typeof args.label === "string" ? args.label.trim() : "";
       return new Text(
-        `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", subagentType)}${description ? ` ${theme.fg("dim", description)}` : ""}`,
+        `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", subagentType)}${label ? ` ${theme.fg("dim", label)}` : ""}`,
         0,
         0,
       );
@@ -302,7 +303,7 @@ function createAgentTool(
     renderResult(result, _options, theme) {
       const details = result.details as AgentAcceptedTaskEnvelope;
       return new Text(
-        `${theme.bold("Agent")} ${theme.fg("muted", details.name)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
+        `${theme.bold("Agent")} ${theme.fg("muted", details.label)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
         0,
         0,
       );

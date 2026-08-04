@@ -199,7 +199,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const { session, registration } = await createSession();
     registration.setResponses([
       fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Claude review",
+        label: "Claude review",
         subagent_type: "claude-reviewer",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
@@ -262,7 +262,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     };
     const first = await spawnClaudeSubagent({
       toolCallId: "claude-resume-1",
-      description: "Claude first",
+      label: "Claude first",
       prompt: "First prompt.",
       profile,
       thinkingLevel: "medium",
@@ -277,7 +277,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
     const second = await spawnClaudeSubagent({
       toolCallId: "claude-resume-2",
-      description: "Claude second",
+      label: "Claude second",
       prompt: "Second prompt.",
       profile,
       thinkingLevel: "medium",
@@ -312,7 +312,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
     const result = await spawnClaudeSubagent({
       toolCallId: "claude-missing-session",
-      description: "Claude missing session",
+      label: "Claude missing session",
       prompt: "Persist this conversation.",
       profile: {
         name: "claude-missing-session",
@@ -350,7 +350,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
     const result = await spawnClaudeSubagent({
       toolCallId: "claude-cumulative-usage",
-      description: "Claude cumulative usage",
+      label: "Claude cumulative usage",
       prompt: "Report multiple usage events.",
       profile: {
         name: "claude-cumulative-usage",
@@ -413,7 +413,7 @@ setTimeout(() => {
 
     const result = await spawnClaudeSubagent({
       toolCallId: "claude-abort-race",
-      description: "Claude abort race",
+      label: "Claude abort race",
       prompt: "This should be aborted before stdin is sent.",
       profile: {
         name: "claude-race",
@@ -453,7 +453,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
 
     const result = await spawnClaudeSubagent({
       toolCallId: "claude-oversize",
-      description: "Claude oversize",
+      label: "Claude oversize",
       prompt: "Trigger oversize stdout.",
       profile: {
         name: "claude-oversize",

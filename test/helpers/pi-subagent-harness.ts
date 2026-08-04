@@ -34,7 +34,8 @@ export type TaskEnvelope = {
   task_id: string;
   task_type: "agent" | "workflow";
   status: "accepted" | "completed" | "failed";
-  name: string;
+  label?: string;
+  name?: string;
   session_key?: string;
   content?: string;
 };

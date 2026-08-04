@@ -26,7 +26,7 @@ interface FlowUsageEntry {
 
 interface AgentStatusBase {
   id: string;
-  name: string;
+  label: string;
   subagentType: string;
   backend: SubagentBackend;
   queuedAt: number;
@@ -152,8 +152,8 @@ function spinner(now: number): string {
 }
 
 function activeAgentLine(state: FlowStatusState, agent: ActiveAgentStatus, now: number): DetailLine {
-  const descriptor = agent.name
-    ? `${agent.subagentType}: ${agent.name}`
+  const descriptor = agent.label
+    ? `${agent.subagentType}: ${agent.label}`
     : agent.subagentType;
   if (agent.executionState === "queued") {
     return {

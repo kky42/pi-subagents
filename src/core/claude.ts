@@ -344,7 +344,7 @@ function abortChild(child: ChildProcess): void {
 
 export async function spawnClaudeSubagent(params: {
   toolCallId: string;
-  description: string;
+  label: string;
   prompt: string;
   profile: SubagentProfile;
   thinkingLevel: ThinkingLevel | undefined;
@@ -362,7 +362,7 @@ export async function spawnClaudeSubagent(params: {
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
   const emitter = createProgressEmitter({
     toolCallId: params.toolCallId,
-    description: params.description,
+    label: params.label,
     subagentType,
     backend: params.profile.backend,
     enabled: params.progressEnabled,
@@ -558,8 +558,8 @@ export async function spawnClaudeSubagent(params: {
       progress.telemetry = latestTelemetry;
       progress.endedAt = Date.now();
     }
-    return textResult(`Subagent "${params.description}" (${subagentType}) completed:\n\n${result}`, {
-      description: params.description,
+    return textResult(`Subagent "${params.label}" (${subagentType}) completed:\n\n${result}`, {
+      label: params.label,
       subagentType,
       backend: params.profile.backend,
       status: "done",
@@ -582,8 +582,8 @@ export async function spawnClaudeSubagent(params: {
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${params.description}" (${subagentType}) ${verb}: ${message}`, {
-      description: params.description,
+    return textResult(`Subagent "${params.label}" (${subagentType}) ${verb}: ${message}`, {
+      label: params.label,
       subagentType,
       backend: params.profile.backend,
       status,

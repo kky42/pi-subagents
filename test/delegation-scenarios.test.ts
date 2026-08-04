@@ -35,8 +35,8 @@ describe("delegation scenario execution", () => {
     });
 
     const accepted = await Promise.all([
-      tool.execute("source", { description: "Inspect source", prompt: "Inspect source correctness." }, undefined, undefined, context),
-      tool.execute("tests", { description: "Inspect tests", prompt: "Inspect test coverage." }, undefined, undefined, context),
+      tool.execute("source", { label: "Inspect source", prompt: "Inspect source correctness." }, undefined, undefined, context),
+      tool.execute("tests", { label: "Inspect tests", prompt: "Inspect test coverage." }, undefined, undefined, context),
     ]);
     const terminals = await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
@@ -62,7 +62,7 @@ describe("delegation scenario execution", () => {
 
     const first = await tool.execute(
       "initial",
-      { description: "Initial investigation", prompt: "Inspect and remember the flow." },
+      { label: "Initial investigation", prompt: "Inspect and remember the flow." },
       undefined,
       undefined,
       context,
@@ -71,7 +71,7 @@ describe("delegation scenario execution", () => {
     const second = await tool.execute(
       "continue",
       {
-        description: "Continue investigation",
+        label: "Continue investigation",
         prompt: "Recall and refine the flow.",
         session_key: first.details.session_key,
       },

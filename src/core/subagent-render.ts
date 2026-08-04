@@ -9,7 +9,6 @@ const ACTIVITY_DISPLAY_PREVIEW_CHARS = 120;
 export const RICH_SUBAGENT_ACTIVE_LIMIT = 4;
 
 export interface RenderableSubagentNode {
-  description?: string;
   label?: string;
   subagentType?: string;
   backend?: SubagentBackend;
@@ -104,7 +103,7 @@ function nodeType(node: RenderableSubagentNode): string {
 }
 
 function nodeLabel(node: RenderableSubagentNode): string {
-  return (node.label ?? node.description ?? "").trim();
+  return (node.label ?? "").trim();
 }
 
 function compactTitle(node: RenderableSubagentNode): string {

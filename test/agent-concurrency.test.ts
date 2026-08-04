@@ -62,8 +62,8 @@ describe("pi-subagent background concurrency", () => {
       }
     });
 
-    const first = await tool.execute("first", { description: "First", prompt: "First task." }, undefined, undefined, context);
-    const second = await tool.execute("second", { description: "Second", prompt: "Second task." }, undefined, undefined, context);
+    const first = await tool.execute("first", { label: "First", prompt: "First task." }, undefined, undefined, context);
+    const second = await tool.execute("second", { label: "Second", prompt: "Second task." }, undefined, undefined, context);
 
     expect(first.details.status).toBe("accepted");
     expect(second.details.status).toBe("accepted");
@@ -114,8 +114,8 @@ describe("pi-subagent background concurrency", () => {
     });
 
     const accepted = await Promise.all([
-      tool.execute("a", { description: "A", prompt: "A" }, undefined, undefined, context),
-      tool.execute("b", { description: "B", prompt: "B" }, undefined, undefined, context),
+      tool.execute("a", { label: "A", prompt: "A" }, undefined, undefined, context),
+      tool.execute("b", { label: "B", prompt: "B" }, undefined, undefined, context),
     ]);
     await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
@@ -158,8 +158,8 @@ describe("pi-subagent background concurrency", () => {
     });
 
     const accepted = await Promise.all([
-      tool.execute("shared-a", { description: "Shared A", prompt: "A", session_key: "worker" }, undefined, undefined, context),
-      tool.execute("shared-b", { description: "Shared B", prompt: "B", session_key: "worker" }, undefined, undefined, context),
+      tool.execute("shared-a", { label: "Shared A", prompt: "A", session_key: "worker" }, undefined, undefined, context),
+      tool.execute("shared-b", { label: "Shared B", prompt: "B", session_key: "worker" }, undefined, undefined, context),
     ]);
     await waitUntil(() => widgets.some((lines) =>
       lines?.includes("◌ Pi Agent(general-purpose: Shared B) queued") === true));
@@ -205,8 +205,8 @@ describe("pi-subagent background concurrency", () => {
       });
     });
 
-    await tool.execute("running", { description: "Running", prompt: "Wait." }, undefined, undefined, context);
-    await tool.execute("queued", { description: "Queued", prompt: "Wait." }, undefined, undefined, context);
+    await tool.execute("running", { label: "Running", prompt: "Wait." }, undefined, undefined, context);
+    await tool.execute("queued", { label: "Queued", prompt: "Wait." }, undefined, undefined, context);
     await waitUntil(() => widgets.some((lines) =>
       lines?.includes("◌ Pi Agent(general-purpose: Queued) queued") === true));
 
@@ -230,12 +230,12 @@ describe("pi-subagent background concurrency", () => {
 
     const invalid = await tool.execute(
       "invalid",
-      { description: "Invalid", prompt: "Fail.", subagent_type: "bad-model" },
+      { label: "Invalid", prompt: "Fail.", subagent_type: "bad-model" },
       undefined,
       undefined,
       context,
     );
-    const valid = await tool.execute("valid", { description: "Valid", prompt: "Run." }, undefined, undefined, context);
+    const valid = await tool.execute("valid", { label: "Valid", prompt: "Run." }, undefined, undefined, context);
     const [invalidTerminal, validTerminal] = await Promise.all([
       waitForTaskNotification(session, invalid.details.task_id),
       waitForTaskNotification(session, valid.details.task_id),

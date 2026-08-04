@@ -18,16 +18,16 @@
 
 - This repo implements a lightweight pi extension named `pi-flow`, not a fork of `refs/pi-subagents`.
 - The registered tool is `Agent`. v2 adds an opt-in `workflow` tool (see "pi-flow workflows (v2)" below); the v1 contract here still governs the `Agent` tool.
-- Tool parameters follow the Claude Code-style shape: `description`, `prompt`, optional `subagent_type`, and optional `session_key` for a resumable child conversation.
-- `description` is UI/routing metadata. `prompt` is the full subagent task.
+- Tool parameters use `label`, `prompt`, optional `subagent_type`, and optional `session_key` for a resumable child conversation.
+- `label` is UI/routing metadata. `prompt` is the full subagent task.
 - The only V1 built-in profile is `general-purpose`. There are no built-in aliases.
 - `subagent_type` defaults to `general-purpose`.
 - `general-purpose` adds no role prompt.
 - Do not replace pi's base system prompt in v1.
-- Every top-level `Agent` call is a background task. A valid call immediately returns a compact `accepted` envelope with `task_id`, `task_type`, `status`, `session_key`, and `name`; one later custom notification returns `completed` or `failed` with the same identifiers and plain-text `content`. There is no model-facing polling, steering, scheduling, per-call model override, or per-call thinking override.
+- Every top-level `Agent` call is a background task. A valid call immediately returns a compact `accepted` envelope with `task_id`, `task_type`, `status`, `session_key`, and `label`; one later custom notification returns `completed` or `failed` with the same identifiers and plain-text `content`. There is no model-facing polling, steering, scheduling, per-call model override, or per-call thinking override.
 - PiFlow emits versioned `pi-flow:task-state` events on Pi's synchronous event bus when an Agent or Workflow is accepted and immediately before its terminal notification. The payload contains only `version`, `task_id`, `task_type`, and `status`, allowing other extensions to coordinate without depending on PiFlow internals.
 - Retain each terminal envelope until Pi emits `message_end` for its custom message. Before session-tree navigation or shutdown, bind persistence to the owning session, abort owned tasks, append every retained or newly failed notification, then reset task state. Shutdown persistence must not trigger a model turn or replacement session.
-- Tool calls accept only `description`, `prompt`, optional `subagent_type`, and optional `session_key`; backend/model/thinking selection is profile-based.
+- Tool calls accept only `label`, `prompt`, optional `subagent_type`, and optional `session_key`; backend/model/thinking selection is profile-based.
 - Subagent timeout is a global operator-facing guardrail (`subagentTimeoutMs` / `--subagent-timeout-ms`), not a per-call Agent or workflow `agent()` parameter. The runtime timeout is owned by `spawnSubagent` after callers acquire a concurrency slot, so queue time does not count against it.
 - Direct subagents start with a fresh persisted conversation and the same working directory when `session_key` is omitted. PiFlow generates and returns the effective key so a later call can resume it. A supplied unbound key names a new child; a bound key continues that child. Parent messages and tool results are not inherited. The extension maps the key to the backend-native session/thread id and persists the direct-Agent binding as parent-session custom state.
 - Pi-backed subagents inherit the caller's current model and thinking level unless a custom profile pins `model` or `thinking`.

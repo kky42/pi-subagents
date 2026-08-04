@@ -45,7 +45,7 @@ Custom Code Searcher Role`);
       session,
       registration,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
-      { description: "Find auth files", subagent_type: "code-searcher", prompt: "Search for the auth flow." },
+      { label: "Find auth files", subagent_type: "code-searcher", prompt: "Search for the auth flow." },
       async (context, options, selectedModel) => {
         childContext = context;
         childOptions = options;
@@ -75,7 +75,7 @@ Custom Code Searcher Role`);
       session,
       registration,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
-      { description: "Inspect context", prompt: "Inspect context." },
+      { label: "Inspect context", prompt: "Inspect context." },
       async (context) => {
         childContext = context;
         return fauxAssistantMessage("context inspected");
@@ -104,11 +104,11 @@ Custom Code Searcher Role`);
       return fauxAssistantMessage("draft v1");
     });
 
-    const first = await tool.execute("first", { description: "Initial draft", prompt: "First prompt." }, undefined, undefined, context);
+    const first = await tool.execute("first", { label: "Initial draft", prompt: "First prompt." }, undefined, undefined, context);
     const firstTerminal = await waitForTaskNotification(session, first.details.task_id);
     const second = await tool.execute(
       "second",
-      { description: "Revise draft", prompt: "Second prompt.", session_key: first.details.session_key },
+      { label: "Revise draft", prompt: "Second prompt.", session_key: first.details.session_key },
       undefined,
       undefined,
       context,
@@ -137,7 +137,7 @@ Custom Code Searcher Role`);
 
     const first = await tool.execute(
       "first",
-      { description: "First", prompt: "First.", session_key: "missing-child" },
+      { label: "First", prompt: "First.", session_key: "missing-child" },
       undefined,
       undefined,
       context,
@@ -147,7 +147,7 @@ Custom Code Searcher Role`);
 
     const second = await tool.execute(
       "second",
-      { description: "Continue", prompt: "Continue.", session_key: "missing-child" },
+      { label: "Continue", prompt: "Continue.", session_key: "missing-child" },
       undefined,
       undefined,
       context,
@@ -166,7 +166,7 @@ Custom Code Searcher Role`);
       session,
       registration,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
-      { description: "Named worker", prompt: "Work.", session_key: "worker" },
+      { label: "Named worker", prompt: "Work.", session_key: "worker" },
       async () => fauxAssistantMessage("worker done"),
     );
 
@@ -186,7 +186,7 @@ Custom Code Searcher Role`);
 
     const first = await tool.execute(
       "first",
-      { description: "First", prompt: "First.", session_key: "shared" },
+      { label: "First", prompt: "First.", session_key: "shared" },
       undefined,
       undefined,
       context,
@@ -194,7 +194,7 @@ Custom Code Searcher Role`);
     await waitForTaskNotification(session, first.details.task_id);
     const mismatch = await tool.execute(
       "mismatch",
-      { description: "Mismatch", prompt: "Second.", session_key: "shared", subagent_type: "reviewer" },
+      { label: "Mismatch", prompt: "Second.", session_key: "shared", subagent_type: "reviewer" },
       undefined,
       undefined,
       context,
@@ -212,7 +212,7 @@ Custom Code Searcher Role`);
     const tool = session.getToolDefinition("Agent") as any;
     const accepted = await tool.execute(
       "unknown",
-      { description: "Unknown", prompt: "Search.", subagent_type: "explorer" },
+      { label: "Unknown", prompt: "Search.", subagent_type: "explorer" },
       undefined,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
@@ -239,9 +239,9 @@ Custom Code Searcher Role`);
       return fauxAssistantMessage("FIRST_CHILD_SECRET");
     });
 
-    const first = await tool.execute("first", { description: "First", prompt: "First task." }, undefined, undefined, context);
+    const first = await tool.execute("first", { label: "First", prompt: "First task." }, undefined, undefined, context);
     await waitForTaskNotification(session, first.details.task_id);
-    const second = await tool.execute("second", { description: "Second", prompt: "Second task." }, undefined, undefined, context);
+    const second = await tool.execute("second", { label: "Second", prompt: "Second task." }, undefined, undefined, context);
     await waitForTaskNotification(session, second.details.task_id);
 
     expect(first.details.session_key).not.toBe(second.details.session_key);

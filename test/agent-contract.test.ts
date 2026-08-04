@@ -63,8 +63,8 @@ describe("pi-subagent agent contract", () => {
     expect(tool?.description).toContain("background");
     expect(tool?.description).toContain("return its task ID immediately");
     expect(tool?.promptGuidelines).toBeUndefined();
-    expect(schema?.required).toEqual(["description", "prompt"]);
-    expect(Object.keys(properties).sort()).toEqual(["description", "prompt", "session_key", "subagent_type"]);
+    expect(schema?.required).toEqual(["label", "prompt"]);
+    expect(Object.keys(properties).sort()).toEqual(["label", "prompt", "session_key", "subagent_type"]);
     expectDescribedProperties(properties);
     expect(properties.session_key?.description).toContain("effective session_key is returned");
 

@@ -56,12 +56,12 @@ describe("pi-subagent rendering", () => {
     const theme = makeMockTheme();
 
     const call = renderToText(agentTool.renderCall(
-      { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
+      { label: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
       theme,
       { executionStarted: false },
     ));
     const runningCall = renderToText(agentTool.renderCall(
-      { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
+      { label: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
       theme,
       { executionStarted: true },
     ));
@@ -72,7 +72,7 @@ describe("pi-subagent rendering", () => {
         task_type: "agent",
         status: "accepted",
         session_key: "session_123",
-        name: "Find auth files",
+        label: "Find auth files",
       },
     }, {}, theme, {}));
 
@@ -92,7 +92,7 @@ describe("pi-subagent rendering", () => {
       task_type: "agent",
       status: "completed",
       session_key: "session_done",
-      name: "Inspect auth",
+      label: "Inspect auth",
       content: "Detailed child result",
     };
     const failed = {
@@ -100,7 +100,7 @@ describe("pi-subagent rendering", () => {
       task_type: "agent",
       status: "failed",
       session_key: "session_failed",
-      name: "Inspect tests",
+      label: "Inspect tests",
       content: "Provider failed",
     };
 

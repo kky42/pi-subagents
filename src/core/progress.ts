@@ -29,14 +29,14 @@ export type AgentToolResult = ReturnType<typeof textResult>;
 
 export function createProgressNode(
   id: string,
-  description: string,
+  label: string,
   subagentType: SubagentType,
   status: SubagentProgressNode["status"] = "running",
   backend?: SubagentBackend,
 ): SubagentProgressNode {
   return {
     id,
-    description,
+    label,
     subagentType,
     ...(backend ? { backend } : {}),
     status,
@@ -97,7 +97,8 @@ function getToolArgPreview(args: unknown): string {
   }
   const record = args as Record<string, unknown>;
   const value =
-    typeof record.description === "string" ? record.description
+    typeof record.label === "string" ? record.label
+    : typeof record.description === "string" ? record.description
     : typeof record.path === "string" ? record.path
     : typeof record.command === "string" ? record.command
     : typeof record.pattern === "string" ? record.pattern
@@ -154,7 +155,7 @@ export function updateProgressFromEvent(progress: SubagentProgressNode, event: A
 
 export interface ProgressEmitterOptions {
   toolCallId: string;
-  description: string;
+  label: string;
   subagentType: SubagentType;
   backend?: SubagentBackend;
   enabled: boolean;
@@ -179,9 +180,9 @@ export interface ProgressEmitter {
  * hand-synchronized copies that silently drift.
  */
 export function createProgressEmitter(options: ProgressEmitterOptions): ProgressEmitter {
-  const { toolCallId, description, subagentType, backend, enabled, onProgress } = options;
+  const { toolCallId, label, subagentType, backend, enabled, onProgress } = options;
   const progress = enabled
-    ? createProgressNode(toolCallId, description, subagentType, "running", backend)
+    ? createProgressNode(toolCallId, label, subagentType, "running", backend)
     : undefined;
   const live = Boolean(progress && onProgress);
 
@@ -200,8 +201,8 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
     }
     lastProgressEmit = Date.now();
     onProgress(
-      textResult(`Subagent "${description}" (${subagentType}) is running.`, {
-        description,
+      textResult(`Subagent "${label}" (${subagentType}) is running.`, {
+        label,
         subagentType,
         ...(backend ? { backend } : {}),
         status: progress.status,
