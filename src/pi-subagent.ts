@@ -583,6 +583,20 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
     });
 
+    pi.on("session_before_compact", (event, ctx) => {
+      if (event.reason !== "manual") {
+        return;
+      }
+      const manager = getTaskManager();
+      if (!manager.hasActiveTasks() && pendingNotifications.size === 0) {
+        return;
+      }
+      if (ctx.hasUI) {
+        ctx.ui.notify("Wait for active PiFlow tasks to finish before compacting", "warning");
+      }
+      return { cancel: true };
+    });
+
     pi.on("session_before_tree", async (_event, ctx) => {
       const manager = getTaskManager();
       if (!manager.hasActiveTasks() && pendingNotifications.size === 0) {

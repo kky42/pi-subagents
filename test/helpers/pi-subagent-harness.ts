@@ -53,6 +53,7 @@ type CreateSessionOptions = {
   thinkingLevel?: ThinkingLevel;
   systemPrompt?: string;
   mode?: "tui" | "rpc" | "json" | "print";
+  settings?: Parameters<typeof SettingsManager.inMemory>[0];
 };
 
 export type HarnessState = {
@@ -183,6 +184,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       thinkingLevel = "high",
       systemPrompt,
       mode = "tui",
+      settings,
     } = options;
     const faux = fauxProvider({ models: modelDefs });
     const models = modelDefs.map((def) => faux.getModel(def.id) as Model<string>);
@@ -197,7 +199,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     const registration = installFauxProvider(modelRegistry, faux);
     await modelRuntime.setRuntimeApiKey(model.provider, "test-api-key", { allowNetwork: false });
     registrations.push(registration);
-    const settingsManager = SettingsManager.inMemory({});
+    const settingsManager = SettingsManager.inMemory(settings ?? {});
     const sessionManager = SessionManager.inMemory(cwd);
     const extensionOptions = {
       ...(maxConcurrentSubagents === undefined ? {} : { maxConcurrentSubagents }),
