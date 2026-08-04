@@ -1,4 +1,4 @@
-import { appendFile, link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { hashStableValue } from "./replay-cache.ts";
 import type { WorkflowAgentResultEvent, WorkflowCachedAgentResult } from "./types.ts";
@@ -77,23 +77,16 @@ export async function persistWorkflowScript(params: {
 }): Promise<string> {
   await mkdir(params.dir, { recursive: true });
   const path = join(params.dir, `${safeFilePart(params.metaName)}-${params.scriptHash.slice(0, 12)}.js`);
-  const tempDir = await mkdtemp(join(params.dir, ".script-"));
-  const tempPath = join(tempDir, "workflow.js");
   try {
-    await writeFile(tempPath, params.script, "utf8");
-    try {
-      await link(tempPath, path);
-    } catch (error) {
-      if (!isAlreadyExists(error)) {
-        throw error;
-      }
-      const existing = await readFile(path, "utf8");
-      if (existing !== params.script) {
-        throw new Error(`Persisted workflow script does not match ${params.scriptHash}`);
-      }
+    await writeFile(path, params.script, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (!isAlreadyExists(error)) {
+      throw error;
     }
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    const existing = await readFile(path, "utf8");
+    if (existing !== params.script) {
+      throw new Error(`Persisted workflow script does not match ${params.scriptHash}`);
+    }
   }
   return path;
 }

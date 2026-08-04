@@ -1,6 +1,6 @@
 {
   "name": "@kky42/pi-flow",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "Multi-backend subagents and dynamic workflow orchestration for pi.",
   "type": "module",
   "main": "./index.ts",
@@ -39,7 +39,7 @@
   "scripts": {
     "build": "tsc",
     "build:dist": "tsc -p tsconfig.dist.json && node scripts/rewrite-dts-extensions.mjs && node scripts/copy-dist-assets.mjs",
-    "check": "tsc --noEmit && vitest run",
+    "check": "tsc --noEmit && vitest run && npm run smoke:runtime",
     "prepublishOnly": "npm run check && npm run build:dist",
     "smoke:runtime": "npm run build:dist && node scripts/smoke-runtime.mjs",
     "e2e": "node scripts/e2e/basic-metrics.mjs",
