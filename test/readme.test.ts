@@ -69,7 +69,7 @@ describe("README", () => {
 
   it("keeps installation, two natural-language examples, and valid custom profiles together", () => {
     const gettingStarted = readme.slice(
-      readme.indexOf("## Get started in 30 seconds"),
+      readme.indexOf("## Install and try it"),
       readme.indexOf("## Why pi-flow?"),
     );
     const naturalLanguageExamples = [...gettingStarted.matchAll(/```text\n([\s\S]*?)\n```/g)];

@@ -27,11 +27,13 @@ Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI*
 
 Every subagent runs through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
 
-## Get started in 30 seconds
+## Install and try it
 
 ```bash
 pi install npm:@kky42/pi-flow
 ```
+
+> **Upgrading from v2?** Rename `Agent` to `run_agent`, `workflow` to `run_workflow`, `description` to `label`, and `subagent_type` to `profile`. Workflow scripts now call `run_agent()` and use `script_path` / `resume_from_task_id`.
 
 Ask Pi naturally:
 
@@ -43,9 +45,11 @@ Use three subagents in parallel to review architecture, tests, and documentation
 Use a workflow to classify each changed file by risk, run the matching review, and return structured results.
 ```
 
+Pi shows each task as `accepted` immediately, then posts one correlated `completed` or `failed` notification.
+
 ### Add simple specialists
 
-Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the profile name.
+Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the profile name. Codex and Claude profiles bypass their native permission prompts, so use them only in trusted repositories.
 
 **Pi explorer**
 
@@ -112,7 +116,7 @@ Pi-backed specialists require no external CLI.
 
 ## Trust and safety
 
-Use external backends and Workflow scripts only in trusted repositories. Codex and Claude profiles bypass their native permission prompts, and Workflow JavaScript runs as trusted local code rather than inside a security sandbox.
+`run_workflow` JavaScript runs as trusted local code, not inside a security sandbox. Run only scripts you trust.
 
 ## License
 
