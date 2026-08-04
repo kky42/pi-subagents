@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { WorkflowAgentCall } from "./types.ts";
+import type { WorkflowSubagentCall } from "./types.ts";
 
-export function fingerprintWorkflowAgentCall(call: WorkflowAgentCall): string {
+export function fingerprintWorkflowSubagentCall(call: WorkflowSubagentCall): string {
   const value: Record<string, unknown> = {
     prompt: call.prompt,
     label: call.label,
     phase: call.phase,
-    subagentType: call.subagentType,
+    profile: call.profile,
     schema: call.schema,
   };
   if (call.sessionKey !== undefined) {

@@ -3,10 +3,10 @@ import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { assertBindingMatchesProfile, SessionKeyLocks, type SessionKeyBinding } from "../core/session-key.ts";
 import { resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import type { SubagentBackend, SubagentProfile, SubagentTelemetry, SubagentToolDetails, SubagentUsage } from "../types.ts";
-import type { WorkflowAgentResultEvent, WorkflowAgentRunner } from "./types.ts";
+import type { WorkflowSubagentResultEvent, WorkflowSubagentRunner } from "./types.ts";
 import { createStructuredOutputTool, STRUCTURED_OUTPUT_CONTRACT, WORKFLOW_PLAIN_TEXT_OUTPUT_NOTE, type StructuredOutputCapture } from "./structured-output.ts";
 
-export interface WorkflowAgentRunnerOptions {
+export interface WorkflowSubagentRunnerOptions {
   profiles: Map<string, SubagentProfile>;
   ctx: ExtensionContext;
   thinkingLevel?: string;
@@ -18,19 +18,19 @@ export interface WorkflowAgentRunnerOptions {
 }
 
 /** Canonical profile-aware runner shared by the interactive tool and headless API. */
-export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): {
-  runAgent: WorkflowAgentRunner;
-  serializeAgent: <T>(sessionKey: string | undefined, task: () => Promise<T>) => Promise<T>;
-  restoreSessionBinding: (event: WorkflowAgentResultEvent) => void;
+export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOptions): {
+  runSubagent: WorkflowSubagentRunner;
+  serializeSubagent: <T>(sessionKey: string | undefined, task: () => Promise<T>) => Promise<T>;
+  restoreSessionBinding: (event: WorkflowSubagentResultEvent) => void;
 } {
   const bindings = new Map<string, SessionKeyBinding>();
   const locks = new SessionKeyLocks();
   let sequence = 0;
   const allowed = options.allowedBackends ? new Set(options.allowedBackends) : undefined;
 
-  const runAgent: WorkflowAgentRunner = async (call, signal) => {
-    const profile = options.profiles.get(call.subagentType);
-    if (!profile) throw new Error(`Unknown subagent_type "${call.subagentType}".`);
+  const runSubagent: WorkflowSubagentRunner = async (call, signal) => {
+    const profile = options.profiles.get(call.profile);
+    if (!profile) throw new Error(`Unknown profile "${call.profile}".`);
     if (allowed && !allowed.has(profile.backend)) throw new Error(`Backend "${profile.backend}" is not allowed.`);
     const model = resolveProfileModel(profile, options.ctx);
     if (usesPiBackend(profile) && !model) throw new Error(profile.model ? `Profile model not found: ${profile.model}` : "No model is selected");
@@ -49,11 +49,11 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
 
     const index = call.index ?? ++sequence;
     const binding = call.sessionKey ? bindings.get(call.sessionKey) : undefined;
-    if (binding) assertBindingMatchesProfile(binding, { subagentType: call.subagentType, backend: profile.backend });
+    if (binding) assertBindingMatchesProfile(binding, { profile: call.profile, backend: profile.backend });
     call.backend = profile.backend;
     call.sessionId = binding?.sessionId;
     const result = await spawnSubagent({
-      toolCallId: `${options.toolCallId ?? "headless"}:agent:${index}`,
+      toolCallId: `${options.toolCallId ?? "headless"}:subagent:${index}`,
       label: call.label,
       prompt: call.prompt,
       profile,
@@ -76,7 +76,7 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
     options.onProgress?.(index, details, result.usage);
     if (call.sessionKey && details.sessionId) {
       call.sessionId = details.sessionId;
-      bindings.set(call.sessionKey, { key: call.sessionKey, sessionId: details.sessionId, subagentType: call.subagentType, backend: profile.backend });
+      bindings.set(call.sessionKey, { key: call.sessionKey, sessionId: details.sessionId, profile: call.profile, backend: profile.backend });
     }
     if (details.status !== "done") throw new Error(details.error ?? "subagent failed");
     if (call.sessionKey && !details.sessionId) throw new Error("subagent completed without a resumable session ID");
@@ -90,7 +90,7 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
     return details.result ?? "";
   };
 
-  const restoreSessionBinding = (event: WorkflowAgentResultEvent) => {
+  const restoreSessionBinding = (event: WorkflowSubagentResultEvent) => {
     if (
       !event.sessionKey ||
       !event.sessionId ||
@@ -99,7 +99,7 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
     const binding: SessionKeyBinding = {
       key: event.sessionKey,
       sessionId: event.sessionId,
-      subagentType: event.subagentType,
+      profile: event.profile,
       backend: event.backend,
     };
     const existing = bindings.get(event.sessionKey);
@@ -107,5 +107,5 @@ export function createWorkflowAgentRunner(options: WorkflowAgentRunnerOptions): 
     bindings.set(event.sessionKey, binding);
   };
 
-  return { runAgent, serializeAgent: (key, task) => locks.run(key, task), restoreSessionBinding };
+  return { runSubagent, serializeSubagent: (key, task) => locks.run(key, task), restoreSessionBinding };
 }

@@ -32,7 +32,7 @@ export type FauxModelDef = { id: string; name: string; reasoning: boolean };
 export type TestFauxProvider = FauxProviderHandle & { unregister: () => void };
 export type TaskEnvelope = {
   task_id: string;
-  task_type: "agent" | "workflow";
+  task_type: "subagent" | "workflow";
   status: "accepted" | "completed" | "failed";
   label?: string;
   name?: string;
@@ -278,7 +278,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     return session.messages
       .filter((message): message is { role: string; customType?: string; details?: unknown } =>
         typeof message === "object" && message !== null && "role" in message)
-      .filter((message) => message.role === "custom" && message.customType === "pi-flow-task-notification")
+      .filter((message) => message.role === "custom" && message.customType === "pi-flow-task-notification-v2")
       .map((message) => message.details as TaskEnvelope)
       .filter((envelope) => taskId === undefined || envelope.task_id === taskId);
   }
@@ -299,7 +299,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     throw new Error(`Timed out waiting for task notification ${taskId}`);
   }
 
-  async function executeAgentTask(
+  async function executeSubagentTask(
     session: { getToolDefinition: (name: string) => unknown; messages: readonly unknown[] },
     registration: FauxProviderHandle,
     context: unknown,
@@ -307,12 +307,12 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     childResponse: (context: Context, options: SimpleStreamOptions, model: Model<string>) => ReturnType<typeof fauxAssistantMessage> | Promise<ReturnType<typeof fauxAssistantMessage>>,
   ) {
     setContextRoutingResponses(registration, (providerContext, options, model) => {
-      if (getToolNames(providerContext).includes("Agent")) {
+      if (getToolNames(providerContext).includes("run_subagent")) {
         return fauxAssistantMessage("notification observed");
       }
       return childResponse(providerContext, options, model);
     });
-    const tool = session.getToolDefinition("Agent") as {
+    const tool = session.getToolDefinition("run_subagent") as {
       execute: (...args: unknown[]) => Promise<{ content: Array<{ type: string; text: string }>; details: TaskEnvelope }>;
     };
     const accepted = await tool.execute("agent-test-call", toolArgs, undefined, undefined, context);
@@ -334,22 +334,22 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
       rootContinuationContext?: Context;
     } = {};
     setContextRoutingResponses(registration, (context, options, model) => {
-      if (!getToolNames(context).includes("Agent")) {
+      if (!getToolNames(context).includes("run_subagent")) {
         captured.childContext = context;
         captured.childOptions = options;
         captured.childModel = model;
         return fauxAssistantMessage(childReply);
       }
       const serialized = JSON.stringify(context.messages);
-      if (!serialized.includes('"toolName":"Agent"') && !serialized.includes("pi-flow-task-notification")) {
-        return fauxAssistantMessage([fauxToolCall("Agent", toolArgs)], { stopReason: "toolUse" });
+      if (!serialized.includes('"toolName":"run_subagent"') && !serialized.includes("pi-flow-task-notification-v2")) {
+        return fauxAssistantMessage([fauxToolCall("run_subagent", toolArgs)], { stopReason: "toolUse" });
       }
       captured.rootContinuationContext = context;
       return fauxAssistantMessage(rootReply);
     });
     await session.prompt(userPrompt);
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as { details?: TaskEnvelope } | undefined;
+      message.role === "toolResult" && message.toolName === "run_subagent") as { details?: TaskEnvelope } | undefined;
     if (accepted?.details?.task_id) {
       await waitForTaskNotification(session, accepted.details.task_id);
     }
@@ -447,7 +447,7 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     setContextRoutingResponses,
     taskNotifications,
     waitForTaskNotification,
-    executeAgentTask,
+    executeSubagentTask,
     delegateOnce,
     makeMockTheme,
     stripAnsi,

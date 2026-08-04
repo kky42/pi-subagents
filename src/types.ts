@@ -1,6 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 
-export type SubagentType = string;
+export type SubagentProfileName = string;
 export type SubagentBackend = "pi" | "codex" | "claude";
 export type ThinkingLevel = string;
 
@@ -17,20 +17,20 @@ export interface SubagentProfile {
 export interface SubagentExtensionOptions {
   /**
    * Maximum number of subagents allowed to run concurrently across the whole
-   * agent run (a global in-flight cap, not a per-level fan-out width). A slot is
+   * root run (a global in-flight cap, not a per-level fan-out width). A slot is
    * taken when a subagent launches and released when it completes, fails, or is
-   * aborted. The cap is shared by the `Agent` tool and the `workflow` tool.
+   * aborted. The cap is shared by the `run_subagent` and `run_workflow` tools.
    */
   maxConcurrentSubagents?: number;
   /**
    * Maximum wall-clock runtime for each launched subagent, in milliseconds.
    * Defaults to a generous global guardrail. Set to 0 to disable. The limit is
-   * shared by direct `Agent` calls and workflow `agent()` calls, and can also
+   * shared by direct `run_subagent` calls and workflow `run_subagent()` calls, and can also
    * be overridden with `--subagent-timeout-ms`.
    */
   subagentTimeoutMs?: number;
   /**
-   * Register the dynamic `workflow` tool alongside `Agent`. Defaults to true:
+   * Register the `run_workflow` tool alongside `run_subagent`. Defaults to true:
    * one product, two entry points. Set to false for a subagents-only surface.
    */
   workflow?: boolean;
@@ -54,7 +54,7 @@ export interface SubagentTelemetry {
 export interface SubagentProgressNode {
   id: string;
   label: string;
-  subagentType: SubagentType | "unknown";
+  profile: SubagentProfileName | "unknown";
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   startedAt: number;
@@ -68,7 +68,7 @@ export interface SubagentProgressNode {
 
 export interface SubagentToolDetails {
   label: string;
-  subagentType: SubagentType | "unknown";
+  profile: SubagentProfileName | "unknown";
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   result?: string;

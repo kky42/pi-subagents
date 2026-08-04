@@ -1,9 +1,9 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { hashStableValue } from "./replay-cache.ts";
-import type { WorkflowAgentResultEvent, WorkflowCachedAgentResult } from "./types.ts";
+import type { WorkflowSubagentResultEvent, WorkflowCachedSubagentResult } from "./types.ts";
 
-const JOURNAL_VERSION = 2;
+const JOURNAL_VERSION = 3;
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 
 interface WorkflowSessionManagerLike {
@@ -32,14 +32,14 @@ export interface LoadedWorkflowJournal {
   scriptHash?: string;
   status: "running" | "completed" | "failed";
   logs: string[];
-  agentResults: WorkflowCachedAgentResult[];
+  subagentResults: WorkflowCachedSubagentResult[];
 }
 
 export interface WorkflowJournalWriter {
   taskId: string;
   path: string;
   appendLog(message: string): Promise<void>;
-  appendAgentResult(event: WorkflowAgentResultEvent): Promise<void>;
+  appendSubagentResult(event: WorkflowSubagentResultEvent): Promise<void>;
   complete(result: unknown): Promise<void>;
   fail(error: string): Promise<void>;
 }
@@ -106,7 +106,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
     throw error;
   }
 
-  const agentResults: WorkflowCachedAgentResult[] = [];
+  const subagentResults: WorkflowCachedSubagentResult[] = [];
   const logs: string[] = [];
   let seenTaskStart = false;
   let name: string | undefined;
@@ -126,6 +126,9 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
     }
     if (entry.type === "task_start") {
       seenTaskStart = entry.taskId === taskId;
+      if (seenTaskStart && entry.version !== JOURNAL_VERSION) {
+        throw new Error(`Unsupported workflow journal version: ${String(entry.version)}`);
+      }
       name = typeof entry.name === "string" ? entry.name : undefined;
       source = typeof entry.source === "string" ? entry.source : undefined;
       scriptPath = typeof entry.scriptPath === "string" ? entry.scriptPath : undefined;
@@ -146,7 +149,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
       }
       continue;
     }
-    if (entry.type !== "agent_result") {
+    if (entry.type !== "subagent_result") {
       continue;
     }
     const index = entry.index;
@@ -154,7 +157,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
     if (typeof index !== "number" || typeof fingerprint !== "string") {
       continue;
     }
-    agentResults[index - 1] = {
+    subagentResults[index - 1] = {
       index,
       fingerprint,
       result: entry.result,
@@ -162,7 +165,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
       error: typeof entry.error === "string" ? entry.error : undefined,
       sessionKey: typeof entry.sessionKey === "string" ? entry.sessionKey : undefined,
       sessionId: typeof entry.sessionId === "string" ? entry.sessionId : undefined,
-      subagentType: typeof entry.subagentType === "string" ? entry.subagentType : undefined,
+      profile: typeof entry.profile === "string" ? entry.profile : undefined,
       backend: typeof entry.backend === "string" ? entry.backend : undefined,
     };
   }
@@ -170,7 +173,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
   if (!seenTaskStart) {
     throw new Error(`Workflow journal does not match task id ${taskId}`);
   }
-  return { taskId, path, name, source, scriptPath, scriptHash, status, logs, agentResults };
+  return { taskId, path, name, source, scriptPath, scriptHash, status, logs, subagentResults };
 }
 
 export async function createWorkflowJournalWriter(params: {
@@ -212,14 +215,14 @@ export async function createWorkflowJournalWriter(params: {
     appendLog: async (message) => {
       await enqueueAppend({ type: "task_log", message });
     },
-    appendAgentResult: async (event) => {
+    appendSubagentResult: async (event) => {
       await enqueueAppend({
-        type: "agent_result",
+        type: "subagent_result",
         index: event.index,
         fingerprint: event.fingerprint,
         label: event.label,
         phase: event.phase,
-        subagentType: event.subagentType,
+        profile: event.profile,
         backend: event.backend,
         sessionKey: event.sessionKey,
         sessionId: event.sessionId,

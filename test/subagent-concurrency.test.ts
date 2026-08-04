@@ -32,7 +32,7 @@ describe("pi-subagent background concurrency", () => {
 
   it("accepts parallel calls immediately while limiting active children", async () => {
     const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const widgets: Array<string[] | undefined> = [];
     const context = makeExecutionContext({
       hasUI: true,
@@ -48,7 +48,7 @@ describe("pi-subagent background concurrency", () => {
       releaseFirst = resolve;
     });
     setContextRoutingResponses(registration, async (providerContext) => {
-      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "run_subagent")) {
         return fauxAssistantMessage("notification observed");
       }
       const index = ++started;
@@ -69,20 +69,20 @@ describe("pi-subagent background concurrency", () => {
     expect(second.details.status).toBe("accepted");
     expect(first.details.task_id).not.toBe(second.details.task_id);
     await waitUntil(() => started === 1 && widgets.some((lines) =>
-      lines?.includes("◌ Pi Agent(general-purpose: Second) queued") === true));
+      lines?.includes("◌ Pi Subagent(general-purpose: Second) queued") === true));
     expect(started).toBe(1);
     expect(maximum).toBe(1);
     const queuedUpdate = widgets.find((lines) =>
-      lines?.includes("◌ Pi Agent(general-purpose: Second) queued") === true);
-    expect(queuedUpdate?.[0]).toBe("pi-flow 2 agents and 0 workflows active");
+      lines?.includes("◌ Pi Subagent(general-purpose: Second) queued") === true);
+    expect(queuedUpdate?.[0]).toBe("pi-flow 2 subagents and 0 workflows active");
     expect(queuedUpdate?.find((line) => line.includes("Second"))).toBe(
-      "◌ Pi Agent(general-purpose: Second) queued",
+      "◌ Pi Subagent(general-purpose: Second) queued",
     );
 
     releaseFirst();
     await waitUntil(() => started === 2 && widgets.some((lines) =>
       lines?.some((line) =>
-        line.includes("Pi Agent(general-purpose: Second) 0s · 0 events")) === true));
+        line.includes("Pi Subagent(general-purpose: Second) 0s · 0 events")) === true));
     const terminals = await Promise.all([
       waitForTaskNotification(session, first.details.task_id),
       waitForTaskNotification(session, second.details.task_id),
@@ -98,12 +98,12 @@ describe("pi-subagent background concurrency", () => {
       maxConcurrentSubagents: 3,
       maxConcurrentSubagentsFlag: "1",
     });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     let active = 0;
     let maximum = 0;
     setContextRoutingResponses(registration, async (providerContext) => {
-      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "run_subagent")) {
         return fauxAssistantMessage("notification observed");
       }
       active++;
@@ -125,7 +125,7 @@ describe("pi-subagent background concurrency", () => {
 
   it("serializes calls that share a session key before consuming concurrency slots", async () => {
     const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 2 });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const widgets: Array<string[] | undefined> = [];
     const context = makeExecutionContext({
       hasUI: true,
@@ -141,7 +141,7 @@ describe("pi-subagent background concurrency", () => {
     });
     let started = 0;
     setContextRoutingResponses(registration, async (providerContext) => {
-      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "run_subagent")) {
         return fauxAssistantMessage("notification observed");
       }
       const index = ++started;
@@ -162,11 +162,11 @@ describe("pi-subagent background concurrency", () => {
       tool.execute("shared-b", { label: "Shared B", prompt: "B", session_key: "worker" }, undefined, undefined, context),
     ]);
     await waitUntil(() => widgets.some((lines) =>
-      lines?.includes("◌ Pi Agent(general-purpose: Shared B) queued") === true));
+      lines?.includes("◌ Pi Subagent(general-purpose: Shared B) queued") === true));
     await waitUntil(() => started === 1);
     expect(started).toBe(1);
     expect(widgets.some((lines) => lines?.some((line) =>
-      line.includes("Pi Agent(general-purpose: Shared A) 0s · 0 events")) === true)).toBe(true);
+      line.includes("Pi Subagent(general-purpose: Shared A) 0s · 0 events")) === true)).toBe(true);
     releaseFirst();
     await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
@@ -175,13 +175,13 @@ describe("pi-subagent background concurrency", () => {
     disposeSession(session);
   });
 
-  it("removes queued Agent status when session shutdown aborts the queue", async () => {
+  it("removes queued subagent status when session shutdown aborts the queue", async () => {
     const widgets: Array<string[] | undefined> = [];
     const { session, registration, model, modelRegistry } = await createSession({
       maxConcurrentSubagents: 1,
       onWidget: (_key, lines) => widgets.push(lines),
     });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const context = makeExecutionContext({
       hasUI: true,
       model,
@@ -189,7 +189,7 @@ describe("pi-subagent background concurrency", () => {
       onWidget: (_key, lines) => widgets.push(lines),
     });
     setContextRoutingResponses(registration, (providerContext, options) => {
-      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "run_subagent")) {
         return fauxAssistantMessage("notification observed");
       }
       return new Promise((resolve) => {
@@ -208,7 +208,7 @@ describe("pi-subagent background concurrency", () => {
     await tool.execute("running", { label: "Running", prompt: "Wait." }, undefined, undefined, context);
     await tool.execute("queued", { label: "Queued", prompt: "Wait." }, undefined, undefined, context);
     await waitUntil(() => widgets.some((lines) =>
-      lines?.includes("◌ Pi Agent(general-purpose: Queued) queued") === true));
+      lines?.includes("◌ Pi Subagent(general-purpose: Queued) queued") === true));
 
     await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 
@@ -221,16 +221,16 @@ describe("pi-subagent background concurrency", () => {
     mkdirSync(join(agentDir, "subagents"), { recursive: true });
     writeFileSync(join(agentDir, "subagents", "bad-model.md"), "---\ndescription: Bad model.\nmodel: ghost/nope\n---\n");
     const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 1 });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) =>
-      fauxAssistantMessage(providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")
+      fauxAssistantMessage(providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "run_subagent")
         ? "notification observed"
         : "valid child done"));
 
     const invalid = await tool.execute(
       "invalid",
-      { label: "Invalid", prompt: "Fail.", subagent_type: "bad-model" },
+      { label: "Invalid", prompt: "Fail.", profile: "bad-model" },
       undefined,
       undefined,
       context,

@@ -3,7 +3,7 @@ import type { WorkflowLimits } from "./types.ts";
 
 export type WorkerToParentMessage =
   | { type: "heartbeat" }
-  | { type: "agent"; id: number; prompt: unknown; options: unknown }
+  | { type: "subagent"; id: number; prompt: unknown; options: unknown }
   | { type: "log"; message: unknown }
   | { type: "phase"; title: unknown }
   | { type: "fatal"; error: string }
@@ -11,8 +11,8 @@ export type WorkerToParentMessage =
   | { type: "error"; error: string };
 
 export type ParentToWorkerMessage =
-  | { type: "agentResult"; id: number; ok: true; result: unknown }
-  | { type: "agentResult"; id: number; ok: false; error: string; fatal?: boolean }
+  | { type: "subagentResult"; id: number; ok: true; result: unknown }
+  | { type: "subagentResult"; id: number; ok: false; error: string; fatal?: boolean }
   | { type: "abort"; reason: string };
 
 export function createWorkflowScriptWorker({
@@ -35,7 +35,7 @@ export function createWorkflowScriptWorker({
       metaName,
       args,
       cwd,
-      maxAgentCalls: limits.maxAgentCalls,
+      maxSubagentCalls: limits.maxSubagentCalls,
       maxLogs: limits.maxLogs,
       maxLogLength: limits.maxLogLength,
       heartbeatIntervalMs: limits.workerHeartbeatIntervalMs,
@@ -55,13 +55,13 @@ const vm = require("node:vm");
 
 class WorkflowFatalError extends Error {}
 
-let acceptingAgentCalls = true;
+let acceptingSubagentCalls = true;
 let aborted = false;
 let fatalErrorMessage = undefined;
-let nextAgentId = 0;
-let startedAgentCount = 0;
-const pendingAgents = new Map();
-const agentObservations = [];
+let nextSubagentId = 0;
+let startedSubagentCount = 0;
+const pendingSubagents = new Map();
+const subagentObservations = [];
 
 const heartbeat = setInterval(() => {
   post({ type: "heartbeat" });
@@ -71,10 +71,10 @@ post({ type: "heartbeat" });
 
 parentPort.on("message", (message) => {
   if (!message || typeof message !== "object") return;
-  if (message.type === "agentResult") {
-    const pending = pendingAgents.get(message.id);
+  if (message.type === "subagentResult") {
+    const pending = pendingSubagents.get(message.id);
     if (!pending) return;
-    pendingAgents.delete(message.id);
+    pendingSubagents.delete(message.id);
     if (message.ok) {
       pending.resolve(message.result);
     } else {
@@ -104,11 +104,11 @@ function postError(error) {
 function markFatal(message) {
   fatalErrorMessage = fatalErrorMessage || message || "workflow aborted";
   aborted = true;
-  acceptingAgentCalls = false;
-  for (const pending of pendingAgents.values()) {
+  acceptingSubagentCalls = false;
+  for (const pending of pendingSubagents.values()) {
     pending.reject(new WorkflowFatalError(fatalErrorMessage));
   }
-  pendingAgents.clear();
+  pendingSubagents.clear();
   post({ type: "fatal", error: fatalErrorMessage });
 }
 
@@ -145,33 +145,33 @@ function phase(title) {
   post({ type: "phase", title: requireString(title, "phase title") });
 }
 
-function requestAgent(prompt, options) {
+function requestSubagent(prompt, options) {
   throwIfFatal();
-  if (startedAgentCount >= workerData.maxAgentCalls) {
-    markFatal("maximum workflow agent calls exceeded (" + workerData.maxAgentCalls + ")");
+  if (startedSubagentCount >= workerData.maxSubagentCalls) {
+    markFatal("maximum workflow subagent calls exceeded (" + workerData.maxSubagentCalls + ")");
     throwIfFatal();
   }
-  startedAgentCount++;
-  const id = ++nextAgentId;
+  startedSubagentCount++;
+  const id = ++nextSubagentId;
   return new Promise((resolve, reject) => {
-    pendingAgents.set(id, { resolve, reject });
-    post({ type: "agent", id, prompt, options });
+    pendingSubagents.set(id, { resolve, reject });
+    post({ type: "subagent", id, prompt, options });
   });
 }
 
-function agent(prompt, agentOptions = {}) {
-  if (!acceptingAgentCalls) {
-    throw new Error("agent() cannot be called after the workflow body has returned");
+function run_subagent(prompt, subagentOptions = {}) {
+  if (!acceptingSubagentCalls) {
+    throw new Error("run_subagent() cannot be called after the workflow body has returned");
   }
   const observation = { observed: false, settled: false, promise: undefined };
-  agentObservations.push(observation);
+  subagentObservations.push(observation);
   const start = () => {
     observation.observed = true;
-    if (!acceptingAgentCalls) {
-      return Promise.reject(new Error("agent() cannot be called after the workflow body has returned"));
+    if (!acceptingSubagentCalls) {
+      return Promise.reject(new Error("run_subagent() cannot be called after the workflow body has returned"));
     }
     if (!observation.promise) {
-      observation.promise = requestAgent(prompt, agentOptions).finally(() => {
+      observation.promise = requestSubagent(prompt, subagentOptions).finally(() => {
         observation.settled = true;
       });
     }
@@ -191,7 +191,7 @@ async function parallel(thunks) {
     throw new TypeError("parallel() expects an array of functions");
   }
   if (thunks.some((thunk) => typeof thunk !== "function")) {
-    throw new TypeError("parallel() expects an array of functions, not promises. Wrap each call: () => agent(...)");
+    throw new TypeError("parallel() expects an array of functions, not promises. Wrap each call: () => run_subagent(...)");
   }
   const results = await Promise.all(
     thunks.map(async (thunk, index) => {
@@ -255,7 +255,7 @@ const safeMath = Object.freeze(Object.fromEntries(
 
 const context = vm.createContext(
   {
-    agent,
+    run_subagent,
     parallel,
     pipeline,
     log,
@@ -352,24 +352,24 @@ function isObjectPrototype(value) {
     const result = await new vm.Script(wrapped, { filename: (workerData.metaName || "workflow") + ".js" }).runInContext(context, {
       timeout: workerData.syncExecutionTimeoutMs,
     });
-    acceptingAgentCalls = false;
+    acceptingSubagentCalls = false;
     throwIfFatal();
-    if (agentObservations.some((observation) => !observation.observed)) {
-      throw new Error("every agent() call must be awaited or returned");
+    if (subagentObservations.some((observation) => !observation.observed)) {
+      throw new Error("every run_subagent() call must be awaited or returned");
     }
-    const pending = agentObservations
+    const pending = subagentObservations
       .filter((observation) => observation.observed && !observation.settled && observation.promise)
       .map((observation) => observation.promise);
     if (pending.length > 0) {
       await Promise.allSettled(pending);
-      throw new Error("every started agent() call must be awaited before the workflow returns");
+      throw new Error("every started run_subagent() call must be awaited before the workflow returns");
     }
     throwIfFatal();
     const normalizedResult = normalizeJsonSerializable(result, "workflow result");
     post({ type: "complete", result: normalizedResult });
     clearInterval(heartbeat);
   } catch (error) {
-    acceptingAgentCalls = false;
+    acceptingSubagentCalls = false;
     postError(error);
   }
 })();

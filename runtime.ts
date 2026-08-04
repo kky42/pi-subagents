@@ -8,15 +8,15 @@
  * Everything reachable from here must stay runnable on plain node: runtime
  * imports may only be node builtins or regular dependencies (`acorn`). Pi
  * peer packages (`@earendil-works/*`) may appear in type-only imports, which
- * erase at compile time — never as value imports.
+ * erase at compile time and must never appear as value imports.
  */
 export { isWorkflowAbortError, parseWorkflowScript, runWorkflow, WorkflowAbortError } from "./src/workflow/runtime.ts";
 export type {
   RunWorkflowOptions,
-  WorkflowAgentCall,
-  WorkflowAgentResultEvent,
-  WorkflowAgentRunner,
-  WorkflowCachedAgentResult,
+  WorkflowSubagentCall,
+  WorkflowSubagentResultEvent,
+  WorkflowSubagentRunner,
+  WorkflowCachedSubagentResult,
   WorkflowLimits,
   WorkflowMeta,
   WorkflowMetaPhase,

@@ -168,7 +168,7 @@ describe("pi-subagent claude backend", () => {
     })).toBe("assistant text");
   });
 
-  it("runs a claude-backed subagent through the Agent tool", async () => {
+  it("runs a claude-backed subagent through the run_subagent tool", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-claude");
     const argsPath = join(tempDir, "claude-args.json");
@@ -198,9 +198,9 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
     const { session, registration } = await createSession();
     registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
+      fauxAssistantMessage([fauxToolCall("run_subagent", {
         label: "Claude review",
-        subagent_type: "claude-reviewer",
+        profile: "claude-reviewer",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
       fauxAssistantMessage("launch observed"),
@@ -209,7 +209,7 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
 
     await session.prompt("Delegate to Claude.");
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_subagent") as any;
     const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
 
     const claudeRun = JSON.parse(readFileSync(argsPath, "utf8"));

@@ -1,14 +1,14 @@
 import type { SubagentBackend } from "../types.ts";
 
-export function getBackendAgentLabel(backend: SubagentBackend | undefined): string {
+export function getBackendSubagentLabel(backend: SubagentBackend | undefined): string {
   if (backend === "pi") {
-    return "Pi Agent";
+    return "Pi Subagent";
   }
   if (backend === "codex") {
-    return "Codex Agent";
+    return "Codex Subagent";
   }
   if (backend === "claude") {
-    return "Claude Agent";
+    return "Claude Subagent";
   }
-  return "Agent";
+  return "Subagent";
 }

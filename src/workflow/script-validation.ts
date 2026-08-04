@@ -165,7 +165,7 @@ function evaluateStaticSchema(node: AnyNode, constants: Map<string, AnyNode>): u
 function assertStaticWorkflowSchemas(ast: AnyNode): void {
   const constants = collectTopLevelConstants(ast);
   const visit = (node: AnyNode): void => {
-    if (node.type === "CallExpression" && node.callee?.type === "Identifier" && node.callee.name === "agent") {
+    if (node.type === "CallExpression" && node.callee?.type === "Identifier" && node.callee.name === "run_subagent") {
       const schemaNode = staticSchemaNode(node, constants);
       if (schemaNode && !(schemaNode.type === "Literal" && schemaNode.value == null)) {
         const location = schemaNode.loc?.start ?? node.loc?.start;
@@ -174,7 +174,7 @@ function assertStaticWorkflowSchemas(ast: AnyNode): void {
           assertPortableOutputSchema(evaluateStaticSchema(schemaNode, constants));
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`Workflow schema preflight failed for agent()${where}: ${message}`);
+          throw new Error(`Workflow schema preflight failed for run_subagent()${where}: ${message}`);
         }
       }
     }
@@ -225,7 +225,7 @@ function isAstNode(value: unknown): value is AnyNode {
 }
 
 // Determinism is the only invariant this scan enforces. Resume-by-replay assumes
-// a cooperative script reproduces the same agent() calls from the same inputs,
+// a cooperative script reproduces the same run_subagent() calls from the same inputs,
 // so references to the two common host sources of nondeterminism are rejected:
 // Date APIs (`new Date()`, `Date()`, `Date.now`, members, and simple aliases)
 // and `Math.random` (including static/computed member access plus simple object

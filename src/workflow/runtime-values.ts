@@ -1,12 +1,12 @@
-import { normalizeAgentLabel, normalizeAgentSubagentType } from "../core/agent-values.ts";
+import { normalizeSubagentLabel, normalizeProfileName } from "../core/subagent-values.ts";
 import { normalizeSessionKey } from "../core/session-key.ts";
 
-const AGENT_OPTION_KEYS = new Set(["label", "phase", "subagent_type", "session_key", "schema"]);
+const SUBAGENT_OPTION_KEYS = new Set(["label", "phase", "profile", "session_key", "schema"]);
 
-export interface NormalizedAgentOptions {
+export interface NormalizedSubagentOptions {
   label?: string;
   phase?: string;
-  subagentType?: string;
+  profile?: string;
   sessionKey?: string;
   schema?: unknown;
 }
@@ -28,23 +28,23 @@ function optionalString(value: unknown, name: string): string | undefined {
   return requireString(value, name);
 }
 
-export function normalizeAgentOptions(value: unknown): NormalizedAgentOptions {
+export function normalizeSubagentOptions(value: unknown): NormalizedSubagentOptions {
   if (value === undefined || value === null) return {};
-  if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("agent options must be an object");
+  if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("run_subagent options must be an object");
   const options = value as Record<string, unknown>;
-  const unknownKey = Object.keys(options).find((key) => !AGENT_OPTION_KEYS.has(key));
-  if (unknownKey) throw new TypeError(`unknown agent option: ${unknownKey}`);
+  const unknownKey = Object.keys(options).find((key) => !SUBAGENT_OPTION_KEYS.has(key));
+  if (unknownKey) throw new TypeError(`unknown run_subagent option: ${unknownKey}`);
   return {
-    label: normalizeAgentLabel(optionalString(options.label, "agent label")),
-    phase: optionalString(options.phase, "agent phase"),
-    subagentType: normalizeAgentSubagentType(optionalString(options.subagent_type, "agent subagent_type")),
-    sessionKey: normalizeSessionKey(optionalString(options.session_key, "agent session_key")),
+    label: normalizeSubagentLabel(optionalString(options.label, "subagent label")),
+    phase: optionalString(options.phase, "subagent phase"),
+    profile: normalizeProfileName(optionalString(options.profile, "subagent profile")),
+    sessionKey: normalizeSessionKey(optionalString(options.session_key, "subagent session_key")),
     schema: options.schema,
   };
 }
 
-export function defaultAgentLabel(phase: string | undefined, index: number): string {
-  return phase ? `${phase} agent ${index}` : `agent ${index}`;
+export function defaultSubagentLabel(phase: string | undefined, index: number): string {
+  return phase ? `${phase} subagent ${index}` : `subagent ${index}`;
 }
 
 export function normalizeJsonSerializable(value: unknown, name: string): unknown {

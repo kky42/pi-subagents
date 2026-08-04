@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, TruncatedText } from "@earendil-works/pi-tui";
-import { getBackendAgentLabel } from "./display.ts";
+import { getBackendSubagentLabel } from "./display.ts";
 import { SPINNER_FRAMES } from "./spinner.ts";
 import type { SubagentBackend, SubagentRunStatus, SubagentTelemetry, SubagentUsage } from "../types.ts";
 export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
@@ -10,7 +10,7 @@ export const RICH_SUBAGENT_ACTIVE_LIMIT = 4;
 
 export interface RenderableSubagentNode {
   label?: string;
-  subagentType?: string;
+  profile?: string;
   backend?: SubagentBackend;
   status: SubagentRunStatus;
   startedAt?: number;
@@ -99,7 +99,7 @@ function formatActivityLineForDisplay(line: string): string {
 }
 
 function nodeType(node: RenderableSubagentNode): string {
-  return node.subagentType || "agent";
+  return node.profile || "subagent";
 }
 
 function nodeLabel(node: RenderableSubagentNode): string {
@@ -108,12 +108,12 @@ function nodeLabel(node: RenderableSubagentNode): string {
 
 function compactTitle(node: RenderableSubagentNode): string {
   const label = nodeLabel(node);
-  return `${getBackendAgentLabel(node.backend)}(${nodeType(node)}${label ? `, ${label}` : ""})`;
+  return `${getBackendSubagentLabel(node.backend)}(${nodeType(node)}${label ? `, ${label}` : ""})`;
 }
 
 function richTitle(node: RenderableSubagentNode): string {
   const label = nodeLabel(node);
-  return `${getBackendAgentLabel(node.backend)}(${nodeType(node)}${label ? `: ${label}` : ""})`;
+  return `${getBackendSubagentLabel(node.backend)}(${nodeType(node)}${label ? `: ${label}` : ""})`;
 }
 
 function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number): string {

@@ -170,7 +170,7 @@ describe("pi-subagent codex backend", () => {
     })).toBe(JSON.stringify({ ok: true, text: "keep-json" }));
   });
 
-  it("runs a codex-backed subagent through the Agent tool", async () => {
+  it("runs a codex-backed subagent through the run_subagent tool", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin");
     const argsPath = join(tempDir, "codex-args.json");
@@ -202,9 +202,9 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const { session, registration } = await createSession();
     registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
+      fauxAssistantMessage([fauxToolCall("run_subagent", {
         label: "Codex review",
-        subagent_type: "codex-reviewer",
+        profile: "codex-reviewer",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
       fauxAssistantMessage("launch observed"),
@@ -213,7 +213,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     await session.prompt("Delegate to Codex.");
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_subagent") as any;
     const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
 
     const codexRun = JSON.parse(readFileSync(argsPath, "utf8"));
@@ -475,7 +475,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
     expect(result.details.error).toContain("without a newline");
   });
 
-  it("renders priced Codex usage above 272K in the Agent widget", async () => {
+  it("renders priced Codex usage above 272K in the subagent widget", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-tiered-cost");
     mkdirSync(subagentsDir, { recursive: true });
@@ -497,13 +497,13 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-tiered-cost",
       {
         label: "Tiered cost",
-        subagent_type: "codex-tiered",
+        profile: "codex-tiered",
         prompt: "Do it.",
       },
       undefined,
@@ -549,13 +549,13 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-unknown-cost",
       {
         label: "Unknown cost",
-        subagent_type: "codex-unknown",
+        profile: "codex-unknown",
         prompt: "Do it.",
       },
       undefined,
@@ -572,7 +572,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     expect(accepted).not.toHaveProperty("usage");
     expect(terminal).toMatchObject({ status: "completed", content: "unknown model done" });
     const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(final).toContain("pi-flow idle · 1 agent and 0 workflows done · ↑800 ↓50 R200");
+    expect(final).toContain("pi-flow idle · 1 subagent and 0 workflows done · ↑800 ↓50 R200");
     expect(final).toContain("$?");
 
     disposeSession(session);
@@ -602,7 +602,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_subagent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const context = makeExecutionContext({
       hasUI: true,
@@ -613,7 +613,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const first = await tool.execute(
       "codex-cache-first",
-      { label: "First cache", subagent_type: "codex-cache", prompt: "First" },
+      { label: "First cache", profile: "codex-cache", prompt: "First" },
       undefined,
       undefined,
       context,
@@ -621,7 +621,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     await waitForTaskNotification(session, first.details.task_id, 5000);
     const second = await tool.execute(
       "codex-cache-second",
-      { label: "Second cache", subagent_type: "codex-cache", prompt: "Second" },
+      { label: "Second cache", profile: "codex-cache", prompt: "Second" },
       undefined,
       undefined,
       context,
@@ -629,7 +629,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     await waitForTaskNotification(session, second.details.task_id, 5000);
 
     const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(final).toContain("pi-flow idle · 2 agents and 0 workflows done · ↑1.0k ↓20 R1.0k CH50.0%");
+    expect(final).toContain("pi-flow idle · 2 subagents and 0 workflows done · ↑1.0k ↓20 R1.0k CH50.0%");
 
     disposeSession(session);
   });

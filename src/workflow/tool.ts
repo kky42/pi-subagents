@@ -15,7 +15,7 @@ import {
 } from "../core/task-manager.ts";
 import { getSubagentProfiles } from "../profiles.ts";
 import type { SubagentTelemetry, SubagentUsage } from "../types.ts";
-import { createWorkflowAgentRunner } from "./agent-runner.ts";
+import { createWorkflowSubagentRunner } from "./subagent-runner.ts";
 import { runWorkflow } from "./runtime.ts";
 import {
   prepareWorkflowToolSource,
@@ -27,13 +27,13 @@ import {
 
 interface WorkflowStatusCallbacks {
   start(ctx: ExtensionContext, taskId: string, name: string): void;
-  queueAgent(ctx: ExtensionContext, taskId: string): void;
-  finishAgent(ctx: ExtensionContext, taskId: string): void;
+  queueSubagent(ctx: ExtensionContext, taskId: string): void;
+  finishSubagent(ctx: ExtensionContext, taskId: string): void;
   refresh(ctx: ExtensionContext): void;
   finish(taskId: string): void;
 }
 
-export interface CreateWorkflowToolOptions {
+export interface CreateRunWorkflowToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -42,12 +42,12 @@ export interface CreateWorkflowToolOptions {
   updateStatus: (ctx: ExtensionContext, taskId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
 }
 
-export function createWorkflowTool(
-  options: CreateWorkflowToolOptions,
+export function createRunWorkflowTool(
+  options: CreateRunWorkflowToolOptions,
 ): ToolDefinition<typeof workflowToolParameters, WorkflowAcceptedTaskEnvelope> {
   return defineTool({
-    name: "workflow",
-    label: "Workflow",
+    name: "run_workflow",
+    label: "Run Workflow",
     description: WORKFLOW_TOOL_DESCRIPTION,
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
     parameters: workflowToolParameters,
@@ -70,17 +70,17 @@ export function createWorkflowTool(
             const {
               script,
               journalWriter,
-              resumeAgentResults,
+              resumeSubagentResults,
             } = prepared.value;
             const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-            const runner = createWorkflowAgentRunner({
+            const runner = createWorkflowSubagentRunner({
               profiles,
               ctx,
               thinkingLevel: options.getThinkingLevel(),
               timeoutMs: options.getSubagentTimeoutMs(),
               toolCallId: taskId,
               onProgress: ctx.hasUI && options.status ? () => options.status?.refresh(ctx) : undefined,
-              onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:agent:${index}`, usage, telemetry),
+              onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:subagent:${index}`, usage, telemetry),
             });
 
             try {
@@ -89,19 +89,19 @@ export function createWorkflowTool(
                 cwd: ctx.cwd,
                 signal,
                 limiter: options.getLimiter(),
-                serializeAgent: runner.serializeAgent,
-                runAgent: runner.runAgent,
-                resumeAgentResults,
-                onAgentQueued: () => options.status?.queueAgent(ctx, taskId),
-                onAgentEnd: () => options.status?.finishAgent(ctx, taskId),
+                serializeSubagent: runner.serializeSubagent,
+                runSubagent: runner.runSubagent,
+                resumeSubagentResults,
+                onSubagentQueued: () => options.status?.queueSubagent(ctx, taskId),
+                onSubagentEnd: () => options.status?.finishSubagent(ctx, taskId),
                 onLog: (message) => {
                   if (journalWriter) {
                     void journalWriter.appendLog(message).catch(() => {});
                   }
                 },
-                onAgentResult: async (event) => {
+                onSubagentResult: async (event) => {
                   runner.restoreSessionBinding(event);
-                  await journalWriter?.appendAgentResult(event);
+                  await journalWriter?.appendSubagentResult(event);
                 },
               });
               try {

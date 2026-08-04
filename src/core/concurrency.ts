@@ -11,7 +11,7 @@ interface Waiter {
 const ABORT_MESSAGE = "Aborted while waiting for a concurrency slot";
 
 /**
- * Shared by Agent and workflow so one global cap bounds all subagents. Released
+ * Shared by run_subagent and run_workflow so one global cap bounds all subagents. Released
  * slots pass directly to FIFO waiters, preventing tryAcquire() from claiming a
  * slot during an asynchronous handoff and exceeding the cap.
  */

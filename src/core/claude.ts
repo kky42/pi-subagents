@@ -3,7 +3,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   createProgressEmitter,
   textResult,
-  type AgentToolResult,
+  type SubagentToolResult,
 } from "./progress.ts";
 import {
   createBoundedBuffer,
@@ -351,19 +351,19 @@ export async function spawnClaudeSubagent(params: {
   ctx: ExtensionContext;
   signal: AbortSignal | undefined;
   progressEnabled: boolean;
-  onProgress: ((result: AgentToolResult) => void) | undefined;
+  onProgress: ((result: SubagentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   appendInstructions?: string;
   sessionId?: string;
   persistSession?: boolean;
   outputSchema?: unknown;
-}): Promise<AgentToolResult> {
-  const subagentType = params.profile.name;
+}): Promise<SubagentToolResult> {
+  const profile = params.profile.name;
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
   const emitter = createProgressEmitter({
     toolCallId: params.toolCallId,
     label: params.label,
-    subagentType,
+    profile,
     backend: params.profile.backend,
     enabled: params.progressEnabled,
     onProgress: params.onProgress,
@@ -558,9 +558,9 @@ export async function spawnClaudeSubagent(params: {
       progress.telemetry = latestTelemetry;
       progress.endedAt = Date.now();
     }
-    return textResult(`Subagent "${params.label}" (${subagentType}) completed:\n\n${result}`, {
+    return textResult(`Subagent "${params.label}" (${profile}) completed:\n\n${result}`, {
       label: params.label,
-      subagentType,
+      profile,
       backend: params.profile.backend,
       status: "done",
       result,
@@ -582,9 +582,9 @@ export async function spawnClaudeSubagent(params: {
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${params.label}" (${subagentType}) ${verb}: ${message}`, {
+    return textResult(`Subagent "${params.label}" (${profile}) ${verb}: ${message}`, {
       label: params.label,
-      subagentType,
+      profile,
       backend: params.profile.backend,
       status,
       error: message,

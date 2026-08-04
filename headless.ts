@@ -3,10 +3,10 @@ import { getAgentDir, ModelRegistry, ModelRuntime, SettingsManager, type Extensi
 import { ConcurrencyLimiter } from "./src/core/concurrency.ts";
 import { getSubagentProfiles } from "./src/profiles.ts";
 import type { SubagentBackend, SubagentUsage } from "./src/types.ts";
-import { createWorkflowAgentRunner } from "./src/workflow/agent-runner.ts";
+import { createWorkflowSubagentRunner } from "./src/workflow/subagent-runner.ts";
 import { isWorkflowAbortError, runWorkflow, type WorkflowLimits } from "./src/workflow/runtime.ts";
 
-export interface HeadlessUsage extends SubagentUsage { childAgents: number }
+export interface HeadlessUsage extends SubagentUsage { childSubagents: number }
 export interface HeadlessWorkflowOptions {
   script: string;
   cwd: string;
@@ -21,7 +21,7 @@ export interface HeadlessWorkflowOptions {
   onPhase?: (title: string) => void;
   onUsage?: (usage: HeadlessUsage) => void;
 }
-export interface HeadlessWorkflowResult<T = unknown> { result: T; logs: string[]; phases: string[]; agentCount: number; usage: HeadlessUsage }
+export interface HeadlessWorkflowResult<T = unknown> { result: T; logs: string[]; phases: string[]; subagentCount: number; usage: HeadlessUsage }
 export type HeadlessWorkflowErrorCode = "ABORTED" | "WORKFLOW_TIMEOUT" | "EXECUTION_FAILED";
 export class HeadlessWorkflowError extends Error {
   constructor(message: string, readonly code: HeadlessWorkflowErrorCode, readonly usage: HeadlessUsage, options?: ErrorOptions) {
@@ -52,12 +52,12 @@ export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOpti
     cacheWrite: 0,
     totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    childAgents: 0,
+    childSubagents: 0,
   };
-  const agentUsage = new Map<number, SubagentUsage>();
+  const subagentUsage = new Map<number, SubagentUsage>();
   const updateUsage = (index: number, next: SubagentUsage) => {
-    agentUsage.set(index, next);
-    const values = [...agentUsage.values()];
+    subagentUsage.set(index, next);
+    const values = [...subagentUsage.values()];
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
       usage[key] = values.reduce((sum, item) => sum + item[key], 0);
     }
@@ -78,7 +78,7 @@ export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOpti
     controller.abort();
   }, options.workflowTimeoutMs) : undefined;
   timer?.unref?.();
-  const runner = createWorkflowAgentRunner({
+  const runner = createWorkflowSubagentRunner({
     profiles: getSubagentProfiles(agentDir), ctx,
     thinkingLevel: settings.getDefaultThinkingLevel(),
     timeoutMs: options.subagentTimeoutMs ?? 3_600_000,
@@ -89,11 +89,11 @@ export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOpti
     const result = await runWorkflow<T>(options.script, {
       cwd: options.cwd, args: options.args, signal,
       limiter: new ConcurrencyLimiter(options.maxConcurrentSubagents ?? 12),
-      runAgent: runner.runAgent, serializeAgent: runner.serializeAgent,
+      runSubagent: runner.runSubagent, serializeSubagent: runner.serializeSubagent,
       limits: options.limits, onLog: options.onLog, onPhase: options.onPhase,
-      onAgentStart: () => { usage.childAgents++; options.onUsage?.({ ...usage }); },
+      onSubagentStart: () => { usage.childSubagents++; options.onUsage?.({ ...usage }); },
     });
-    return { result: result.result, logs: result.logs, phases: result.phases, agentCount: result.agentCount, usage: { ...usage } };
+    return { result: result.result, logs: result.logs, phases: result.phases, subagentCount: result.subagentCount, usage: { ...usage } };
   } catch (cause) {
     const timeout = timeoutTriggered;
     const aborted = options.signal?.aborted || isWorkflowAbortError(cause);

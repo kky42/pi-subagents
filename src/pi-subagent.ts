@@ -9,10 +9,10 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Type, type Static } from "typebox";
-import { normalizeAgentLabel, normalizeAgentSubagentType } from "./core/agent-values.ts";
+import { Type } from "typebox";
+import { normalizeSubagentLabel, normalizeProfileName } from "./core/subagent-values.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
-import { getBackendAgentLabel } from "./core/display.ts";
+import { getBackendSubagentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import {
   assertBindingMatchesProfile,
@@ -30,14 +30,14 @@ import {
   FLOW_STATUS_KEY,
   publishFlowStatus,
   recordFlowUsage,
-  type QueuedAgentStatus,
+  type QueuedSubagentStatus,
 } from "./core/flow-status.ts";
 import {
   BackgroundTaskManager,
   TASK_NOTIFICATION_CUSTOM_TYPE,
   TASK_STATE_EVENT,
   taskToolResult,
-  type AgentAcceptedTaskEnvelope,
+  type SubagentAcceptedTaskEnvelope,
   type TerminalTaskEnvelope,
 } from "./core/task-manager.ts";
 import { buildFlowPrompt } from "./prompts.ts";
@@ -48,19 +48,19 @@ import type {
   SubagentProfile,
   SubagentTelemetry,
   SubagentToolDetails,
-  SubagentType,
+  SubagentProfileName,
   SubagentUsage,
 } from "./types.ts";
 import { listSavedWorkflows } from "./workflow/registry.ts";
-import { createWorkflowTool } from "./workflow/tool.ts";
+import { createRunWorkflowTool } from "./workflow/tool.ts";
 
 const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 12;
 const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
-const AGENT_PROMPT_SNIPPET = "Launch one focused background subagent task";
+const RUN_SUBAGENT_PROMPT_SNIPPET = "Run one focused background subagent task";
 
-const agentToolParameters = Type.Object({
+const runSubagentToolParameters = Type.Object({
   label: Type.String({
     minLength: 1,
     description: "Short non-empty task label, ideally 3-5 words; not sent as the child task.",
@@ -69,7 +69,7 @@ const agentToolParameters = Type.Object({
     description:
       "Complete task briefing sent to the child. Include needed paths, constraints, and expected result because fresh calls do not inherit the parent conversation.",
   }),
-  subagent_type: Type.Optional(
+  profile: Type.Optional(
     Type.String({
       description:
         "Registered profile name. Defaults to general-purpose; selects the backend, model, thinking level, role prompt, and Pi tool allowlist.",
@@ -78,12 +78,10 @@ const agentToolParameters = Type.Object({
   session_key: Type.Optional(
     Type.String({
       description:
-        "Optional subagent conversation key. Reuse a session_key returned by an earlier Agent call to continue that child conversation. Omit to start a new conversation; the effective session_key is returned.",
+        "Optional subagent conversation key. Reuse a session_key returned by an earlier run_subagent call to continue that child conversation. Omit to start a new conversation; the effective session_key is returned.",
     }),
   ),
 }, { additionalProperties: false });
-
-type AgentToolParams = Static<typeof agentToolParameters>;
 
 interface DelegationState {
   limiter: ConcurrencyLimiter;
@@ -93,13 +91,13 @@ interface DelegationState {
   sessionKeyLocks: SessionKeyLocks;
 }
 
-interface CreateAgentToolOptions {
+interface CreateRunSubagentToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
-  queueAgentStatus: (ctx: ExtensionContext, agent: QueuedAgentStatus) => void;
-  startAgentStatus: (ctx: ExtensionContext, taskId: string) => void;
-  updateAgentProgress: (ctx: ExtensionContext, taskId: string, eventCount: number) => void;
+  queueSubagentStatus: (ctx: ExtensionContext, subagent: QueuedSubagentStatus) => void;
+  startSubagentStatus: (ctx: ExtensionContext, taskId: string) => void;
+  updateSubagentProgress: (ctx: ExtensionContext, taskId: string, eventCount: number) => void;
   finishTaskStatus: (taskId: string) => void;
   updateStatus: (ctx: ExtensionContext, taskId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
 }
@@ -156,7 +154,7 @@ function rememberSessionKeyBinding(
   state.sessionBindings.set(binding.key, binding);
   if (
     existing?.sessionId === binding.sessionId &&
-    existing.subagentType === binding.subagentType &&
+    existing.profile === binding.profile &&
     existing.backend === binding.backend
   ) {
     return;
@@ -168,58 +166,58 @@ function formatProfileNames(profiles: Map<string, SubagentProfile>): string {
   return [...profiles.keys()].join(", ");
 }
 
-function getProfileBackend(subagentType: SubagentType): SubagentBackend | undefined {
-  return getSubagentProfiles(getAgentDir()).get(subagentType)?.backend;
+function getProfileBackend(profileName: SubagentProfileName): SubagentBackend | undefined {
+  return getSubagentProfiles(getAgentDir()).get(profileName)?.backend;
 }
 
 function renderTaskNotification(envelope: TerminalTaskEnvelope, expanded: boolean, theme: Theme): Text {
-  const taskTypeLabel = envelope.task_type === "agent" ? "Agent" : "Workflow";
-  const taskLabel = envelope.task_type === "agent" ? envelope.label : envelope.name;
+  const taskTypeLabel = envelope.task_type === "subagent" ? "Subagent" : "Workflow";
+  const taskLabel = envelope.task_type === "subagent" ? envelope.label : envelope.name;
   const color = envelope.status === "completed" ? "success" : "error";
   const summary = `${theme.fg(color, envelope.status === "completed" ? "✓" : "✗")} ${theme.bold(taskTypeLabel)} ${theme.fg("muted", taskLabel)} ${theme.fg("dim", envelope.task_id)}`;
   const text = expanded || envelope.status === "failed" ? `${summary}\n${envelope.content}` : summary;
   return new Text(text, 0, 0);
 }
 
-function createAgentTool(
+function createRunSubagentTool(
   getState: () => DelegationState,
-  options: CreateAgentToolOptions,
-): ToolDefinition<typeof agentToolParameters, AgentAcceptedTaskEnvelope> {
+  options: CreateRunSubagentToolOptions,
+): ToolDefinition<typeof runSubagentToolParameters, SubagentAcceptedTaskEnvelope> {
   return defineTool({
-    name: "Agent",
-    label: "Agent",
+    name: "run_subagent",
+    label: "Run Subagent",
     description:
-      "Launch one background subagent task in the current working directory and return its task ID immediately. The task sends one completion or failure notification later. Calls without `session_key` start a new resumable conversation and return its generated key. Calls with the same key continue that child and are serialized. Subagent concurrency is bounded and queued. Pi-backed children cannot invoke PiFlow delegation tools. External-backend profiles use their CLI permission surface and should run only in trusted repositories.",
-    promptSnippet: AGENT_PROMPT_SNIPPET,
-    parameters: agentToolParameters,
+      "Run one background subagent task in the current working directory and return its task ID immediately. The task sends one completion or failure notification later. Calls without `session_key` start a new resumable conversation and return its generated key. Calls with the same key continue that child and are serialized. Subagent concurrency is bounded and queued. Pi-backed children cannot invoke PiFlow delegation tools. External-backend profiles use their CLI permission surface and should run only in trusted repositories.",
+    promptSnippet: RUN_SUBAGENT_PROMPT_SNIPPET,
+    parameters: runSubagentToolParameters,
     executionMode: "parallel",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const state = getState();
-      const subagentType = normalizeAgentSubagentType(params.subagent_type) ?? "general-purpose";
+      const profileName = normalizeProfileName(params.profile) ?? "general-purpose";
       const sessionKey = normalizeSessionKey(params.session_key) ?? createSessionKey();
-      const label = normalizeAgentLabel(params.label);
+      const label = normalizeSubagentLabel(params.label);
       if (!label) {
-        throw new Error("Agent label must contain non-whitespace characters");
+        throw new Error("Subagent label must contain non-whitespace characters");
       }
       const accepted = options.getTaskManager().start({
-        taskType: "agent",
+        taskType: "subagent",
         label,
         sessionKey,
         run: async (signal, taskId) => {
           const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-          const profile = profiles.get(subagentType);
+          const profile = profiles.get(profileName);
           if (!profile) {
-            throw new Error(`Unknown subagent_type "${params.subagent_type}". Available agents: ${formatProfileNames(profiles)}.`);
+            throw new Error(`Unknown profile "${profileName}". Available profiles: ${formatProfileNames(profiles)}.`);
           }
           const model = resolveProfileModel(profile, ctx);
           if (usesPiBackend(profile) && !model) {
             throw new Error(profile.model ? `Profile model not found: ${profile.model}` : "No model is selected");
           }
 
-          options.queueAgentStatus(ctx, {
+          options.queueSubagentStatus(ctx, {
             id: taskId,
             label,
-            subagentType,
+            profile: profileName,
             backend: profile.backend,
             executionState: "queued",
             queuedAt: Date.now(),
@@ -228,11 +226,11 @@ function createAgentTool(
             return await state.sessionKeyLocks.run(sessionKey, async () => {
               const binding = getSessionKeyBinding(state, ctx, sessionKey);
               if (binding) {
-                assertBindingMatchesProfile(binding, { subagentType, backend: profile.backend });
+                assertBindingMatchesProfile(binding, { profile: profileName, backend: profile.backend });
               }
               const release = await state.limiter.acquire(signal);
               try {
-                options.startAgentStatus(ctx, taskId);
+                options.startSubagentStatus(ctx, taskId);
                 const spawned = await spawnSubagent({
                   toolCallId: taskId,
                   label,
@@ -248,7 +246,7 @@ function createAgentTool(
                     ? (partial) => {
                         const progress = (partial.details as SubagentToolDetails).progress;
                         if (progress) {
-                          options.updateAgentProgress(ctx, taskId, progress.activityCount);
+                          options.updateSubagentProgress(ctx, taskId, progress.activityCount);
                         }
                       }
                     : undefined,
@@ -262,7 +260,7 @@ function createAgentTool(
                   rememberSessionKeyBinding(state, ctx, {
                     key: sessionKey,
                     sessionId: details.sessionId,
-                    subagentType,
+                    profile: profileName,
                     backend: profile.backend,
                   });
                 }
@@ -289,19 +287,19 @@ function createAgentTool(
       if (context.executionStarted) {
         return new Text("", 0, 0);
       }
-      const subagentType = normalizeAgentSubagentType(args.subagent_type) ?? "general-purpose";
-      const backend = getProfileBackend(subagentType);
-      const label = normalizeAgentLabel(args.label) ?? "";
+      const profile = normalizeProfileName(args.profile) ?? "general-purpose";
+      const backend = getProfileBackend(profile);
+      const label = normalizeSubagentLabel(args.label) ?? "";
       return new Text(
-        `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", subagentType)}${label ? ` ${theme.fg("dim", label)}` : ""}`,
+        `${theme.bold(getBackendSubagentLabel(backend))} ${theme.fg("muted", profile)}${label ? ` ${theme.fg("dim", label)}` : ""}`,
         0,
         0,
       );
     },
     renderResult(result, _options, theme) {
-      const details = result.details as AgentAcceptedTaskEnvelope;
+      const details = result.details as SubagentAcceptedTaskEnvelope;
       return new Text(
-        `${theme.bold("Agent")} ${theme.fg("muted", details.label)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
+        `${theme.bold("Subagent")} ${theme.fg("muted", details.label)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
         0,
         0,
       );
@@ -370,7 +368,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         pi.events.emit(TASK_STATE_EVENT, event);
       },
       notify: (envelope) => {
-        statusState.activeAgents.delete(envelope.task_id);
+        statusState.activeSubagents.delete(envelope.task_id);
         statusState.activeWorkflows.delete(envelope.task_id);
         if (notificationSessionManager) {
           persistTaskNotification(notificationSessionManager, envelope);
@@ -413,15 +411,15 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       statusContext = ctx;
       publishFlowStatus(ctx, statusState);
     };
-    const queueAgentStatus = (ctx: ExtensionContext, agent: QueuedAgentStatus) => {
-      statusState.activeAgents.set(agent.id, agent);
+    const queueSubagentStatus = (ctx: ExtensionContext, subagent: QueuedSubagentStatus) => {
+      statusState.activeSubagents.set(subagent.id, subagent);
       refreshStatus(ctx);
     };
-    const startAgentStatus = (ctx: ExtensionContext, taskId: string) => {
-      const agent = statusState.activeAgents.get(taskId);
-      if (agent?.executionState === "queued") {
-        statusState.activeAgents.set(taskId, {
-          ...agent,
+    const startSubagentStatus = (ctx: ExtensionContext, taskId: string) => {
+      const subagent = statusState.activeSubagents.get(taskId);
+      if (subagent?.executionState === "queued") {
+        statusState.activeSubagents.set(taskId, {
+          ...subagent,
           executionState: "running",
           startedAt: Date.now(),
           eventCount: 0,
@@ -429,10 +427,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
       refreshStatus(ctx);
     };
-    const updateAgentProgress = (ctx: ExtensionContext, taskId: string, eventCount: number) => {
-      const agent = statusState.activeAgents.get(taskId);
-      if (agent?.executionState === "running") {
-        agent.eventCount = eventCount;
+    const updateSubagentProgress = (ctx: ExtensionContext, taskId: string, eventCount: number) => {
+      const subagent = statusState.activeSubagents.get(taskId);
+      if (subagent?.executionState === "running") {
+        subagent.eventCount = eventCount;
       }
       refreshStatus(ctx);
     };
@@ -441,27 +439,27 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         id: taskId,
         name,
         startedAt: Date.now(),
-        finishedAgents: 0,
-        totalAgents: 0,
+        finishedSubagents: 0,
+        totalSubagents: 0,
       });
       refreshStatus(ctx);
     };
-    const queueWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
+    const queueWorkflowSubagent = (ctx: ExtensionContext, taskId: string) => {
       const workflow = statusState.activeWorkflows.get(taskId);
       if (workflow) {
-        workflow.totalAgents++;
+        workflow.totalSubagents++;
       }
       refreshStatus(ctx);
     };
-    const finishWorkflowAgent = (ctx: ExtensionContext, taskId: string) => {
+    const finishWorkflowSubagent = (ctx: ExtensionContext, taskId: string) => {
       const workflow = statusState.activeWorkflows.get(taskId);
       if (workflow) {
-        workflow.finishedAgents++;
+        workflow.finishedSubagents++;
       }
       refreshStatus(ctx);
     };
     const finishTaskStatus = (taskId: string) => {
-      statusState.activeAgents.delete(taskId);
+      statusState.activeSubagents.delete(taskId);
       statusState.activeWorkflows.delete(taskId);
     };
     const updateStatus = (
@@ -478,27 +476,27 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       const envelope = message.details as TerminalTaskEnvelope;
       return renderTaskNotification(envelope, expanded, theme);
     });
-    pi.registerTool(createAgentTool(syncRuntimeOptions, {
+    pi.registerTool(createRunSubagentTool(syncRuntimeOptions, {
       getTaskManager,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
-      queueAgentStatus,
-      startAgentStatus,
-      updateAgentProgress,
+      queueSubagentStatus,
+      startSubagentStatus,
+      updateSubagentProgress,
       finishTaskStatus,
       updateStatus,
     }));
     if (workflowEnabled) {
       pi.registerTool(
-        createWorkflowTool({
+        createRunWorkflowTool({
           getTaskManager,
           getLimiter: () => syncRuntimeOptions().limiter,
           getThinkingLevel: () => pi.getThinkingLevel(),
           getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
           status: {
             start: startWorkflowStatus,
-            queueAgent: queueWorkflowAgent,
-            finishAgent: finishWorkflowAgent,
+            queueSubagent: queueWorkflowSubagent,
+            finishSubagent: finishWorkflowSubagent,
             refresh: refreshStatus,
             finish: finishTaskStatus,
           },

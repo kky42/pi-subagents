@@ -15,7 +15,7 @@ import {
   getSubagentUsage,
   textResult,
   updateProgressFromEvent,
-  type AgentToolResult,
+  type SubagentToolResult,
 } from "./progress.ts";
 import { spawnClaudeSubagent } from "./claude.ts";
 import { spawnCodexSubagent } from "./codex.ts";
@@ -28,7 +28,7 @@ import { createChildModelRuntime } from "./model-runtime.ts";
  * recursively fan out. Owned by the spawn core and used as the default exclude
  * list so no caller can accidentally under-specify the nesting block.
  */
-export const CHILD_EXCLUDED_TOOLS: readonly string[] = ["Agent", "workflow"];
+export const CHILD_EXCLUDED_TOOLS: readonly string[] = ["run_subagent", "run_workflow"];
 
 const PI_SUBAGENT_SESSION_DIR_NAME = "subagent-sessions";
 
@@ -106,7 +106,7 @@ async function resolvePiSubagentSession({
 
 /**
  * Parameters for a single subagent run. This is the shared spawn primitive used
- * by both the `Agent` tool and the `workflow` tool's `agent()` global.
+ * by both the `run_subagent` tool and the `run_workflow` tool's `run_subagent()` global.
  * Concurrency accounting lives in the callers, not here; callers acquire a slot
  * before invoking spawnSubagent, so the runtime timeout below excludes queue time.
  */
@@ -122,7 +122,7 @@ export interface SpawnSubagentParams {
   /** Maximum wall-clock runtime once this spawn starts. Set 0 to disable. */
   timeoutMs: number;
   progressEnabled: boolean;
-  onProgress: ((result: AgentToolResult) => void) | undefined;
+  onProgress: ((result: SubagentToolResult) => void) | undefined;
   onUsage: (usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   /** Tools (and the extensions that provide them) to keep out of the child session. Defaults to {@link CHILD_EXCLUDED_TOOLS}. */
   excludeTools?: readonly string[];
@@ -136,23 +136,23 @@ export interface SpawnSubagentParams {
 }
 
 function rewriteTimeoutResult(
-  result: AgentToolResult,
+  result: SubagentToolResult,
   params: { label: string; profile: SubagentProfile; timeoutMs: number },
-): AgentToolResult {
+): SubagentToolResult {
   const details = markSubagentTimedOut(result.details as SubagentToolDetails, params.timeoutMs);
   const message = details.error;
   return textResult(`Subagent "${params.label}" (${params.profile.name}) aborted: ${message}`, {
     ...details,
     label: params.label,
-    subagentType: params.profile.name,
+    profile: params.profile.name,
     backend: params.profile.backend,
     status: "aborted",
   }, result.usage);
 }
 
-export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentToolResult> {
+export async function spawnSubagent(params: SpawnSubagentParams): Promise<SubagentToolResult> {
   const timeout = createTimeoutSignal(params.signal, params.timeoutMs, params.label);
-  let result: AgentToolResult;
+  let result: SubagentToolResult;
   try {
     result = await spawnSubagentRuntime({ ...params, signal: timeout.signal });
   } finally {
@@ -167,7 +167,7 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<AgentT
     : result;
 }
 
-async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentToolResult> {
+async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<SubagentToolResult> {
   if (params.profile.backend === "codex") {
     return spawnCodexSubagent({
       toolCallId: params.toolCallId,
@@ -207,7 +207,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
   if (!params.model) {
     return textResult(`Subagent "${params.label}" (${params.profile.name}) failed: No model is selected.`, {
       label: params.label,
-      subagentType: params.profile.name,
+      profile: params.profile.name,
       backend: params.profile.backend,
       status: "error",
       error: "No model is selected",
@@ -226,7 +226,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
     onProgress,
     onUsage,
   } = params;
-  const subagentType = profile.name;
+  const profileName = profile.name;
   const excludeTools = params.excludeTools ?? CHILD_EXCLUDED_TOOLS;
   const customTools = params.customTools ?? [];
   // A pinned tool allow-list must still admit any injected tools (e.g. structured_output).
@@ -236,7 +236,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
   const emitter = createProgressEmitter({
     toolCallId,
     label,
-    subagentType,
+    profile: profileName,
     backend: profile.backend,
     enabled: progressEnabled,
     onProgress,
@@ -258,9 +258,9 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
     modelRuntime = await createChildModelRuntime(ctx.modelRegistry, model, agentDir);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return textResult(`Subagent "${label}" (${subagentType}) failed: ${message}`, {
+    return textResult(`Subagent "${label}" (${profileName}) failed: ${message}`, {
       label,
-      subagentType,
+      profile: profileName,
       backend: profile.backend,
       status: "error",
       error: message,
@@ -349,7 +349,7 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       // The catch below derives the reported status from whether OUR signal
       // aborted (signal?.aborted ? "aborted" : "error"), so a provider-reported
       // stopReason "aborted" that we did not trigger is surfaced as an error.
-      // Keep this fallback message status-neutral — quote the stopReason as a
+      // Keep this fallback message status-neutral and quote the stopReason as a
       // diagnostic detail rather than asserting the run was "aborted".
       throw new Error(
         failure.errorMessage || `Subagent model turn did not complete (stopReason: ${failure.stopReason}).`,
@@ -365,9 +365,9 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       progress.telemetry = telemetry;
       progress.endedAt = Date.now();
     }
-    return textResult(`Subagent "${label}" (${subagentType}) completed:\n\n${result}`, {
+    return textResult(`Subagent "${label}" (${profileName}) completed:\n\n${result}`, {
       label,
-      subagentType,
+      profile: profileName,
       backend: profile.backend,
       status: "done",
       result,
@@ -388,9 +388,9 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<AgentT
       progress.endedAt = Date.now();
     }
     const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${label}" (${subagentType}) ${verb}: ${message}`, {
+    return textResult(`Subagent "${label}" (${profileName}) ${verb}: ${message}`, {
       label,
-      subagentType,
+      profile: profileName,
       backend: profile.backend,
       status,
       error: message,

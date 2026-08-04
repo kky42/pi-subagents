@@ -6,14 +6,14 @@ describe("subagent timeout helpers", () => {
   it("treats a late successful result as timed out once the timeout has fired", () => {
     const details: SubagentToolDetails = {
       label: "Late child",
-      subagentType: "general-purpose",
+      profile: "general-purpose",
       backend: "pi",
       status: "done",
       result: "late success after timeout",
       progress: {
         id: "late-child",
         label: "Late child",
-        subagentType: "general-purpose",
+        profile: "general-purpose",
         backend: "pi",
         status: "done",
         startedAt: 1,
