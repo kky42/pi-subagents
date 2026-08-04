@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe("README", () => {
   it("documents the approved package contents and repository screenshot", () => {
-    expect(packageJson.files).not.toContain("assets");
+    expect(packageJson.files).toContain("assets");
     expect(packageJson.files).not.toContain("docs");
     expect(packageJson.pi).not.toHaveProperty("image");
     expect(readme).toContain(`pi install npm:${packageJson.name}`);
@@ -32,14 +32,14 @@ describe("README", () => {
       .map((match) => match[1]);
     expect(localTargets).toEqual([
       "./LICENSE",
-      "./docs/images/pi-flow-interactive.png",
+      "./assets/pi-flow-interactive.png",
       "./LICENSE",
     ]);
     for (const target of localTargets) {
       expect(existsSync(resolve(root, target))).toBe(true);
     }
 
-    const imagePath = join(root, "docs/images/pi-flow-interactive.png");
+    const imagePath = join(root, "assets/pi-flow-interactive.png");
     const image = readFileSync(imagePath);
     expect(image.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(image.readUInt32BE(16)).toBe(1200);
@@ -48,7 +48,7 @@ describe("README", () => {
   });
 
   it("states the asynchronous lifecycle immediately after the sanitized screenshot caption", () => {
-    const screenshot = readme.indexOf("./docs/images/pi-flow-interactive.png");
+    const screenshot = readme.indexOf("./assets/pi-flow-interactive.png");
     const caption = readme.indexOf("Captured from a real Pi interactive session", screenshot);
     const lifecycleHeading = readme.indexOf("## One coordinator, asynchronous specialists", caption);
     const lifecycle = readme.indexOf("`Agent` and `workflow` run as background tasks", lifecycleHeading);

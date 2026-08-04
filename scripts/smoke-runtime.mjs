@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 
 const direct = await import(new URL("../dist/runtime.js", import.meta.url));
+const profilesModule = await import(new URL("../dist/src/profiles.js", import.meta.url));
 const { ConcurrencyLimiter, runWorkflow, parseWorkflowScript, isWorkflowAbortError, WorkflowAbortError } = direct;
 
 // The package export map must resolve the same compiled module (node package
@@ -19,6 +20,7 @@ assert.equal(typeof parseWorkflowScript, "function");
 assert.equal(typeof isWorkflowAbortError, "function");
 assert.equal(typeof WorkflowAbortError, "function");
 assert.ok(isWorkflowAbortError(new WorkflowAbortError("smoke")), "exported class must satisfy its own guard");
+assert.deepEqual([...profilesModule.loadBuiltinSubagentProfiles().keys()], ["general-purpose"]);
 
 const script = `export const meta = { name: "smoke-runtime", description: "compiled runtime smoke test" };
 phase("fan-out");

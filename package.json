@@ -21,6 +21,7 @@
     "src",
     "dist",
     "scripts",
+    "assets",
     "README.md",
     "LICENSE",
     ".env.example"
@@ -37,7 +38,7 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc",
-    "build:dist": "tsc -p tsconfig.dist.json && node scripts/rewrite-dts-extensions.mjs",
+    "build:dist": "tsc -p tsconfig.dist.json && node scripts/rewrite-dts-extensions.mjs && node scripts/copy-dist-assets.mjs",
     "check": "tsc --noEmit && vitest run",
     "prepublishOnly": "npm run check && npm run build:dist",
     "smoke:runtime": "npm run build:dist && node scripts/smoke-runtime.mjs",

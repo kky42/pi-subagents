@@ -87,9 +87,10 @@ async function resolvePiSubagentSession({
   if (normalizedSessionId) {
     const sessions = await SessionManager.list(cwd, sessionDir);
     const existing = sessions.find((session) => session.id === normalizedSessionId);
-    const sessionManager = existing
-      ? SessionManager.open(existing.path, sessionDir, cwd)
-      : SessionManager.create(cwd, sessionDir, { id: normalizedSessionId });
+    if (!existing) {
+      throw new Error(`Cannot resume subagent: persisted session ${normalizedSessionId} was not found`);
+    }
+    const sessionManager = SessionManager.open(existing.path, sessionDir, cwd);
     return {
       sessionManager,
       sessionId: sessionManager.getSessionId(),

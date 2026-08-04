@@ -223,6 +223,7 @@ export async function prepareWorkflowToolSource(
   const resumeFromTaskId = typeof params.resumeFromTaskId === "string" && params.resumeFromTaskId.trim()
     ? params.resumeFromTaskId.trim()
     : undefined;
+  const hasExplicitReplayScriptPath = typeof params.scriptPath === "string" && params.scriptPath.trim().length > 0;
   const sessionWorkflowDir = getSessionWorkflowDir(ctx);
   if (resumeFromTaskId && (params.script || params.name)) {
     const message = "Cannot resume workflow: resumeFromTaskId may only be used alone or with scriptPath.";
@@ -231,7 +232,7 @@ export async function prepareWorkflowToolSource(
 
   let resumeJournal: LoadedWorkflowJournal | undefined;
   let sourceParams = params;
-  if (resumeFromTaskId && !(typeof params.scriptPath === "string" && params.scriptPath.trim())) {
+  if (resumeFromTaskId && !hasExplicitReplayScriptPath) {
     if (!sessionWorkflowDir) {
       const message = "Cannot resume workflow: current session has no persisted workflow state.";
       return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
@@ -284,6 +285,19 @@ export async function prepareWorkflowToolSource(
   }
 
   const identity = createWorkflowTaskIdentity(taskId, script, params.args);
+  if (resumeFromTaskId && !hasExplicitReplayScriptPath && resumeJournal?.scriptHash !== identity.scriptHash) {
+    const message = `Cannot resume workflow: persisted script for task ${resumeFromTaskId} has changed.`;
+    return sourceError(message, {
+      name: metaName,
+      error: message,
+      logs: source.warnings,
+      source: source.source,
+      sourcePath: source.sourcePath,
+      scriptPath: source.sourcePath,
+      taskId: identity.taskId,
+      resumeFromTaskId,
+    });
+  }
   let scriptPath = source.sourcePath;
   if (sessionWorkflowDir) {
     try {

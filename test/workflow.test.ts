@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Theme } from "@earendil-works/pi-coding-agent";
@@ -16,7 +16,7 @@ import {
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
 import { INLINE_WORKFLOW_EXAMPLE } from "../src/workflow/source.ts";
 import { createWorkflowTool } from "../src/workflow/tool.ts";
-import { loadWorkflowJournal } from "../src/workflow/journal.ts";
+import { loadWorkflowJournal, persistWorkflowScript } from "../src/workflow/journal.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
 
 const META = "export const meta = { name: 'wf', description: 'a workflow' };\n";
@@ -943,6 +943,29 @@ describe("saved workflow registry", () => {
       expect(result.ok).toBe(false);
       expect(result.ok ? "" : result.message).toContain("meta.name must match");
     });
+  });
+
+  it("does not overwrite an existing persisted script snapshot", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-workflows-"));
+    try {
+      const path = await persistWorkflowScript({
+        dir,
+        metaName: "immutable",
+        scriptHash: "abcdef1234567890",
+        script: "original",
+      });
+      writeFileSync(path, "mutated");
+
+      await expect(persistWorkflowScript({
+        dir,
+        metaName: "immutable",
+        scriptHash: "abcdef1234567890",
+        script: "original",
+      })).rejects.toThrow("does not match");
+      expect(readFileSync(path, "utf8")).toBe("mutated");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("loads a resume journal up to a malformed trailing line", async () => {

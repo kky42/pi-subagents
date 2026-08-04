@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, link, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { hashStableValue } from "./replay-cache.ts";
 import type { WorkflowAgentResultEvent, WorkflowCachedAgentResult } from "./types.ts";
@@ -29,6 +29,7 @@ export interface LoadedWorkflowJournal {
   name?: string;
   source?: string;
   scriptPath?: string;
+  scriptHash?: string;
   status: "running" | "completed" | "failed";
   logs: string[];
   agentResults: WorkflowCachedAgentResult[];
@@ -76,7 +77,24 @@ export async function persistWorkflowScript(params: {
 }): Promise<string> {
   await mkdir(params.dir, { recursive: true });
   const path = join(params.dir, `${safeFilePart(params.metaName)}-${params.scriptHash.slice(0, 12)}.js`);
-  await writeFile(path, params.script, "utf8");
+  const tempDir = await mkdtemp(join(params.dir, ".script-"));
+  const tempPath = join(tempDir, "workflow.js");
+  try {
+    await writeFile(tempPath, params.script, "utf8");
+    try {
+      await link(tempPath, path);
+    } catch (error) {
+      if (!isAlreadyExists(error)) {
+        throw error;
+      }
+      const existing = await readFile(path, "utf8");
+      if (existing !== params.script) {
+        throw new Error(`Persisted workflow script does not match ${params.scriptHash}`);
+      }
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
   return path;
 }
 
@@ -101,6 +119,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
   let name: string | undefined;
   let source: string | undefined;
   let scriptPath: string | undefined;
+  let scriptHash: string | undefined;
   let status: LoadedWorkflowJournal["status"] = "running";
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) {
@@ -117,6 +136,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
       name = typeof entry.name === "string" ? entry.name : undefined;
       source = typeof entry.source === "string" ? entry.source : undefined;
       scriptPath = typeof entry.scriptPath === "string" ? entry.scriptPath : undefined;
+      scriptHash = typeof entry.scriptHash === "string" ? entry.scriptHash : undefined;
       continue;
     }
     if (entry.type === "task_complete") {
@@ -157,7 +177,7 @@ export async function loadWorkflowJournal(dir: string, taskId: string): Promise<
   if (!seenTaskStart) {
     throw new Error(`Workflow journal does not match task id ${taskId}`);
   }
-  return { taskId, path, name, source, scriptPath, status, logs, agentResults };
+  return { taskId, path, name, source, scriptPath, scriptHash, status, logs, agentResults };
 }
 
 export async function createWorkflowJournalWriter(params: {
@@ -241,4 +261,8 @@ function safeFilePart(value: string): string {
 
 function isNotFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ENOENT";
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "EEXIST";
 }

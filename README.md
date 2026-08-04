@@ -12,7 +12,7 @@ Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI*
 
 </div>
 
-![A real Pi interactive session showing four direct Agents and two Workflows, live Workflow child progress, and the final one-line idle summary](./docs/images/pi-flow-interactive.png)
+![A real Pi interactive session showing four direct Agents and two Workflows, live Workflow child progress, and the final one-line idle summary](./assets/pi-flow-interactive.png)
 
 <p align="center"><sub>Captured from a real Pi interactive session with four direct Agents, two Workflows, and four Workflow child agents.</sub></p>
 

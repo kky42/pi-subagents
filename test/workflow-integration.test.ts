@@ -430,6 +430,25 @@ return await agent('Review this revision:\\n' + draft, { label: 'reviewer-2', se
     disposeSession(session);
   });
 
+  it("rejects implicit replay when the persisted script snapshot changed", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
+    registration.setResponses([fauxAssistantMessage("original result")]);
+    const script = `export const meta = { name: 'immutable_replay', description: 'Immutable replay snapshot' };\nreturn await agent('original prompt', { label: 'worker' });`;
+
+    const first = await executeWorkflow(session, { script }, context);
+    const stateDir = workflowStateDir(tempDir);
+    const scriptPath = join(stateDir, readdirSync(stateDir).find((name) => name.endsWith(".js")) ?? "");
+    writeFileSync(scriptPath, readFileSync(scriptPath, "utf8").replace("original prompt", "mutated prompt"));
+
+    const replay = await executeWorkflow(session, { resumeFromTaskId: first.accepted.task_id }, context);
+
+    expect(replay.notification.status).toBe("failed");
+    expect(replay.notification.content).toContain(`persisted script for task ${first.accepted.task_id} has changed`);
+    expect(registration.getPendingResponseCount()).toBe(0);
+    disposeSession(session);
+  });
+
   it("persists inline scripts and replays an edited scriptPath by task ID", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });

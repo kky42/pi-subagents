@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, type Context, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
@@ -125,6 +125,38 @@ Custom Code Searcher Role`);
     expect(messages).toContain("Second prompt.");
     const mappings = sessionManager.getEntries().filter((entry: any) => entry.type === "custom" && entry.customType === "pi-flow-subagent-session-key");
     expect(mappings).toHaveLength(1);
+    disposeSession(session);
+  });
+
+  it("fails continuation when the persisted child session is missing", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("Agent") as any;
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
+    setContextRoutingResponses(registration, (providerContext) =>
+      fauxAssistantMessage(getToolNames(providerContext).includes("Agent") ? "notification observed" : "first done"));
+
+    const first = await tool.execute(
+      "first",
+      { description: "First", prompt: "First.", session_key: "missing-child" },
+      undefined,
+      undefined,
+      context,
+    );
+    await waitForTaskNotification(session, first.details.task_id);
+    rmSync(join(agentDir, "subagent-sessions"), { recursive: true, force: true });
+
+    const second = await tool.execute(
+      "second",
+      { description: "Continue", prompt: "Continue.", session_key: "missing-child" },
+      undefined,
+      undefined,
+      context,
+    );
+    const terminal = await waitForTaskNotification(session, second.details.task_id);
+
+    expect(terminal.status).toBe("failed");
+    expect(terminal.content).toContain("Cannot resume subagent: persisted session");
+    expect(terminal.content).toContain("was not found");
     disposeSession(session);
   });
 
