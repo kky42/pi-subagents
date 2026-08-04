@@ -57,26 +57,30 @@ const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 12;
 const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
-const AGENT_PROMPT_SNIPPET = "Launch one focused background subagent task";
+const AGENT_PROMPT_SNIPPET = "Delegate one focused task to a specialist";
+const AGENT_PROMPT_GUIDELINES = [
+  "Use Agent only when delegation adds value; keep narrow local work in the foreground.",
+  "Launch independent Agent tasks in parallel when they do not depend on each other.",
+  "Use Agent profiles backed by external CLIs only in trusted repositories.",
+];
 
 const agentToolParameters = Type.Object({
   description: Type.String({
-    description: "Short task name, ideally 3-5 words; not sent as the child task.",
+    description: "Short UI task name, ideally 3-5 words; not sent to the child.",
   }),
   prompt: Type.String({
     description:
-      "Complete task briefing sent to the child. Include needed paths, constraints, and expected result because fresh calls do not inherit the parent conversation.",
+      "Complete task briefing sent to the child. Include needed paths, constraints, and expected result because fresh calls do not inherit parent context.",
   }),
   subagent_type: Type.Optional(
     Type.String({
-      description:
-        "Registered profile name. Defaults to general-purpose; selects the backend, model, thinking level, role prompt, and Pi tool allowlist.",
+      description: "Registered profile name; defaults to general-purpose.",
     }),
   ),
   session_key: Type.Optional(
     Type.String({
       description:
-        "Optional subagent conversation key. Reuse a session_key returned by an earlier Agent call to continue that child conversation. Omit to start a new conversation; the effective session_key is returned.",
+        "Prior Agent session_key to continue. Omit to start a new child conversation; the effective key is returned.",
     }),
   ),
 });
@@ -193,8 +197,9 @@ function createAgentTool(
     name: "Agent",
     label: "Agent",
     description:
-      "Launch one background subagent task in the current working directory and return its task ID immediately. The task sends one completion or failure notification later. Calls without `session_key` start a new resumable conversation and return its generated key. Calls with the same key continue that child and are serialized. Subagent concurrency is bounded and queued. Pi-backed children cannot invoke PiFlow delegation tools. External-backend profiles use their CLI permission surface and should run only in trusted repositories.",
+      "Use Agent to delegate one focused, self-contained task to a specialist. It is best for independent parallel work or context-heavy exploration whose intermediate context the foreground does not need. Subagents cannot invoke PiFlow delegation tools.",
     promptSnippet: AGENT_PROMPT_SNIPPET,
+    promptGuidelines: AGENT_PROMPT_GUIDELINES,
     parameters: agentToolParameters,
     executionMode: "parallel",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

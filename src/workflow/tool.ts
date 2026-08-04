@@ -19,6 +19,7 @@ import { createWorkflowAgentRunner } from "./agent-runner.ts";
 import { runWorkflow } from "./runtime.ts";
 import {
   prepareWorkflowToolSource,
+  WORKFLOW_PROMPT_GUIDELINES,
   WORKFLOW_PROMPT_SNIPPET,
   WORKFLOW_TOOL_DESCRIPTION,
   workflowToolParameters,
@@ -51,6 +52,7 @@ export function createWorkflowTool(
     label: "Workflow",
     description: WORKFLOW_TOOL_DESCRIPTION,
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
+    promptGuidelines: WORKFLOW_PROMPT_GUIDELINES,
     parameters: workflowToolParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const taskManager = options.getTaskManager();

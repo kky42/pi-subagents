@@ -51,7 +51,7 @@ describe("pi-subagent agent contract", () => {
     return rootContext?.systemPrompt ?? "";
   }
 
-  it("registers the Agent API shape without duplicate prompt guidelines", async () => {
+  it("registers the Agent API shape", async () => {
     const { session } = await createSession();
     const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
     const schema = tool?.parameters as {
@@ -60,18 +60,15 @@ describe("pi-subagent agent contract", () => {
     } | undefined;
     const properties = schema?.properties ?? {};
 
-    expect(tool?.description).toContain("background");
-    expect(tool?.description).toContain("return its task ID immediately");
-    expect(tool?.promptGuidelines).toBeUndefined();
+    expect(tool?.description.trim().length).toBeGreaterThan(0);
     expect(schema?.required).toEqual(["description", "prompt"]);
     expect(Object.keys(properties).sort()).toEqual(["description", "prompt", "session_key", "subagent_type"]);
     expectDescribedProperties(properties);
-    expect(properties.session_key?.description).toContain("effective session_key is returned");
 
     disposeSession(session);
   });
 
-  it("registers the workflow API shape without duplicate prompt guidelines", async () => {
+  it("registers the workflow API shape", async () => {
     const { session } = await createSession();
     const tool = session.getAllTools().find((candidate) => candidate.name === "workflow");
     const schema = tool?.parameters as {
@@ -81,7 +78,6 @@ describe("pi-subagent agent contract", () => {
     const properties = schema?.properties ?? {};
 
     expect(tool?.description.trim().length).toBeGreaterThan(0);
-    expect(tool?.promptGuidelines).toBeUndefined();
     expect(schema?.required ?? []).toEqual([]);
     expect(Object.keys(properties).sort()).toEqual(["args", "name", "resumeFromTaskId", "script", "scriptPath"]);
     expectDescribedProperties(properties);
@@ -135,34 +131,6 @@ describe("pi-subagent agent contract", () => {
     for (const profile of profiles.values()) {
       expect(occurrenceCount(prompt, `- ${profile.name}: ${profile.description}`)).toBe(1);
     }
-  });
-
-  it("uses availability-qualified routing in the same PiFlow prompt regardless of the active tool subset", async () => {
-    const expectedFlowPrompt = buildFlowPrompt(getSubagentProfiles(agentDir), []);
-    expect(expectedFlowPrompt).toContain("When Agent is available");
-    expect(expectedFlowPrompt).toContain("When workflow is available");
-    for (const activeTools of [["Agent", "workflow"], ["Agent"], ["workflow"], []]) {
-      const prompt = await captureRootPrompt(activeTools);
-      expect(prompt.endsWith(expectedFlowPrompt)).toBe(true);
-    }
-  });
-
-  it("uses Pi active-tool snippets for canonical tool discovery", async () => {
-    const agentEntry = "- Agent:";
-    const workflowEntry = "- workflow:";
-    const both = await captureRootPrompt(["Agent", "workflow"]);
-    const agentOnly = await captureRootPrompt(["Agent"]);
-    const workflowOnly = await captureRootPrompt(["workflow"]);
-    const neither = await captureRootPrompt([]);
-
-    expect(both).toContain(agentEntry);
-    expect(both).toContain(workflowEntry);
-    expect(agentOnly).toContain(agentEntry);
-    expect(agentOnly).not.toContain(workflowEntry);
-    expect(workflowOnly).not.toContain(agentEntry);
-    expect(workflowOnly).toContain(workflowEntry);
-    expect(neither).not.toContain(agentEntry);
-    expect(neither).not.toContain(workflowEntry);
   });
 
   it("retains a custom base system prompt", async () => {

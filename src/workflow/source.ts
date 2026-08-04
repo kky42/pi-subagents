@@ -13,13 +13,16 @@ import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "./registry.ts
 import { parseWorkflowScript } from "./script-validation.ts";
 import type { WorkflowCachedAgentResult } from "./types.ts";
 
-export const WORKFLOW_PROMPT_SNIPPET = "Run a saved or ad-hoc multi-agent JavaScript workflow";
+export const WORKFLOW_PROMPT_SNIPPET = "Orchestrate dependent or larger multi-agent work";
+
+export const WORKFLOW_PROMPT_GUIDELINES = [
+  "Call workflow with exactly one of name, scriptPath, or script, unless replaying a prior task with resumeFromTaskId.",
+  "Only run trusted workflow scripts; worker VM isolation detects stalls but is not a security boundary.",
+];
 
 export const WORKFLOW_TOOL_DESCRIPTION = [
-  "Launch a trusted JavaScript workflow as a background task and return its task ID immediately.",
-  "Provide exactly one source: `name`, `scriptPath`, or `script`; a prior workflow can instead be replayed with `resumeFromTaskId`.",
-  "Subagent calls share PiFlow's bounded concurrency and queue when full.",
-  "Only run trusted scripts; worker VM isolation detects stalls but is not a security boundary.",
+  "Use workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, replay, or larger fan-out.",
+  "Run a matching saved workflow when available; otherwise provide a trusted ad-hoc script.",
 ].join(" ");
 
 export const INLINE_WORKFLOW_EXAMPLE = `export const meta = { name: 'inspect_items', description: 'Inspect items in two turns' };
@@ -52,30 +55,20 @@ const results = await pipeline(
 );
 return { results };`;
 
-const INLINE_WORKFLOW_DESCRIPTION = [
-  "Raw JavaScript source for an ad-hoc workflow; do not include explanatory prose.",
-  "The first statement must be the plain literal `export const meta = { name: 'short_name', description: 'non-empty' }`; optional `phases` entries may contain `title`, `detail`, and `model`.",
-  "Available globals are `agent(prompt, opts)`, `parallel(thunks)`, `pipeline(items, ...stages)`, `phase(title)`, `log(message)`, `args`, and `cwd`.",
-  "Call `agent()` at least once, await or return every call, and return a JSON-serializable value.",
-  "Agent options are `label`, `phase`, `subagent_type`, `session_key`, and `schema`. `subagent_type` defaults to `general-purpose`; calls using the same workflow-local session key continue the same child conversation and are serialized. Nonfatal failures resolve to `null`.",
-  "`parallel()` takes thunk functions, for example `await parallel([() => agent('A', { label: 'a' }), () => agent('B', { label: 'b' })])`, not promises, and preserves input order. `pipeline(items, ...stages)` preserves stage order per item while items run concurrently; stages receive `(previousValue, originalItem, index)`.",
-  "A schema must have root type `object`; every object sets `additionalProperties: false` and lists every property in `required`, with nullable types for optional values. `anyOf` is supported; `oneOf` and `allOf` are not. Schema literals and top-level-const references are preflighted before any child starts. A schema inside a dynamic options object is validated immediately before that call; a dynamic schema value inside a static options object is rejected.",
-  "Write plain JavaScript without imports, require, filesystem APIs, Date APIs, or `Math.random()`.",
-  `Example showing structured output, concurrent pipeline items, explicit stage returns, null handling, and one resumed child per item:\n${INLINE_WORKFLOW_EXAMPLE}`,
-].join("\n");
-
 export const workflowToolParameters = Type.Object({
-  script: Type.Optional(Type.String({ description: INLINE_WORKFLOW_DESCRIPTION })),
+  script: Type.Optional(
+    Type.String({
+      description: "Trusted ad-hoc workflow JavaScript source; do not include explanatory prose.",
+    }),
+  ),
   name: Type.Optional(
     Type.String({
-      description:
-        "Registered saved-workflow meta.name. Create reusable workflows as valid .js files under ~/.pi/agent/workflows/ or a trusted project's .pi/workflows/. meta.name must match [a-z0-9][a-z0-9_-]*; the filename may differ.",
+      description: "Registered saved workflow meta.name.",
     }),
   ),
   scriptPath: Type.Optional(
     Type.String({
-      description:
-        "Saved or session-persisted .js workflow path resolving inside an allowed global, trusted-project, or current-session workflow root.",
+      description: "Path to a trusted saved or session-persisted workflow script.",
     }),
   ),
   args: Type.Optional(
@@ -84,7 +77,7 @@ export const workflowToolParameters = Type.Object({
   resumeFromTaskId: Type.Optional(
     Type.String({
       description:
-        "Optional prior workflow task ID for replay. Use it alone to replay the persisted script, or with `scriptPath` to replay an edited script. Successful cached agent results are reused for the longest unchanged call prefix, then execution continues live.",
+        "Prior workflow task ID to replay. Add scriptPath to replay an edited script; the longest unchanged successful prefix is reused.",
     }),
   ),
 });
