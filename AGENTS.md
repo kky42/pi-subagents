@@ -77,7 +77,7 @@
 ## CI and release workflow
 
 - CI lives in `.github/workflows/ci.yml` and runs on pull requests plus pushes to `main`. It installs with `npm ci` and runs `npm run check` on Node 22.x and 24.x.
-- Real-model E2E scripts are intentionally not part of required CI because they can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, `npm run e2e:prompt-routing` when prompt or routing guidance changes, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
+- Real-model E2E scripts are intentionally not part of required CI because they can be slow or inconclusive. Run them manually before risky releases: `npm run e2e -- --timeout-ms 300000`, `npm run e2e:workflow-features`, `npm run e2e:prompt-routing` when prompt or routing guidance changes, `npm run e2e:duplicate-messages` when foreground/background message behavior changes, and `npm run e2e:session-key-resume -- --backend all` when session continuation changes.
 - Real-model E2E drivers must fail the harness when a child process cannot start, times out, or exits nonzero. Do not classify process failures as inconclusive model behavior.
 - Every real-model E2E driver must install the guard from `scripts/e2e/lib/deepseek-claude-env.mjs` so any Claude Code process routes through DeepSeek's Anthropic-compatible endpoint with isolated settings. Drivers must fail fast without `DEEPSEEK_API_KEY`/`DEEPSEEK_API_TOKEN` (or `--deepseek-api-key-env`) and must not fall back to Anthropic login or another Claude Code provider.
 - There is intentionally no automated npm publish workflow right now; do not create tags expecting GitHub Actions to publish, and do not add an `NPM_TOKEN`-based workflow unless the user asks.
@@ -116,6 +116,10 @@ Root-direct handling of narrow or small fixtures is intentional: Agent's active-
 The appended PiFlow prompt owns shared lifecycle semantics, the ad-hoc workflow authoring guide and example, and the complete effective subagent and saved-workflow rosters. Agent and workflow tool descriptions explain their distinct selection boundaries in one to three sentences. Their concise `promptSnippet` values provide active-tool discovery, `promptGuidelines` hold tool-specific behavior, and parameter descriptions remain field-specific. The prompt intentionally avoids wait, polling, and end-turn narration instructions.
 
 `scripts/e2e/prompt-routing.mjs` is an observation-only real-model driver pinned to `openai-codex/gpt-5.6-luna` with `xhigh` thinking. It records routing, continuation, workflow shape, usage, timing, and fixture changes across scenarios without behavioral PASS/FAIL assertions; only harness or process failures make the command fail. Deterministic tests cover roster injection, tool-schema shape, Agent execution, and session continuation without asserting explanatory prompt wording; review that prose directly and use observational E2E for model behavior.
+
+### Duplicate-message observation E2E
+
+`scripts/e2e/duplicate-messages.mjs` preserves the real RPC scenario that exposed identical foreground text blocks while PiFlow Agents were active. It pins the foreground to `openai-codex/gpt-5.6-sol` with `xhigh` thinking, uses delayed Pi-backed `openai-codex/gpt-5.6-luna` expert children, and records text-block phases, multi-block responses, exact duplicates, notification timing, delegation counts, and foreground reads. Duplicate and multi-block observations never affect exit status; process failures, timeouts, and incomplete accepted-task delivery do.
 
 ### Workflow tool (v2)
 
