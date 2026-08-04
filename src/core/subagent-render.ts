@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, TruncatedText } from "@earendil-works/pi-tui";
-import { getBackendSubagentLabel } from "./display.ts";
+import { getBackendAgentLabel } from "./display.ts";
 import { SPINNER_FRAMES } from "./spinner.ts";
 import type { SubagentBackend, SubagentRunStatus, SubagentTelemetry, SubagentUsage } from "../types.ts";
 export { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./spinner.ts";
@@ -108,12 +108,12 @@ function nodeLabel(node: RenderableSubagentNode): string {
 
 function compactTitle(node: RenderableSubagentNode): string {
   const label = nodeLabel(node);
-  return `${getBackendSubagentLabel(node.backend)}(${nodeType(node)}${label ? `, ${label}` : ""})`;
+  return `${getBackendAgentLabel(node.backend)}(${nodeType(node)}${label ? `, ${label}` : ""})`;
 }
 
 function richTitle(node: RenderableSubagentNode): string {
   const label = nodeLabel(node);
-  return `${getBackendSubagentLabel(node.backend)}(${nodeType(node)}${label ? `: ${label}` : ""})`;
+  return `${getBackendAgentLabel(node.backend)}(${nodeType(node)}${label ? `: ${label}` : ""})`;
 }
 
 function formatRuntimeAndUsage(node: RenderableSubagentNode, now: number): string {

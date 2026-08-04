@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-export const TASK_NOTIFICATION_CUSTOM_TYPE = "pi-flow-task-notification-v2";
+export const TASK_NOTIFICATION_CUSTOM_TYPE = "pi-flow-task-notification";
 export const TASK_STATE_EVENT = "pi-flow:task-state";
 
-export type TaskType = "subagent" | "workflow";
+export type TaskType = "agent" | "workflow";
 export type PublicTaskStatus = "accepted" | "completed" | "failed";
 
 export interface TaskStateEvent {
-  version: 2;
+  version: 1;
   task_id: string;
   task_type: TaskType;
   status: PublicTaskStatus;
@@ -19,8 +19,8 @@ interface TaskEnvelopeBase {
   status: PublicTaskStatus;
 }
 
-export interface SubagentAcceptedTaskEnvelope extends TaskEnvelopeBase {
-  task_type: "subagent";
+export interface AgentAcceptedTaskEnvelope extends TaskEnvelopeBase {
+  task_type: "agent";
   status: "accepted";
   session_key: string;
   label: string;
@@ -32,8 +32,8 @@ export interface WorkflowAcceptedTaskEnvelope extends TaskEnvelopeBase {
   name: string;
 }
 
-export interface SubagentTerminalTaskEnvelope extends TaskEnvelopeBase {
-  task_type: "subagent";
+export interface AgentTerminalTaskEnvelope extends TaskEnvelopeBase {
+  task_type: "agent";
   status: "completed" | "failed";
   session_key: string;
   label: string;
@@ -47,17 +47,17 @@ export interface WorkflowTerminalTaskEnvelope extends TaskEnvelopeBase {
   content: string;
 }
 
-export type AcceptedTaskEnvelope = SubagentAcceptedTaskEnvelope | WorkflowAcceptedTaskEnvelope;
-export type TerminalTaskEnvelope = SubagentTerminalTaskEnvelope | WorkflowTerminalTaskEnvelope;
+export type AcceptedTaskEnvelope = AgentAcceptedTaskEnvelope | WorkflowAcceptedTaskEnvelope;
+export type TerminalTaskEnvelope = AgentTerminalTaskEnvelope | WorkflowTerminalTaskEnvelope;
 export type TaskEnvelope = AcceptedTaskEnvelope | TerminalTaskEnvelope;
 
 export interface TaskCounts {
-  subagent: { finished: number; total: number };
+  agent: { finished: number; total: number };
   workflow: { finished: number; total: number };
 }
 
-type SubagentTaskOptions = {
-  taskType: "subagent";
+type AgentTaskOptions = {
+  taskType: "agent";
   label: string;
   sessionKey: string;
   run: (signal: AbortSignal, taskId: string) => Promise<string>;
@@ -69,7 +69,7 @@ type WorkflowTaskOptions = {
   run: (signal: AbortSignal, taskId: string) => Promise<string>;
 };
 
-type StartTaskOptions = SubagentTaskOptions | WorkflowTaskOptions;
+type StartTaskOptions = AgentTaskOptions | WorkflowTaskOptions;
 
 export interface BackgroundTaskManagerOptions {
   notify: (envelope: TerminalTaskEnvelope) => void;
@@ -85,14 +85,14 @@ interface ActiveTask {
 export class BackgroundTaskManager {
   private readonly active = new Map<string, ActiveTask>();
   private readonly counts: TaskCounts = {
-    subagent: { finished: 0, total: 0 },
+    agent: { finished: 0, total: 0 },
     workflow: { finished: 0, total: 0 },
   };
   private closed = false;
 
   constructor(private readonly options: BackgroundTaskManagerOptions) {}
 
-  start(options: SubagentTaskOptions): SubagentAcceptedTaskEnvelope;
+  start(options: AgentTaskOptions): AgentAcceptedTaskEnvelope;
   start(options: WorkflowTaskOptions): WorkflowAcceptedTaskEnvelope;
   start(options: StartTaskOptions): AcceptedTaskEnvelope {
     if (this.closed) {
@@ -101,10 +101,10 @@ export class BackgroundTaskManager {
 
     const taskId = `task_${randomUUID().replace(/-/g, "")}`;
     const controller = new AbortController();
-    const accepted = options.taskType === "subagent"
+    const accepted = options.taskType === "agent"
       ? {
           task_id: taskId,
-          task_type: "subagent" as const,
+          task_type: "agent" as const,
           status: "accepted" as const,
           session_key: options.sessionKey,
           label: options.label,
@@ -179,10 +179,10 @@ export class BackgroundTaskManager {
   ): void {
     const terminalStatus = signal.aborted ? "failed" : status;
     const content = signal.aborted ? errorMessage(signal.reason) : value;
-    const envelope: TerminalTaskEnvelope = options.taskType === "subagent"
+    const envelope: TerminalTaskEnvelope = options.taskType === "agent"
       ? {
           task_id: accepted.task_id,
-          task_type: "subagent",
+          task_type: "agent",
           status: terminalStatus,
           session_key: options.sessionKey,
           label: options.label,
@@ -209,7 +209,7 @@ export class BackgroundTaskManager {
   private publishTaskState(envelope: TaskEnvelope): void {
     try {
       this.options.onTaskState?.({
-        version: 2,
+        version: 1,
         task_id: envelope.task_id,
         task_type: envelope.task_type,
         status: envelope.status,
@@ -237,7 +237,7 @@ export function taskToolResult<T extends TaskEnvelope>(envelope: T) {
 
 function cloneCounts(counts: TaskCounts): TaskCounts {
   return {
-    subagent: { ...counts.subagent },
+    agent: { ...counts.agent },
     workflow: { ...counts.workflow },
   };
 }

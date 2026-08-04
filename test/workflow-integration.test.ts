@@ -5,7 +5,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
-const TASK_NOTIFICATION_TYPE = "pi-flow-task-notification-v2";
+const TASK_NOTIFICATION_TYPE = "pi-flow-task-notification";
 
 type AcceptedWorkflow = {
   task_id: string;
@@ -97,7 +97,7 @@ describe("pi-subagent workflow integration", () => {
     ]);
 
     const tool = session.getToolDefinition("run_workflow") as any;
-    const script = `export const meta = { name: 'inspect', description: 'inspect a module' };\nreturn await run_subagent('analyze the module', { label: 'analyze' });`;
+    const script = `export const meta = { name: 'inspect', description: 'inspect a module' };\nreturn await run_agent('analyze the module', { label: 'analyze' });`;
     const pending = tool.execute(
       "wf-text",
       { name: "inspect", script },
@@ -129,7 +129,7 @@ describe("pi-subagent workflow integration", () => {
     const { session, registration, model, modelRegistry } = await createSession();
     registration.setResponses([fauxAssistantMessage("workflow usage done")]);
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
-    const script = `export const meta = { name: 'footer_flow', description: 'Footer flow' };\nreturn await run_subagent('report usage', { label: 'usage' });`;
+    const script = `export const meta = { name: 'footer_flow', description: 'Footer flow' };\nreturn await run_agent('report usage', { label: 'usage' });`;
 
     await executeWorkflow(
       session,
@@ -146,7 +146,7 @@ describe("pi-subagent workflow integration", () => {
     expect(flowWidgets.some((widget) => widget.lines?.some((line) => line.includes("Workflow(footer_flow)")))).toBe(true);
     expect(flowWidgets.at(-1)?.lines).toHaveLength(1);
     const line = flowWidgets.at(-1)?.lines?.[0] ?? "";
-    expect(line).toContain("pi-flow idle · 0 subagents and 1 workflow done");
+    expect(line).toContain("pi-flow idle · 0 agents and 1 workflow done");
     expect(line).toMatch(/↑\S+ ↓\S+ (?:R\S+ |W\S+ )*CH\d+\.\d%/);
     disposeSession(session);
   });
@@ -160,14 +160,14 @@ describe("pi-subagent workflow integration", () => {
       session,
       {
         name: "invalid_schema",
-        script: `export const meta = { name: 'invalid_schema', description: 'invalid schema' };\nreturn await run_subagent('x', { schema: { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } } });`,
+        script: `export const meta = { name: 'invalid_schema', description: 'invalid schema' };\nreturn await run_agent('x', { schema: { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } } });`,
       },
       context,
     );
     expect(invalidScript.notification.status).toBe("failed");
     expect(invalidScript.notification.content).toMatch(/no subagents were started.*schema preflight.*additionalProperties/is);
 
-    const script = `export const meta = { name: 'actual_name', description: 'name mismatch' };\nreturn await run_subagent('x');`;
+    const script = `export const meta = { name: 'actual_name', description: 'name mismatch' };\nreturn await run_agent('x');`;
     const mismatch = await executeWorkflow(session, { name: "requested_name", script }, context);
     expect(mismatch.notification.status).toBe("failed");
     expect(mismatch.notification.content).toContain(
@@ -203,10 +203,10 @@ describe("pi-subagent workflow integration", () => {
     ]);
 
     const script = `export const meta = { name: 'review_loop', description: 'Continue Worker and Reviewer sessions' };
-let draft = await run_subagent('Create the initial draft.', { label: 'worker-1', session_key: 'worker' });
-let review = await run_subagent('Review this draft:\\n' + draft, { label: 'reviewer-1', session_key: 'reviewer' });
-draft = await run_subagent('Revise using this feedback:\\n' + review, { label: 'worker-2', session_key: 'worker' });
-return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer-2', session_key: 'reviewer' });`;
+let draft = await run_agent('Create the initial draft.', { label: 'worker-1', session_key: 'worker' });
+let review = await run_agent('Review this draft:\\n' + draft, { label: 'reviewer-1', session_key: 'reviewer' });
+draft = await run_agent('Revise using this feedback:\\n' + review, { label: 'worker-2', session_key: 'worker' });
+return await run_agent('Review this revision:\\n' + draft, { label: 'reviewer-2', session_key: 'reviewer' });`;
     const { notification } = await executeWorkflow(
       session,
       { name: "review_loop", script },
@@ -237,7 +237,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
       },
     ]);
 
-    const script = `export const meta = { name: 'slow-flow', description: 'slow workflow child' };\nreturn await run_subagent('wait too long', { label: 'slow' });`;
+    const script = `export const meta = { name: 'slow-flow', description: 'slow workflow child' };\nreturn await run_agent('wait too long', { label: 'slow' });`;
     const started = Date.now();
     const { accepted, notification } = await executeWorkflow(
       session,
@@ -263,7 +263,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     let childStarted = false;
     let rootNotificationCalls = 0;
     setContextRoutingResponses(registration, (providerContext, options) => {
-      if (getToolNames(providerContext).includes("run_subagent")) {
+      if (getToolNames(providerContext).includes("run_agent")) {
         rootNotificationCalls++;
         return fauxAssistantMessage("notification observed");
       }
@@ -274,7 +274,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     });
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     const tool = session.getToolDefinition("run_workflow") as any;
-    const script = `export const meta = { name: 'reload_flow', description: 'Wait for reload' };\nreturn await run_subagent('wait for reload', { label: 'worker' });`;
+    const script = `export const meta = { name: 'reload_flow', description: 'Wait for reload' };\nreturn await run_agent('wait for reload', { label: 'worker' });`;
 
     const result = await tool.execute("reload-workflow", { name: "reload_flow", script }, undefined, undefined, context);
     const accepted = result.details as AcceptedWorkflow;
@@ -294,7 +294,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     const { session, registration, model, modelRegistry } = await createSession();
     registration.setResponses([fauxAssistantMessage("logged child done")]);
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
-    const script = `export const meta = { name: 'logged_flow', description: 'Persist workflow logs' };\nlog('starting review');\nreturn { reply: await run_subagent('finish review', { label: 'reviewer' }) };`;
+    const script = `export const meta = { name: 'logged_flow', description: 'Persist workflow logs' };\nlog('starting review');\nreturn { reply: await run_agent('finish review', { label: 'reviewer' }) };`;
 
     const { accepted, notification } = await executeWorkflow(session, { name: "logged_flow", script }, context);
 
@@ -312,7 +312,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     const savedPath = join(agentDir, "workflows", "saved-review.js");
     writeFileSync(
       savedPath,
-      `export const meta = { name: 'saved-review', description: 'Review through a saved workflow' };\nreturn await run_subagent('saved workflow task', { label: 'saved' });`,
+      `export const meta = { name: 'saved-review', description: 'Review through a saved workflow' };\nreturn await run_agent('saved workflow task', { label: 'saved' });`,
     );
     const { session, registration, model, modelRegistry } = await createSession();
     registration.setResponses([fauxAssistantMessage("saved child done")]);
@@ -325,7 +325,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
 
     writeFileSync(
       savedPath,
-      `export const meta = { name: 'saved-review', description: 'Edited saved workflow' };\nreturn await run_subagent('changed workflow task', { label: 'changed' });`,
+      `export const meta = { name: 'saved-review', description: 'Edited saved workflow' };\nreturn await run_agent('changed workflow task', { label: 'changed' });`,
     );
     const replay = await executeWorkflow(
       session,
@@ -343,7 +343,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     const { session, registration, model, modelRegistry } = await createSession();
     registration.setResponses([fauxAssistantMessage("original child done")]);
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
-    const script = `export const meta = { name: 'journal_name', description: 'Replay name guard' };\nreturn await run_subagent('run once');`;
+    const script = `export const meta = { name: 'journal_name', description: 'Replay name guard' };\nreturn await run_agent('run once');`;
     const first = await executeWorkflow(session, { name: "journal_name", script }, context);
 
     const mismatch = await executeWorkflow(
@@ -364,7 +364,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(
       join(agentDir, "workflows", "known.js"),
-      `export const meta = { name: 'known-flow', description: 'Known flow' };\nreturn await run_subagent('known');`,
+      `export const meta = { name: 'known-flow', description: 'Known flow' };\nreturn await run_agent('known');`,
     );
     const { session, model, modelRegistry } = await createSession();
 
@@ -383,7 +383,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
 
   it("rejects resume_from_task_id with an inline script", async () => {
     const { session, model, modelRegistry } = await createSession();
-    const script = `export const meta = { name: 'resume_inline', description: 'resume misuse' };\nreturn await run_subagent('x');`;
+    const script = `export const meta = { name: 'resume_inline', description: 'resume misuse' };\nreturn await run_agent('x');`;
 
     const { notification } = await executeWorkflow(
       session,
@@ -403,14 +403,14 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     setContextRoutingResponses(registration, async (providerContext) => {
-      if (getToolNames(providerContext).includes("run_subagent")) {
+      if (getToolNames(providerContext).includes("run_agent")) {
         return fauxAssistantMessage("notification observed");
       }
       await gate;
       return fauxAssistantMessage("original done");
     });
     const tool = session.getToolDefinition("run_workflow") as any;
-    const script = `export const meta = { name: 'active_replay', description: 'Active replay guard' };\nreturn await run_subagent('wait', { label: 'worker' });`;
+    const script = `export const meta = { name: 'active_replay', description: 'Active replay guard' };\nreturn await run_agent('wait', { label: 'worker' });`;
 
     const firstResult = await tool.execute(
       "workflow-active",
@@ -444,7 +444,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     const { session, registration, model, modelRegistry } = await createSession();
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
     registration.setResponses([fauxAssistantMessage("journaled result")]);
-    const script = `export const meta = { name: 'orphan_replay', description: 'Replay an orphaned journal' };\nreturn await run_subagent('run once', { label: 'worker' });`;
+    const script = `export const meta = { name: 'orphan_replay', description: 'Replay an orphaned journal' };\nreturn await run_agent('run once', { label: 'worker' });`;
 
     const first = await executeWorkflow(session, { name: "orphan_replay", script }, context);
     const journalPath = join(workflowStateDir(tempDir), `task-${first.accepted.task_id}.jsonl`);
@@ -469,7 +469,7 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     const { session, registration, model, modelRegistry } = await createSession();
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
     registration.setResponses([fauxAssistantMessage("original result")]);
-    const script = `export const meta = { name: 'immutable_replay', description: 'Immutable replay snapshot' };\nreturn await run_subagent('original prompt', { label: 'worker' });`;
+    const script = `export const meta = { name: 'immutable_replay', description: 'Immutable replay snapshot' };\nreturn await run_agent('original prompt', { label: 'worker' });`;
 
     const first = await executeWorkflow(session, { name: "immutable_replay", script }, context);
     const stateDir = workflowStateDir(tempDir);
@@ -494,8 +494,8 @@ return await run_subagent('Review this revision:\\n' + draft, { label: 'reviewer
     registration.setResponses([fauxAssistantMessage("first v1"), fauxAssistantMessage("second v1")]);
 
     const script = `export const meta = { name: 'resume_flow', description: 'Resume test flow' };
-const a = await run_subagent('first prompt', { label: 'first' });
-const b = await run_subagent('second prompt', { label: 'second' });
+const a = await run_agent('first prompt', { label: 'first' });
+const b = await run_agent('second prompt', { label: 'second' });
 return [a, b];`;
     const first = await executeWorkflow(session, { name: "resume_flow", script }, context);
     expect(JSON.parse(first.notification.content)).toEqual(["first v1", "second v1"]);
@@ -552,7 +552,7 @@ return [a, b];`;
     ]);
 
     const script = `export const meta = { name: 'solve', description: 'solve a task' };
-return await run_subagent('compute the answer', {
+return await run_agent('compute the answer', {
   label: 'solver',
   schema: { type: 'object', additionalProperties: false, properties: { answer: { type: 'string' }, confidence: { type: 'number' } }, required: ['answer', 'confidence'] },
 });`;
@@ -580,8 +580,8 @@ return await run_subagent('compute the answer', {
     ]);
 
     const script = `export const meta = { name: 'two', description: 'two-agent flow' };
-const first = await run_subagent('first', { label: 'one' });
-const second = await run_subagent('second', { label: 'two' });
+const first = await run_agent('first', { label: 'one' });
+const second = await run_agent('second', { label: 'two' });
 return [first, second];`;
     const { accepted, notification } = await executeWorkflow(
       session,
@@ -592,7 +592,7 @@ return [first, second];`;
     expect(JSON.parse(notification.content)).toEqual(["first done", "second done"]);
     expect(taskNotifications(session)).toEqual([notification]);
     expect(taskNotifications(session).every((message) => message.task_id === accepted.task_id)).toBe(true);
-    expect(getToolNames(childContext)).not.toContain("run_subagent");
+    expect(getToolNames(childContext)).not.toContain("run_agent");
     expect(getToolNames(childContext)).not.toContain("run_workflow");
 
     disposeSession(session);

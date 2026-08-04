@@ -19,17 +19,17 @@ describe("delegation scenario execution", () => {
     await session.prompt("Answer this narrow local question directly.");
 
     expect(session.messages.some((message: any) =>
-      message.role === "assistant" && Array.isArray(message.content) && message.content.some((item: any) => item.name === "run_subagent"))).toBe(false);
+      message.role === "assistant" && Array.isArray(message.content) && message.content.some((item: any) => item.name === "run_agent"))).toBe(false);
     expect(JSON.stringify(session.messages)).toContain("direct result");
     disposeSession(session);
   });
 
   it("runs a flat fan-out as independent accepted background tasks", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_subagent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
       const text = JSON.stringify(providerContext.messages);
       return fauxAssistantMessage(text.includes("source") ? "source result" : "test result");
     });
@@ -48,11 +48,11 @@ describe("delegation scenario execution", () => {
 
   it("continues one logical child stream with a returned session key", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     let continuedChildContext: Context | undefined;
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_subagent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
       if (JSON.stringify(providerContext.messages).includes("Recall and refine")) {
         continuedChildContext = providerContext;
         return fauxAssistantMessage("refined flow");

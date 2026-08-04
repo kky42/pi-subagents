@@ -30,15 +30,15 @@ function optionalString(value: unknown, name: string): string | undefined {
 
 export function normalizeSubagentOptions(value: unknown): NormalizedSubagentOptions {
   if (value === undefined || value === null) return {};
-  if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("run_subagent options must be an object");
+  if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("run_agent options must be an object");
   const options = value as Record<string, unknown>;
   const unknownKey = Object.keys(options).find((key) => !SUBAGENT_OPTION_KEYS.has(key));
-  if (unknownKey) throw new TypeError(`unknown run_subagent option: ${unknownKey}`);
+  if (unknownKey) throw new TypeError(`unknown run_agent option: ${unknownKey}`);
   return {
-    label: normalizeSubagentLabel(optionalString(options.label, "subagent label")),
-    phase: optionalString(options.phase, "subagent phase"),
-    profile: normalizeProfileName(optionalString(options.profile, "subagent profile")),
-    sessionKey: normalizeSessionKey(optionalString(options.session_key, "subagent session_key")),
+    label: normalizeSubagentLabel(optionalString(options.label, "run_agent label")),
+    phase: optionalString(options.phase, "run_agent phase"),
+    profile: normalizeProfileName(optionalString(options.profile, "run_agent profile")),
+    sessionKey: normalizeSessionKey(optionalString(options.session_key, "run_agent session_key")),
     schema: options.schema,
   };
 }

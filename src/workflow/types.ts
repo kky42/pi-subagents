@@ -60,7 +60,7 @@ export type WorkflowSubagentRunner = (
 ) => Promise<unknown>;
 
 export interface WorkflowLimits {
-  /** Hard cap on run_subagent() calls per workflow run, including cached calls. */
+  /** Hard cap on run_agent() calls per workflow run, including cached calls. */
   maxSubagentCalls: number;
   /** Retained workflow log lines. Further logs are summarized/truncated. */
   maxLogs: number;
@@ -88,7 +88,7 @@ export interface RunWorkflowOptions {
   args?: unknown;
   cwd: string;
   signal?: AbortSignal;
-  /** Shared global concurrency cap; run_subagent() queues on this. */
+  /** Shared global concurrency cap; run_agent() queues on this. */
   limiter: ConcurrencyLimiter;
   /** Optional per-call serializer, used to keep equal session_key calls from consuming global slots while waiting. */
   serializeSubagent?: <T>(sessionKey: string | undefined, task: () => Promise<T>) => Promise<T>;

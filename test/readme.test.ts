@@ -51,7 +51,7 @@ describe("README", () => {
     const screenshot = readme.indexOf("./assets/pi-flow-interactive.png");
     const caption = readme.indexOf("Captured from a real Pi interactive session", screenshot);
     const lifecycleHeading = readme.indexOf("## One coordinator, asynchronous specialists", caption);
-    const lifecycle = readme.indexOf("`run_subagent` and `run_workflow` run as background tasks", lifecycleHeading);
+    const lifecycle = readme.indexOf("`run_agent` and `run_workflow` run as background tasks", lifecycleHeading);
     const table = readme.indexOf("| Primitive | Use it for |", lifecycle);
 
     expect(screenshot).toBeGreaterThan(-1);
@@ -64,7 +64,7 @@ describe("README", () => {
     expect(readme.slice(lifecycle, table)).toContain("one correlated `completed` or `failed` notification");
     expect(readme.slice(lifecycle, table)).toContain("`accepted` means launched, not finished");
     expect(readme.slice(lifecycle, table)).toContain("nothing to poll");
-    expect(readme).not.toMatch(/^## (?:Headless execution|Define your agent team|Use a focused subagent|Choose run_subagent or run_workflow by task shape|Built for real work)$/m);
+    expect(readme).not.toMatch(/^## (?:Headless execution|Define your agent team|Use a focused subagent|Choose run_agent or run_workflow by task shape|Built for real work)$/m);
   });
 
   it("keeps installation, two natural-language examples, and valid custom profiles together", () => {

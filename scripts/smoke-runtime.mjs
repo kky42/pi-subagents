@@ -34,9 +34,9 @@ assert.deepEqual([...profilesModule.loadBuiltinSubagentProfiles().keys()], ["gen
 
 const script = `export const meta = { name: "smoke-runtime", description: "compiled runtime smoke test" };
 phase("fan-out");
-const [alpha] = await parallel([() => run_subagent("Return the word alpha.", { label: "alpha" })]);
+const [alpha] = await parallel([() => run_agent("Return the word alpha.", { label: "alpha" })]);
 phase("pipe");
-const piped = await pipeline(["beta"], (item) => run_subagent("Return the word " + item + ".", { label: item }));
+const piped = await pipeline(["beta"], (item) => run_agent("Return the word " + item + ".", { label: item }));
 log("alpha=" + alpha + " beta=" + piped[0]);
 return { alpha, beta: piped[0], args };`;
 

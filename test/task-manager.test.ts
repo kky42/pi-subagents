@@ -17,13 +17,13 @@ function deferred<T>() {
 }
 
 describe("BackgroundTaskManager", () => {
-  it("returns a compact subagent acceptance before completion and correlates the terminal notification", async () => {
+  it("returns a compact agent acceptance before completion and correlates the terminal notification", async () => {
     const run = deferred<string>();
     const notifications: TerminalTaskEnvelope[] = [];
     const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
 
     const accepted = manager.start({
-      taskType: "subagent",
+      taskType: "agent",
       label: "inspect auth",
       sessionKey: "worker",
       run: () => run.promise,
@@ -31,14 +31,14 @@ describe("BackgroundTaskManager", () => {
 
     expect(accepted).toEqual({
       task_id: expect.stringMatching(/^task_[a-f0-9]{32}$/),
-      task_type: "subagent",
+      task_type: "agent",
       status: "accepted",
       session_key: "worker",
       label: "inspect auth",
     });
     expect(notifications).toEqual([]);
     expect(manager.getCounts()).toEqual({
-      subagent: { finished: 0, total: 1 },
+      agent: { finished: 0, total: 1 },
       workflow: { finished: 0, total: 0 },
     });
 
@@ -47,13 +47,13 @@ describe("BackgroundTaskManager", () => {
 
     expect(notifications).toEqual([{
       task_id: accepted.task_id,
-      task_type: "subagent",
+      task_type: "agent",
       status: "completed",
       session_key: "worker",
       label: "inspect auth",
       content: "auth result",
     }]);
-    expect(manager.getCounts().subagent).toEqual({ finished: 1, total: 1 });
+    expect(manager.getCounts().agent).toEqual({ finished: 1, total: 1 });
   });
 
   it("publishes accepted and terminal task states around notification delivery", async () => {
@@ -71,16 +71,16 @@ describe("BackgroundTaskManager", () => {
     });
 
     const accepted = manager.start({
-      taskType: "subagent",
+      taskType: "agent",
       label: "coordinate extensions",
       sessionKey: "coordination",
       run: () => run.promise,
     });
 
     expect(states).toEqual([{
-      version: 2,
+      version: 1,
       task_id: accepted.task_id,
-      task_type: "subagent",
+      task_type: "agent",
       status: "accepted",
     }]);
 
@@ -89,15 +89,15 @@ describe("BackgroundTaskManager", () => {
 
     expect(states).toEqual([
       {
-        version: 2,
+        version: 1,
         task_id: accepted.task_id,
-        task_type: "subagent",
+        task_type: "agent",
         status: "accepted",
       },
       {
-        version: 2,
+        version: 1,
         task_id: accepted.task_id,
-        task_type: "subagent",
+        task_type: "agent",
         status: "completed",
       },
     ]);
@@ -122,13 +122,13 @@ describe("BackgroundTaskManager", () => {
     expect(Object.keys(accepted).sort()).toEqual(["name", "status", "task_id", "task_type"]);
     expect(states).toEqual([
       {
-        version: 2,
+        version: 1,
         task_id: accepted.task_id,
         task_type: "workflow",
         status: "accepted",
       },
       {
-        version: 2,
+        version: 1,
         task_id: accepted.task_id,
         task_type: "workflow",
         status: "completed",
@@ -148,7 +148,7 @@ describe("BackgroundTaskManager", () => {
     const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
 
     const accepted = manager.start({
-      taskType: "subagent",
+      taskType: "agent",
       label: "broken task",
       sessionKey: "broken",
       run: async () => { throw new Error("backend unavailable"); },
@@ -157,7 +157,7 @@ describe("BackgroundTaskManager", () => {
 
     expect(notifications).toEqual([{
       task_id: accepted.task_id,
-      task_type: "subagent",
+      task_type: "agent",
       status: "failed",
       session_key: "broken",
       label: "broken task",

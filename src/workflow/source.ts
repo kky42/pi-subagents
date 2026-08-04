@@ -19,7 +19,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "Run a trusted JavaScript workflow as a background task and return its task ID immediately.",
   "Always provide `name`. Omit `script` and `script_path` to run that registered saved workflow, or provide exactly one of them for an ad-hoc or persisted workflow.",
   "Replay requires the same `name` with `resume_from_task_id`; an edited replay may also provide `script_path`.",
-  "Subagent calls share PiFlow's bounded concurrency and queue when full.",
+  "`run_agent` calls share PiFlow's bounded concurrency and queue when full.",
   "Only run trusted scripts; worker VM isolation detects stalls but is not a security boundary.",
 ].join(" ");
 
@@ -32,7 +32,7 @@ const replySchema = {
 };
 const results = await pipeline(
   args?.items ?? ['src', 'test'],
-  (item, _original, index) => run_subagent('Inspect ' + item, {
+  (item, _original, index) => run_agent('Inspect ' + item, {
     label: 'inspect-' + index,
     phase: 'inspect',
     profile: 'general-purpose',
@@ -41,7 +41,7 @@ const results = await pipeline(
   }),
   async (first, item, index) => {
     if (!first) return { item, first: null, followup: null };
-    const followup = await run_subagent('Continue with one-sentence advice.', {
+    const followup = await run_agent('Continue with one-sentence advice.', {
       label: 'followup-' + index,
       phase: 'followup',
       profile: 'general-purpose',
@@ -56,10 +56,10 @@ return { results };`;
 const INLINE_WORKFLOW_DESCRIPTION = [
   "Raw JavaScript source for an ad-hoc workflow; do not include explanatory prose.",
   "The first statement must be the plain literal `export const meta = { name: 'short_name', description: 'non-empty' }`; its name must match the tool's `name` parameter. Optional `phases` entries may contain `title`, `detail`, and `model`.",
-  "Available globals are `run_subagent(prompt, opts)`, `parallel(thunks)`, `pipeline(items, ...stages)`, `phase(title)`, `log(message)`, `args`, and `cwd`.",
-  "Call `run_subagent()` at least once, await or return every call, and return a JSON-serializable value.",
-  "Subagent options are `label`, `phase`, `profile`, `session_key`, and `schema`. `profile` defaults to `general-purpose`; calls using the same workflow-local session key continue the same child conversation and are serialized. Nonfatal failures resolve to `null`.",
-  "`parallel()` takes thunk functions, for example `await parallel([() => run_subagent('A', { label: 'a' }), () => run_subagent('B', { label: 'b' })])`, not promises, and preserves input order. `pipeline(items, ...stages)` preserves stage order per item while items run concurrently; stages receive `(previousValue, originalItem, index)`.",
+  "Available globals are `run_agent(prompt, opts)`, `parallel(thunks)`, `pipeline(items, ...stages)`, `phase(title)`, `log(message)`, `args`, and `cwd`.",
+  "Call `run_agent()` at least once, await or return every call, and return a JSON-serializable value.",
+  "`run_agent` options are `label`, `phase`, `profile`, `session_key`, and `schema`. `profile` defaults to `general-purpose`; calls using the same workflow-local session key continue the same child conversation and are serialized. Nonfatal failures resolve to `null`.",
+  "`parallel()` takes thunk functions, for example `await parallel([() => run_agent('A', { label: 'a' }), () => run_agent('B', { label: 'b' })])`, not promises, and preserves input order. `pipeline(items, ...stages)` preserves stage order per item while items run concurrently; stages receive `(previousValue, originalItem, index)`.",
   "A schema must have root type `object`; every object sets `additionalProperties: false` and lists every property in `required`, with nullable types for optional values. `anyOf` is supported; `oneOf` and `allOf` are not. Schema literals and top-level-const references are preflighted before any child starts. A schema inside a dynamic options object is validated immediately before that call; a dynamic schema value inside a static options object is rejected.",
   "Write plain JavaScript without imports, require, filesystem APIs, Date APIs, or `Math.random()`.",
   `Example showing structured output, concurrent pipeline items, explicit stage returns, null handling, and one resumed child per item:\n${INLINE_WORKFLOW_EXAMPLE}`,

@@ -146,11 +146,11 @@ export async function runWorkflow<T = unknown>(
   const runSubagentCall = async (prompt: unknown, subagentOptions: unknown = {}) => {
     throwIfAborted();
     if (state.subagentCount >= limits.maxSubagentCalls) {
-      const error = new WorkflowFatalError(`maximum workflow subagent calls exceeded (${limits.maxSubagentCalls})`);
+      const error = new WorkflowFatalError(`maximum workflow run_agent calls exceeded (${limits.maxSubagentCalls})`);
       abortRuntime(error);
       throw error;
     }
-    const taskPrompt = requireString(prompt, "subagent prompt");
+    const taskPrompt = requireString(prompt, "run_agent prompt");
     const opts = normalizeSubagentOptions(subagentOptions);
     if (opts.schema != null) {
       try {
@@ -293,7 +293,7 @@ export async function runWorkflow<T = unknown>(
           throw fatalError;
         }
         if (state.subagentCount === 0) {
-          throw new Error("workflow must call run_subagent() at least once");
+          throw new Error("workflow must call run_agent() at least once");
         }
         normalizedResult = normalizeJsonSerializable(result, "workflow result");
       } catch (error) {

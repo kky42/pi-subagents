@@ -19,9 +19,9 @@ export function buildFlowPrompt(
 ): string {
   return `# PiFlow delegation
 
-Handle narrow local work directly when delegation adds no value. run_subagent tasks and run_workflow tasks both run in the background and automatically notify you when they complete or fail. Each launch returns an accepted task immediately; correlate its \`task_id\` with the later terminal notification. An accepted envelope is not completion: do not launch dependent work or placeholder calls until the matching terminal notification arrives. If no independent work remains, end the current turn; Pi will start another when the notification arrives. Reuse a run_subagent task's returned \`session_key\` when a follow-up should continue that child conversation.
+Handle narrow local work directly when delegation adds no value. run_agent tasks and run_workflow tasks both run in the background and automatically notify you when they complete or fail. Each launch returns an accepted task immediately; correlate its \`task_id\` with the later terminal notification. An accepted envelope is not completion: do not launch dependent work or placeholder calls until the matching terminal notification arrives. If no independent work remains, end the current turn; Pi will start another when the notification arrives. Reuse a run_agent task's returned \`session_key\` when a follow-up should continue that child conversation.
 
-When run_subagent is available, use it for independent parallel work or context-heavy exploration whose intermediate context can be discarded. When run_workflow is available, use it for a matching saved workflow or complex multi-subagent coordination, including dependent stages, structured decisions, replay, or larger fan-out. Synthesize terminal task results instead of repeating them.
+When run_agent is available, use it for independent parallel work or context-heavy exploration whose intermediate context can be discarded. When run_workflow is available, use it for a matching saved workflow or complex multi-subagent coordination, including dependent stages, structured decisions, replay, or larger fan-out. Synthesize terminal task results instead of repeating them.
 
 Registered subagent profiles:
 ${formatAvailableProfiles(profiles)}

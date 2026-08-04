@@ -51,9 +51,9 @@ describe("pi-subagent tool contract", () => {
     return rootContext?.systemPrompt ?? "";
   }
 
-  it("registers the run_subagent API shape without duplicate prompt guidelines", async () => {
+  it("registers the run_agent API shape without duplicate prompt guidelines", async () => {
     const { session } = await createSession();
-    const tool = session.getAllTools().find((candidate) => candidate.name === "run_subagent");
+    const tool = session.getAllTools().find((candidate) => candidate.name === "run_agent");
     const schema = tool?.parameters as {
       required?: string[];
       additionalProperties?: boolean;
@@ -126,10 +126,10 @@ describe("pi-subagent tool contract", () => {
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(
       join(agentDir, "workflows", "review.js"),
-      `export const meta = { name: 'review_flow', description: 'Review source and tests.' };\nreturn await run_subagent('${workflowBodySentinel}');`,
+      `export const meta = { name: 'review_flow', description: 'Review source and tests.' };\nreturn await run_agent('${workflowBodySentinel}');`,
     );
 
-    const prompt = await captureRootPrompt(["run_subagent", "run_workflow"]);
+    const prompt = await captureRootPrompt(["run_agent", "run_workflow"]);
     const profiles = getSubagentProfiles(agentDir);
 
     expect(occurrenceCount(prompt, "- reviewer: Reviews source changes.")).toBe(1);
@@ -143,19 +143,19 @@ describe("pi-subagent tool contract", () => {
 
   it("uses availability-qualified routing in the same PiFlow prompt regardless of the active tool subset", async () => {
     const expectedFlowPrompt = buildFlowPrompt(getSubagentProfiles(agentDir), []);
-    expect(expectedFlowPrompt).toContain("When run_subagent is available");
+    expect(expectedFlowPrompt).toContain("When run_agent is available");
     expect(expectedFlowPrompt).toContain("When run_workflow is available");
-    for (const activeTools of [["run_subagent", "run_workflow"], ["run_subagent"], ["run_workflow"], []]) {
+    for (const activeTools of [["run_agent", "run_workflow"], ["run_agent"], ["run_workflow"], []]) {
       const prompt = await captureRootPrompt(activeTools);
       expect(prompt.endsWith(expectedFlowPrompt)).toBe(true);
     }
   });
 
   it("uses Pi active-tool snippets for canonical tool discovery", async () => {
-    const subagentEntry = "- run_subagent:";
+    const subagentEntry = "- run_agent:";
     const workflowEntry = "- run_workflow:";
-    const both = await captureRootPrompt(["run_subagent", "run_workflow"]);
-    const subagentOnly = await captureRootPrompt(["run_subagent"]);
+    const both = await captureRootPrompt(["run_agent", "run_workflow"]);
+    const subagentOnly = await captureRootPrompt(["run_agent"]);
     const workflowOnly = await captureRootPrompt(["run_workflow"]);
     const neither = await captureRootPrompt([]);
 
@@ -187,7 +187,7 @@ describe("pi-subagent tool contract", () => {
       const description = index === 25 ? longDescription : `Description ${index}`;
       writeFileSync(
         join(workflowsDir, `${name}.js`),
-        `export const meta = { name: '${name}', description: '${description}' };\nreturn await run_subagent('run');`,
+        `export const meta = { name: '${name}', description: '${description}' };\nreturn await run_agent('run');`,
       );
     }
 
@@ -200,7 +200,7 @@ describe("pi-subagent tool contract", () => {
     expect(prompt).toContain(longDescription);
   });
 
-  it("registers run_subagent when loaded through additionalExtensionPaths", async () => {
+  it("registers run_agent when loaded through additionalExtensionPaths", async () => {
     const faux = fauxProvider({
       models: [{ id: "faux-thinker", name: "Faux Thinker", reasoning: true }],
     });
@@ -241,7 +241,7 @@ describe("pi-subagent tool contract", () => {
     trackSession(session);
     await session.bindExtensions({});
 
-    const tool = session.getAllTools().find((candidate) => candidate.name === "run_subagent");
+    const tool = session.getAllTools().find((candidate) => candidate.name === "run_agent");
     expect(tool).toBeDefined();
     expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty("profile");
     expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty("session_key");

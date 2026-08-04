@@ -131,7 +131,7 @@ describe("headless workflow", () => {
   it("resolves separate default provider/model settings", async () => {
     await executeWorkflow({
       cwd: process.cwd(),
-      script: `export const meta = { name: "model", description: "test" };\nreturn await run_subagent("inspect", { profile: "pi-reviewer" });`,
+      script: `export const meta = { name: "model", description: "test" };\nreturn await run_agent("inspect", { profile: "pi-reviewer" });`,
     });
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ model: { provider: "configured", id: "model-a" } }));
   });
@@ -140,14 +140,14 @@ describe("headless workflow", () => {
     sdkState.provider = "missing";
     await executeWorkflow({
       cwd: process.cwd(),
-      script: `export const meta = { name: "fallback", description: "test" };\nreturn await run_subagent("inspect", { profile: "pi-reviewer" });`,
+      script: `export const meta = { name: "fallback", description: "test" };\nreturn await run_agent("inspect", { profile: "pi-reviewer" });`,
     });
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ model: { provider: "fallback", id: "model-b" } }));
   });
 
   it("distinguishes caller abort from workflow timeout", async () => {
     spawn.mockImplementation(async ({ signal }) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true })));
-    const script = `export const meta = { name: "abort", description: "test" };\nreturn await run_subagent("inspect", { profile: "reviewer" });`;
+    const script = `export const meta = { name: "abort", description: "test" };\nreturn await run_agent("inspect", { profile: "reviewer" });`;
     const controller = new AbortController();
     const aborted = executeWorkflow({ cwd: process.cwd(), script, signal: controller.signal });
     setTimeout(() => controller.abort(), 5);
@@ -166,7 +166,7 @@ describe("headless workflow", () => {
     });
     const result = await executeWorkflow({
       cwd: process.cwd(),
-      script: `export const meta = { name: "cache", description: "test" };\nreturn await parallel([() => run_subagent("a", { label: "one", profile: "reviewer" }), () => run_subagent("b", { label: "two", profile: "reviewer" })]);`,
+      script: `export const meta = { name: "cache", description: "test" };\nreturn await parallel([() => run_agent("a", { label: "one", profile: "reviewer" }), () => run_agent("b", { label: "two", profile: "reviewer" })]);`,
     });
     expect(result.usage).toMatchObject({ input: 150, cacheRead: 50, totalTokens: 202 });
   });
@@ -175,7 +175,7 @@ describe("headless workflow", () => {
     const usage: unknown[] = [];
     const result = await executeWorkflow({
       cwd: process.cwd(), allowedBackends: ["codex"], onUsage: (value) => usage.push(value),
-      script: `export const meta = { name: "headless", description: "test" };\nreturn await run_subagent("inspect", { profile: "reviewer" });`,
+      script: `export const meta = { name: "headless", description: "test" };\nreturn await run_agent("inspect", { profile: "reviewer" });`,
     });
     expect(result.result).toBe("ok");
     expect(result.usage).toMatchObject({ input: 2, output: 3, totalTokens: 5, childSubagents: 1 });

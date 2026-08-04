@@ -12,7 +12,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { normalizeSubagentLabel, normalizeProfileName } from "./core/subagent-values.ts";
 import { ConcurrencyLimiter } from "./core/concurrency.ts";
-import { getBackendSubagentLabel } from "./core/display.ts";
+import { getBackendAgentLabel } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import {
   assertBindingMatchesProfile,
@@ -37,7 +37,7 @@ import {
   TASK_NOTIFICATION_CUSTOM_TYPE,
   TASK_STATE_EVENT,
   taskToolResult,
-  type SubagentAcceptedTaskEnvelope,
+  type AgentAcceptedTaskEnvelope,
   type TerminalTaskEnvelope,
 } from "./core/task-manager.ts";
 import { buildFlowPrompt } from "./prompts.ts";
@@ -58,9 +58,9 @@ const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 12;
 const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
-const RUN_SUBAGENT_PROMPT_SNIPPET = "Run one focused background subagent task";
+const RUN_AGENT_PROMPT_SNIPPET = "Run one focused background agent task";
 
-const runSubagentToolParameters = Type.Object({
+const runAgentToolParameters = Type.Object({
   label: Type.String({
     minLength: 1,
     description: "Short non-empty task label, ideally 3-5 words; not sent as the child task.",
@@ -78,7 +78,7 @@ const runSubagentToolParameters = Type.Object({
   session_key: Type.Optional(
     Type.String({
       description:
-        "Optional subagent conversation key. Reuse a session_key returned by an earlier run_subagent call to continue that child conversation. Omit to start a new conversation; the effective session_key is returned.",
+        "Optional subagent conversation key. Reuse a session_key returned by an earlier run_agent call to continue that child conversation. Omit to start a new conversation; the effective session_key is returned.",
     }),
   ),
 }, { additionalProperties: false });
@@ -91,7 +91,7 @@ interface DelegationState {
   sessionKeyLocks: SessionKeyLocks;
 }
 
-interface CreateRunSubagentToolOptions {
+interface CreateRunAgentToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
@@ -171,25 +171,25 @@ function getProfileBackend(profileName: SubagentProfileName): SubagentBackend | 
 }
 
 function renderTaskNotification(envelope: TerminalTaskEnvelope, expanded: boolean, theme: Theme): Text {
-  const taskTypeLabel = envelope.task_type === "subagent" ? "Subagent" : "Workflow";
-  const taskLabel = envelope.task_type === "subagent" ? envelope.label : envelope.name;
+  const taskTypeLabel = envelope.task_type === "agent" ? "Agent" : "Workflow";
+  const taskLabel = envelope.task_type === "agent" ? envelope.label : envelope.name;
   const color = envelope.status === "completed" ? "success" : "error";
   const summary = `${theme.fg(color, envelope.status === "completed" ? "✓" : "✗")} ${theme.bold(taskTypeLabel)} ${theme.fg("muted", taskLabel)} ${theme.fg("dim", envelope.task_id)}`;
   const text = expanded || envelope.status === "failed" ? `${summary}\n${envelope.content}` : summary;
   return new Text(text, 0, 0);
 }
 
-function createRunSubagentTool(
+function createRunAgentTool(
   getState: () => DelegationState,
-  options: CreateRunSubagentToolOptions,
-): ToolDefinition<typeof runSubagentToolParameters, SubagentAcceptedTaskEnvelope> {
+  options: CreateRunAgentToolOptions,
+): ToolDefinition<typeof runAgentToolParameters, AgentAcceptedTaskEnvelope> {
   return defineTool({
-    name: "run_subagent",
-    label: "Run Subagent",
+    name: "run_agent",
+    label: "Run Agent",
     description:
-      "Run one background subagent task in the current working directory and return its task ID immediately. The task sends one completion or failure notification later. Calls without `session_key` start a new resumable conversation and return its generated key. Calls with the same key continue that child and are serialized. Subagent concurrency is bounded and queued. Pi-backed children cannot invoke PiFlow delegation tools. External-backend profiles use their CLI permission surface and should run only in trusted repositories.",
-    promptSnippet: RUN_SUBAGENT_PROMPT_SNIPPET,
-    parameters: runSubagentToolParameters,
+      "Run one background agent task in the current working directory and return its task ID immediately. The task sends one completion or failure notification later. Calls without `session_key` start a new resumable conversation and return its generated key. Calls with the same key continue that child and are serialized. Agent concurrency is bounded and queued. Pi-backed children cannot invoke PiFlow delegation tools. External-backend profiles use their CLI permission surface and should run only in trusted repositories.",
+    promptSnippet: RUN_AGENT_PROMPT_SNIPPET,
+    parameters: runAgentToolParameters,
     executionMode: "parallel",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const state = getState();
@@ -197,10 +197,10 @@ function createRunSubagentTool(
       const sessionKey = normalizeSessionKey(params.session_key) ?? createSessionKey();
       const label = normalizeSubagentLabel(params.label);
       if (!label) {
-        throw new Error("Subagent label must contain non-whitespace characters");
+        throw new Error("Agent label must contain non-whitespace characters");
       }
       const accepted = options.getTaskManager().start({
-        taskType: "subagent",
+        taskType: "agent",
         label,
         sessionKey,
         run: async (signal, taskId) => {
@@ -291,15 +291,15 @@ function createRunSubagentTool(
       const backend = getProfileBackend(profile);
       const label = normalizeSubagentLabel(args.label) ?? "";
       return new Text(
-        `${theme.bold(getBackendSubagentLabel(backend))} ${theme.fg("muted", profile)}${label ? ` ${theme.fg("dim", label)}` : ""}`,
+        `${theme.bold(getBackendAgentLabel(backend))} ${theme.fg("muted", profile)}${label ? ` ${theme.fg("dim", label)}` : ""}`,
         0,
         0,
       );
     },
     renderResult(result, _options, theme) {
-      const details = result.details as SubagentAcceptedTaskEnvelope;
+      const details = result.details as AgentAcceptedTaskEnvelope;
       return new Text(
-        `${theme.bold("Subagent")} ${theme.fg("muted", details.label)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
+        `${theme.bold("Agent")} ${theme.fg("muted", details.label)} ${theme.fg("dim", `accepted ${details.task_id}`)}`,
         0,
         0,
       );
@@ -476,7 +476,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       const envelope = message.details as TerminalTaskEnvelope;
       return renderTaskNotification(envelope, expanded, theme);
     });
-    pi.registerTool(createRunSubagentTool(syncRuntimeOptions, {
+    pi.registerTool(createRunAgentTool(syncRuntimeOptions, {
       getTaskManager,
       getThinkingLevel: () => pi.getThinkingLevel(),
       getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,

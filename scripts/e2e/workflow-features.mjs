@@ -115,7 +115,7 @@ phase("collect");
 const targets = args.files;
 const analyzed = await parallel(targets.map(function (f) {
   return function () {
-    return run_subagent("Read the file " + f + " in this repository and analyze it. Report the file path and the number of exported symbols.", {
+    return run_agent("Read the file " + f + " in this repository and analyze it. Report the file path and the number of exported symbols.", {
       label: "analyze:" + f,
       phase: "collect",
       schema: { type: "object", additionalProperties: false, required: ["file", "exportCount"], properties: { file: { type: "string" }, exportCount: { type: "number" } } }
@@ -125,7 +125,7 @@ const analyzed = await parallel(targets.map(function (f) {
 phase("refine");
 const refined = await pipeline(analyzed,
   function (a, original, i) {
-    return run_subagent("In one short sentence, describe what the file " + (a && a.file) + " does. Plain text only, no preamble.", { label: "describe:" + i, phase: "refine" });
+    return run_agent("In one short sentence, describe what the file " + (a && a.file) + " does. Plain text only, no preamble.", { label: "describe:" + i, phase: "refine" });
   },
   function (sentence, original) {
     return { file: original.file, exportCount: original.exportCount, sentence: String(sentence).trim() };
@@ -138,18 +138,18 @@ const KITCHEN_SINK_ARGS = { repo: "widget-cli", files: ["src/report.js", "src/st
 const CONCURRENCY_PROBE = `export const meta = { name: "concurrency_probe", description: "Run more subagents than the shared concurrency cap to verify queue-and-drain." };
 const out = await parallel([0, 1, 2, 3].map(function (n) {
   return function () {
-    return run_subagent("Reply with exactly this text and nothing else: token-" + n, { label: "slot:" + n });
+    return run_agent("Reply with exactly this text and nothing else: token-" + n, { label: "slot:" + n });
   };
 }));
 return { count: out.filter(function (x) { return x !== null; }).length, tokens: out };`;
 
 const NONDET_PROBE = `export const meta = { name: "nondet_probe", description: "Intentionally nondeterministic; must be rejected before any subagent runs." };
 const stamp = Date.now();
-const reply = await run_subagent("say hi", { label: "greet" });
+const reply = await run_agent("say hi", { label: "greet" });
 return { stamp: stamp, reply: reply };`;
 
 const SAVED_WORKFLOW = `export const meta = { name: "zz_e2e_saved_probe", description: "E2E saved-workflow probe: greet via one subagent and echo a token." };
-const reply = await run_subagent("Reply with exactly this text and nothing else: saved-workflow-ok", { label: "greet" });
+const reply = await run_agent("Reply with exactly this text and nothing else: saved-workflow-ok", { label: "greet" });
 return { reply: String(reply).trim() };`;
 
 const SAVED_WORKFLOW_NAME = "zz_e2e_saved_probe";
@@ -163,7 +163,7 @@ const BRANCH_PROBE = `export const meta = { name: "branch_probe", description: "
 const files = args.files;
 const flags = await parallel(files.map(function (f) {
   return function () {
-    return run_subagent("Does the file " + f + " import the 'kleur' package? Answer strictly from its source.", {
+    return run_agent("Does the file " + f + " import the 'kleur' package? Answer strictly from its source.", {
       label: "flag:" + f,
       schema: { type: "object", additionalProperties: false, required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
     });
@@ -172,7 +172,7 @@ const flags = await parallel(files.map(function (f) {
 const deepDived = [];
 for (const r of flags) {
   if (r && r.importsKleur === true) {
-    const note = await run_subagent("In one short sentence, say what " + r.file + " uses kleur for. Plain text only.", { label: "deep:" + r.file });
+    const note = await run_agent("In one short sentence, say what " + r.file + " uses kleur for. Plain text only.", { label: "deep:" + r.file });
     deepDived.push({ file: r.file, note: String(note).trim() });
   }
 }
@@ -182,7 +182,7 @@ const GATE_PROBE = `export const meta = { name: "gate_probe", description: "Filt
 const files = args.files;
 const flags = await parallel(files.map(function (f) {
   return function () {
-    return run_subagent("Does " + f + " import the 'kleur' package? Answer strictly from its source.", {
+    return run_agent("Does " + f + " import the 'kleur' package? Answer strictly from its source.", {
       label: "scan:" + f,
       schema: { type: "object", additionalProperties: false, required: ["file", "importsKleur"], properties: { file: { type: "string" }, importsKleur: { type: "boolean" } } }
     });
@@ -194,25 +194,25 @@ if (survivors.length === 0) {
   return { survivors: [], summarized: 0, earlyExit: true };
 }
 const summaries = await parallel(survivors.map(function (r) {
-  return function () { return run_subagent("One short sentence describing " + r.file + ". Plain text only.", { label: "sum:" + r.file }); };
+  return function () { return run_agent("One short sentence describing " + r.file + ". Plain text only.", { label: "sum:" + r.file }); };
 }));
 return { survivors: survivors.map(function (r) { return r.file; }), summarized: summaries.filter(Boolean).length, earlyExit: false };`;
 
 const ROUTE_PROBE = `export const meta = { name: "route_probe", description: "Classify a file into an enum, then dispatch to a kind-specific follow-up." };
 const target = args.file;
-const c = await run_subagent("Classify " + target + " as exactly one of: entry (a CLI entry point, e.g. reads process.argv or is declared as a bin), lib (an imported helper module), or test (a test file). Judge strictly from its source and role.", {
+const c = await run_agent("Classify " + target + " as exactly one of: entry (a CLI entry point, e.g. reads process.argv or is declared as a bin), lib (an imported helper module), or test (a test file). Judge strictly from its source and role.", {
   label: "classify",
   schema: { type: "object", additionalProperties: false, required: ["kind"], properties: { kind: { type: "string", enum: ["entry", "lib", "test"] } } }
 });
 let follow;
-if (c && c.kind === "entry") follow = await run_subagent("List the command-line argument(s) " + target + " reads. Plain text only.", { label: "route:entry" });
-else if (c && c.kind === "lib") follow = await run_subagent("Name the function(s) " + target + " exports. Plain text only.", { label: "route:lib" });
-else follow = await run_subagent("Name the test runner " + target + " uses. Plain text only.", { label: "route:test" });
+if (c && c.kind === "entry") follow = await run_agent("List the command-line argument(s) " + target + " reads. Plain text only.", { label: "route:entry" });
+else if (c && c.kind === "lib") follow = await run_agent("Name the function(s) " + target + " exports. Plain text only.", { label: "route:lib" });
+else follow = await run_agent("Name the test runner " + target + " uses. Plain text only.", { label: "route:test" });
 return { kind: c && c.kind, follow: String(follow).trim() };`;
 
 // Discoverability: a natural-language task that REQUIRES branching on a typed
 // per-file boolean, with NO mention of schema/structured_output. If the model
-// reaches for run_subagent({ schema }) on its own, the per-file scan subagents return
+// reaches for run_agent({ schema }) on its own, the per-file scan subagents return
 // objects in the journal; if it hand-parses text, they return strings.
 const DISCOVERABILITY_PROMPT = [
   "Use the run_workflow tool to orchestrate this. For each source file in src/ (src/cli.js, src/report.js, src/store.js),",
@@ -359,7 +359,7 @@ function analyzeSession(sessionDir) {
       const envelope = parseEnvelope(m.details) ?? parseEnvelope(m.content?.[0]?.text);
       if (envelope?.task_type === "workflow" && envelope.status === "accepted") accepted.push(envelope);
     }
-    if (m?.role === "custom" && m.customType === "pi-flow-task-notification-v2") {
+    if (m?.role === "custom" && m.customType === "pi-flow-task-notification") {
       const envelope = parseEnvelope(m.details) ?? parseEnvelope(m.content);
       if (envelope?.task_type === "workflow") notifications.push(envelope);
     }
@@ -794,7 +794,7 @@ async function scenarioRoute(ctx) {
 }
 
 // Discoverability: natural language, NO schema hint. Detects whether the model
-// reached for run_subagent({ schema }) by checking if per-file decisions came back as
+// reached for run_agent({ schema }) by checking if per-file decisions came back as
 // structured objects (vs hand-parsed text) in the journal. Soft by design.
 async function scenarioDiscoverability(ctx) {
   const s = makeScenario("schema discoverability from natural language (no hint)");
@@ -817,7 +817,7 @@ async function scenarioDiscoverability(ctx) {
   const subagentResults = wf.journal?.subagentResults ?? [];
   const usedSchema = subagentResults.some((r) => r.result && typeof r.result === "object" && !Array.isArray(r.result));
   s.soft(
-    "model reached for run_subagent({ schema }) on its own (structured result objects in journal)",
+    "model reached for run_agent({ schema }) on its own (structured result objects in journal)",
     usedSchema,
     JSON.stringify(subagentResults.map((r) => ({ label: r.label, resultType: Array.isArray(r.result) ? "array" : typeof r.result }))),
   );

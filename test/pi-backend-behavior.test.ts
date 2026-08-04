@@ -88,18 +88,18 @@ Custom Code Searcher Role`);
 
     expect(childContext?.systemPrompt).toContain("Project append marker.");
     expect(childContext?.systemPrompt).not.toContain("# PiFlow delegation");
-    expect(getToolNames(childContext)).not.toContain("run_subagent");
+    expect(getToolNames(childContext)).not.toContain("run_agent");
     expect(getToolNames(childContext)).not.toContain("run_workflow");
     disposeSession(session);
   });
 
-  it("generates a session key and resumes it on a later run_subagent call", async () => {
+  it("generates a session key and resumes it on a later run_agent call", async () => {
     const { session, registration, model, modelRegistry, sessionManager } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, sessionManager });
     let secondContext: Context | undefined;
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_subagent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
       const serialized = JSON.stringify(providerContext.messages);
       if (serialized.includes("Second prompt.")) {
         secondContext = providerContext;
@@ -134,10 +134,10 @@ Custom Code Searcher Role`);
 
   it("fails continuation when the persisted child session is missing", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) =>
-      fauxAssistantMessage(getToolNames(providerContext).includes("run_subagent") ? "notification observed" : "first done"));
+      fauxAssistantMessage(getToolNames(providerContext).includes("run_agent") ? "notification observed" : "first done"));
 
     const first = await tool.execute(
       "first",
@@ -183,10 +183,10 @@ Custom Code Searcher Role`);
     mkdirSync(join(agentDir, "subagents"), { recursive: true });
     writeFileSync(join(agentDir, "subagents", "reviewer.md"), "---\ndescription: Reviewer.\n---\nReviewer role.");
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) =>
-      fauxAssistantMessage(getToolNames(providerContext).includes("run_subagent") ? "notification observed" : "first done"));
+      fauxAssistantMessage(getToolNames(providerContext).includes("run_agent") ? "notification observed" : "first done"));
 
     const first = await tool.execute(
       "first",
@@ -213,7 +213,7 @@ Custom Code Searcher Role`);
   it("reports unknown profiles only in the terminal notification", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     setContextRoutingResponses(registration, () => fauxAssistantMessage("notification observed"));
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const accepted = await tool.execute(
       "unknown",
       { label: "Unknown", prompt: "Search.", profile: "explorer" },
@@ -231,11 +231,11 @@ Custom Code Searcher Role`);
 
   it("fresh generated keys do not leak one child conversation into another", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     let secondContext: Context | undefined;
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_subagent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
       if (JSON.stringify(providerContext.messages).includes("Second task.")) {
         secondContext = providerContext;
         return fauxAssistantMessage("second done");

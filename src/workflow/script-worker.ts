@@ -148,7 +148,7 @@ function phase(title) {
 function requestSubagent(prompt, options) {
   throwIfFatal();
   if (startedSubagentCount >= workerData.maxSubagentCalls) {
-    markFatal("maximum workflow subagent calls exceeded (" + workerData.maxSubagentCalls + ")");
+    markFatal("maximum workflow run_agent calls exceeded (" + workerData.maxSubagentCalls + ")");
     throwIfFatal();
   }
   startedSubagentCount++;
@@ -159,16 +159,16 @@ function requestSubagent(prompt, options) {
   });
 }
 
-function run_subagent(prompt, subagentOptions = {}) {
+function run_agent(prompt, subagentOptions = {}) {
   if (!acceptingSubagentCalls) {
-    throw new Error("run_subagent() cannot be called after the workflow body has returned");
+    throw new Error("run_agent() cannot be called after the workflow body has returned");
   }
   const observation = { observed: false, settled: false, promise: undefined };
   subagentObservations.push(observation);
   const start = () => {
     observation.observed = true;
     if (!acceptingSubagentCalls) {
-      return Promise.reject(new Error("run_subagent() cannot be called after the workflow body has returned"));
+      return Promise.reject(new Error("run_agent() cannot be called after the workflow body has returned"));
     }
     if (!observation.promise) {
       observation.promise = requestSubagent(prompt, subagentOptions).finally(() => {
@@ -191,7 +191,7 @@ async function parallel(thunks) {
     throw new TypeError("parallel() expects an array of functions");
   }
   if (thunks.some((thunk) => typeof thunk !== "function")) {
-    throw new TypeError("parallel() expects an array of functions, not promises. Wrap each call: () => run_subagent(...)");
+    throw new TypeError("parallel() expects an array of functions, not promises. Wrap each call: () => run_agent(...)");
   }
   const results = await Promise.all(
     thunks.map(async (thunk, index) => {
@@ -255,7 +255,7 @@ const safeMath = Object.freeze(Object.fromEntries(
 
 const context = vm.createContext(
   {
-    run_subagent,
+    run_agent,
     parallel,
     pipeline,
     log,
@@ -355,14 +355,14 @@ function isObjectPrototype(value) {
     acceptingSubagentCalls = false;
     throwIfFatal();
     if (subagentObservations.some((observation) => !observation.observed)) {
-      throw new Error("every run_subagent() call must be awaited or returned");
+      throw new Error("every run_agent() call must be awaited or returned");
     }
     const pending = subagentObservations
       .filter((observation) => observation.observed && !observation.settled && observation.promise)
       .map((observation) => observation.promise);
     if (pending.length > 0) {
       await Promise.allSettled(pending);
-      throw new Error("every started run_subagent() call must be awaited before the workflow returns");
+      throw new Error("every started run_agent() call must be awaited before the workflow returns");
     }
     throwIfFatal();
     const normalizedResult = normalizeJsonSerializable(result, "workflow result");

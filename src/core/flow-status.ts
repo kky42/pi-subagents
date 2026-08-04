@@ -6,7 +6,7 @@ import type {
   SubagentUsage,
 } from "../types.ts";
 import type { TaskCounts } from "./task-manager.ts";
-import { getBackendSubagentLabel } from "./display.ts";
+import { getBackendAgentLabel } from "./display.ts";
 import {
   formatDuration,
   formatUsage,
@@ -71,7 +71,7 @@ export function createFlowStatusState(): FlowStatusState {
     activeSubagents: new Map(),
     activeWorkflows: new Map(),
     tasks: {
-      subagent: { finished: 0, total: 0 },
+      agent: { finished: 0, total: 0 },
       workflow: { finished: 0, total: 0 },
     },
   };
@@ -159,7 +159,7 @@ function activeSubagentLine(state: FlowStatusState, subagent: ActiveSubagentStat
     return {
       kind: "subagent",
       sortAt: subagent.queuedAt,
-      text: `◌ ${getBackendSubagentLabel(subagent.backend)}(${descriptor}) queued`,
+      text: `◌ ${getBackendAgentLabel(subagent.backend)}(${descriptor}) queued`,
     };
   }
   const call = state.calls.get(subagent.id);
@@ -168,7 +168,7 @@ function activeSubagentLine(state: FlowStatusState, subagent: ActiveSubagentStat
   return {
     kind: "subagent",
     sortAt: subagent.queuedAt,
-    text: `${spinner(now)} ${getBackendSubagentLabel(subagent.backend)}(${descriptor}) ${formatDuration(now - subagent.startedAt)} · ${events}${usage}`,
+    text: `${spinner(now)} ${getBackendAgentLabel(subagent.backend)}(${descriptor}) ${formatDuration(now - subagent.startedAt)} · ${events}${usage}`,
   };
 }
 
@@ -204,9 +204,9 @@ function selectDetailLines(lines: DetailLine[]): DetailLine[] {
 
 export function buildFlowStatusLines(state: FlowStatusState, now = Date.now()): string[] {
   const totals = getUsageTotals(state);
-  const activeSubagentCount = Math.max(0, state.tasks.subagent.total - state.tasks.subagent.finished);
+  const activeSubagentCount = Math.max(0, state.tasks.agent.total - state.tasks.agent.finished);
   const activeWorkflowCount = Math.max(0, state.tasks.workflow.total - state.tasks.workflow.finished);
-  const totalTasks = state.tasks.subagent.total + state.tasks.workflow.total;
+  const totalTasks = state.tasks.agent.total + state.tasks.workflow.total;
 
   if (totalTasks === 0 && !hasUsage(totals.usage)) {
     return [];
@@ -214,11 +214,11 @@ export function buildFlowStatusLines(state: FlowStatusState, now = Date.now()): 
 
   if (activeSubagentCount === 0 && activeWorkflowCount === 0) {
     return [
-      `pi-flow idle · ${countLabel(state.tasks.subagent.finished, "subagent")} and ${countLabel(state.tasks.workflow.finished, "workflow")} done${usageSuffix(totals.usage, totals.telemetry)}`,
+      `pi-flow idle · ${countLabel(state.tasks.agent.finished, "agent")} and ${countLabel(state.tasks.workflow.finished, "workflow")} done${usageSuffix(totals.usage, totals.telemetry)}`,
     ];
   }
 
-  const summary = `pi-flow ${countLabel(activeSubagentCount, "subagent")} and ${countLabel(activeWorkflowCount, "workflow")} active${usageSuffix(totals.usage, totals.telemetry)}`;
+  const summary = `pi-flow ${countLabel(activeSubagentCount, "agent")} and ${countLabel(activeWorkflowCount, "workflow")} active${usageSuffix(totals.usage, totals.telemetry)}`;
   const detailCandidates = [
     ...[...state.activeSubagents.values()].map((subagent) => activeSubagentLine(state, subagent, now)),
     ...[...state.activeWorkflows.values()].map((workflow) => activeWorkflowLine(state, workflow, now)),
@@ -230,7 +230,7 @@ export function buildFlowStatusLines(state: FlowStatusState, now = Date.now()): 
   const hiddenWorkflows = Math.max(0, activeWorkflowCount - shownWorkflows);
   const hidden: string[] = [];
   if (hiddenSubagents > 0) {
-    hidden.push(`${hiddenSubagents} more ${hiddenSubagents === 1 ? "subagent" : "subagents"}`);
+    hidden.push(`${hiddenSubagents} more ${hiddenSubagents === 1 ? "agent" : "agents"}`);
   }
   if (hiddenWorkflows > 0) {
     hidden.push(`${hiddenWorkflows} more ${hiddenWorkflows === 1 ? "workflow" : "workflows"}`);

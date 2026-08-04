@@ -18,11 +18,11 @@ Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI*
 
 ## One coordinator, asynchronous specialists
 
-`run_subagent` and `run_workflow` run as background tasks. Pi receives an `accepted` result immediately, continues independent work, then receives one correlated `completed` or `failed` notification. `accepted` means launched, not finished, and there is nothing to poll.
+`run_agent` and `run_workflow` run as background tasks. Pi receives an `accepted` result immediately, continues independent work, then receives one correlated `completed` or `failed` notification. `accepted` means launched, not finished, and there is nothing to poll.
 
 | Primitive | Use it for |
 | --- | --- |
-| **`run_subagent`** | One focused, resumable specialist or several independent specialists in parallel. |
+| **`run_agent`** | One focused, resumable specialist or several independent specialists in parallel. |
 | **`run_workflow`** | Parallel or staged subagents, branching, structured results, saved orchestration, and replay. |
 
 Every subagent runs through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
@@ -88,13 +88,13 @@ Inspect the UI and recommend specific improvements.
 
 ## Extension coordination events
 
-PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when a subagent or workflow task is accepted and immediately before its terminal notification:
+PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an agent or workflow task is accepted and immediately before its terminal notification:
 
 ```ts
 {
-  version: 2,
+  version: 1,
   task_id: string,
-  task_type: "subagent" | "workflow",
+  task_type: "agent" | "workflow",
   status: "accepted" | "completed" | "failed"
 }
 ```

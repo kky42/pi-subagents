@@ -52,10 +52,10 @@ function renderToText(component: { render: (width: number) => string[] }): strin
 
 describe("parseWorkflowScript", () => {
   it("extracts meta and strips the export from the body", () => {
-    const { meta, body } = parseWorkflowScript(`${META}return await run_subagent('hi');`);
+    const { meta, body } = parseWorkflowScript(`${META}return await run_agent('hi');`);
     expect(meta).toMatchObject({ name: "wf", description: "a workflow" });
     expect(body).not.toContain("export const meta");
-    expect(body).toContain("run_subagent('hi')");
+    expect(body).toContain("run_agent('hi')");
   });
 
   it("requires the meta export as the first statement", () => {
@@ -78,11 +78,11 @@ describe("parseWorkflowScript", () => {
   });
 
   it("allows deterministic Math aliases", () => {
-    expect(() => parseWorkflowScript(`${META}const M = Math; const x = M.max(1, 2); return await run_subagent(String(x));`)).not.toThrow();
+    expect(() => parseWorkflowScript(`${META}const M = Math; const x = M.max(1, 2); return await run_agent(String(x));`)).not.toThrow();
   });
 
   it("allows Date as a deterministic data field name", () => {
-    expect(() => parseWorkflowScript(`${META}const schema = { type: 'object', additionalProperties: false, required: ['Date'], properties: { Date: { type: 'string' } } };\nreturn await run_subagent('x', { schema });`)).not.toThrow();
+    expect(() => parseWorkflowScript(`${META}const schema = { type: 'object', additionalProperties: false, required: ['Date'], properties: { Date: { type: 'string' } } };\nreturn await run_agent('x', { schema });`)).not.toThrow();
   });
 
   it("preflights static structured output schemas", () => {
@@ -90,39 +90,39 @@ describe("parseWorkflowScript", () => {
   type: 'object', additionalProperties: false, required: ['items'], properties: {
     items: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string' } } } }
   }
-};\nreturn await run_subagent('x', { schema });`;
+};\nreturn await run_agent('x', { schema });`;
     expect(() => parseWorkflowScript(valid)).not.toThrow();
 
-    const missingAdditionalProperties = `${META}const schema = { type: 'object', required: ['name'], properties: { name: { type: 'string' } } };\nreturn await run_subagent('x', { schema });`;
+    const missingAdditionalProperties = `${META}const schema = { type: 'object', required: ['name'], properties: { name: { type: 'string' } } };\nreturn await run_agent('x', { schema });`;
     expect(() => parseWorkflowScript(missingAdditionalProperties)).toThrow(/preflight.*\$\.additionalProperties.*must be false/i);
 
-    const missingRequiredProperty = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string' }, note: { type: ['string', 'null'] } } } });`;
+    const missingRequiredProperty = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string' }, note: { type: ['string', 'null'] } } } });`;
     expect(() => parseWorkflowScript(missingRequiredProperty)).toThrow(/\$\.required.*missing: note/i);
 
-    const invalidNestedObject = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['item'], properties: { item: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } } });`;
+    const invalidNestedObject = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['item'], properties: { item: { type: 'object', required: ['name'], properties: { name: { type: 'string' } } } } } });`;
     expect(() => parseWorkflowScript(invalidNestedObject)).toThrow(/\$\.properties\.item\.additionalProperties.*must be false/i);
 
-    const dataNamedProperties = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['properties', 'metadata'], properties: { properties: { type: 'string' }, metadata: { type: 'object', additionalProperties: false, required: ['value'], properties: { value: { type: 'string', enum: [{ type: 'object' }] } } } } } });`;
+    const dataNamedProperties = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['properties', 'metadata'], properties: { properties: { type: 'string' }, metadata: { type: 'object', additionalProperties: false, required: ['value'], properties: { value: { type: 'string', enum: [{ type: 'object' }] } } } } } });`;
     expect(() => parseWorkflowScript(dataNamedProperties)).not.toThrow();
 
-    const invalidPropertySchema = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: 42 } } });`;
+    const invalidPropertySchema = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: 42 } } });`;
     expect(() => parseWorkflowScript(invalidPropertySchema)).toThrow(/properties\.answer.*schema object/i);
 
-    const invalidType = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: { type: 'wat' } } } });`;
+    const invalidType = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['answer'], properties: { answer: { type: 'wat' } } } });`;
     expect(() => parseWorkflowScript(invalidType)).toThrow(/properties\.answer\.type.*valid JSON Schema type/i);
 
-    const allOfAtRoot = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, allOf: [{ type: 'object' }] } });`;
+    const allOfAtRoot = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, allOf: [{ type: 'object' }] } });`;
     expect(() => parseWorkflowScript(allOfAtRoot)).toThrow(/\$\.allOf.*allOf is not supported/i);
 
-    const oneOfAtRoot = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, oneOf: [{ type: 'object', additionalProperties: false, required: [], properties: {} }] } });`;
+    const oneOfAtRoot = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['x'], properties: { x: { type: 'string' } }, oneOf: [{ type: 'object', additionalProperties: false, required: [], properties: {} }] } });`;
     expect(() => parseWorkflowScript(oneOfAtRoot)).toThrow(/\$\.oneOf.*oneOf is not supported/i);
 
-    const allOfNested = `${META}return await run_subagent('x', { schema: { type: 'object', additionalProperties: false, required: ['item'], properties: { item: { type: 'object', additionalProperties: false, required: ['val'], properties: { val: { type: 'string' } }, allOf: [] } } } });`;
+    const allOfNested = `${META}return await run_agent('x', { schema: { type: 'object', additionalProperties: false, required: ['item'], properties: { item: { type: 'object', additionalProperties: false, required: ['val'], properties: { val: { type: 'string' } }, allOf: [] } } } });`;
     expect(() => parseWorkflowScript(allOfNested)).toThrow(/\$\.properties\.item\.allOf.*allOf is not supported/i);
   });
 
   it("requires schemas to be statically available during preflight", () => {
-    expect(() => parseWorkflowScript(`${META}return await run_subagent('x', { schema: args.schema });`)).toThrow(/static object literal|top-level const/i);
+    expect(() => parseWorkflowScript(`${META}return await run_agent('x', { schema: args.schema });`)).toThrow(/static object literal|top-level const/i);
   });
 
   it("rejects non-literal meta", () => {
@@ -134,7 +134,7 @@ describe("runWorkflow", () => {
   const echo: WorkflowSubagentRunner = async (call) => call.prompt;
 
   it("runs a single agent and returns its result", async () => {
-    const result = await runWorkflow(`${META}return await run_subagent('hello', { label: 'greet' });`, {
+    const result = await runWorkflow(`${META}return await run_agent('hello', { label: 'greet' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
       runSubagent: echo,
@@ -177,8 +177,8 @@ describe("runWorkflow", () => {
       return {};
     };
     await expect(
-      runWorkflow(`${META}await run_subagent('first');
-return await run_subagent('second', { schema: { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } } });`, {
+      runWorkflow(`${META}await run_agent('first');
+return await run_agent('second', { schema: { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } } });`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
         runSubagent,
@@ -194,7 +194,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       return {};
     };
     await expect(
-      runWorkflow(`${META}return await run_subagent('x', args.options);`, {
+      runWorkflow(`${META}return await run_agent('x', args.options);`, {
         args: {
           options: {
             schema: { type: "object", required: ["answer"], properties: { answer: { type: "string" } } },
@@ -215,7 +215,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
         limiter: new ConcurrencyLimiter(4),
         runSubagent: echo,
       }),
-    ).rejects.toThrow(/must call run_subagent/i);
+    ).rejects.toThrow(/must call run_agent/i);
   });
 
   it("allows idiomatic computed member access (obj[key], arr[i], { [k]: v })", async () => {
@@ -228,7 +228,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       `${META}const files = ['a', 'b'];\n` +
         `const out = {};\n` +
         `for (let i = 0; i < files.length; i++) {\n` +
-        `  const r = await run_subagent('x:' + files[i], { label: 'a' + i });\n` +
+        `  const r = await run_agent('x:' + files[i], { label: 'a' + i });\n` +
         `  out[files[i]] = r;\n` +
         `}\n` +
         `const dyn = { [files[0]]: out[files[0]] };\n` +
@@ -251,7 +251,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   it("waits for started but unawaited subagent calls before failing", async () => {
     let completed = false;
     await expect(
-      runWorkflow(`${META}run_subagent('slow', { label: 'late' }).then(() => log('late done'));\nreturn 'early';`, {
+      runWorkflow(`${META}run_agent('slow', { label: 'late' }).then(() => log('late done'));\nreturn 'early';`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
         runSubagent: async () => {
@@ -268,7 +268,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     const completed: string[] = [];
     await expect(
       runWorkflow(
-        `${META}run_subagent('a', { label: 'a' }).then(() => run_subagent('b', { label: 'b' }).then(() => log('b done'))).catch(() => {});\nreturn 'early';`,
+        `${META}run_agent('a', { label: 'a' }).then(() => run_agent('b', { label: 'b' }).then(() => log('b done'))).catch(() => {});\nreturn 'early';`,
         {
           cwd: "/tmp",
           limiter: new ConcurrencyLimiter(4),
@@ -290,7 +290,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       return call.label;
     };
     await runWorkflow(
-      `${META}await run_subagent('a', { label: ' one ', profile: ' custom-agent ' });\nawait run_subagent('b', { label: '   ', profile: '   ' });\nreturn null;`,
+      `${META}await run_agent('a', { label: ' one ', profile: ' custom-agent ' });\nawait run_agent('b', { label: '   ', profile: '   ' });\nreturn null;`,
       { cwd: "/tmp", limiter: new ConcurrencyLimiter(4), runSubagent },
     );
     expect(seen).toEqual([
@@ -306,7 +306,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       return call.label;
     };
     await runWorkflow(
-      `${META}await run_subagent('a', { label: 'worker-1', session_key: ' worker ' });\nawait run_subagent('b', { label: 'worker-2', session_key: '   ' });\nreturn null;`,
+      `${META}await run_agent('a', { label: 'worker-1', session_key: ' worker ' });\nawait run_agent('b', { label: 'worker-2', session_key: '   ' });\nreturn null;`,
       { cwd: "/tmp", limiter: new ConcurrencyLimiter(4), runSubagent },
     );
     expect(seen).toEqual(["worker", undefined]);
@@ -328,7 +328,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     };
 
     const run = runWorkflow(
-      `${META}return await parallel([\n  () => run_subagent('a', { label: 'a', session_key: 'shared' }),\n  () => run_subagent('b', { label: 'b', session_key: 'shared' }),\n  () => run_subagent('c', { label: 'c', session_key: 'other' }),\n]);`,
+      `${META}return await parallel([\n  () => run_agent('a', { label: 'a', session_key: 'shared' }),\n  () => run_agent('b', { label: 'b', session_key: 'shared' }),\n  () => run_agent('c', { label: 'c', session_key: 'other' }),\n]);`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(2),
@@ -344,7 +344,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   });
 
   it("exposes args to the script", async () => {
-    const result = await runWorkflow(`${META}return await run_subagent('use ' + args.topic, { label: 'x' });`, {
+    const result = await runWorkflow(`${META}return await run_agent('use ' + args.topic, { label: 'x' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(1),
       runSubagent: echo,
@@ -364,7 +364,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       return "done";
     };
     const result = await runWorkflow(
-      `${META}return await parallel([1, 2, 3, 4, 5].map((i) => () => run_subagent('t' + i, { label: 'a' + i })));`,
+      `${META}return await parallel([1, 2, 3, 4, 5].map((i) => () => run_agent('t' + i, { label: 'a' + i })));`,
       { cwd: "/tmp", limiter: new ConcurrencyLimiter(2), runSubagent },
     );
     const values = result.result as string[];
@@ -377,7 +377,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   it("pipelines each item through stages while items run concurrently", async () => {
     const upper: WorkflowSubagentRunner = async (call) => call.prompt.toUpperCase();
     const result = await runWorkflow(
-      `${META}return await pipeline(['a', 'b'], (item) => run_subagent(item, { label: 's1-' + item }), (prev, item) => run_subagent(prev + '-' + item, { label: 's2-' + item }));`,
+      `${META}return await pipeline(['a', 'b'], (item) => run_agent(item, { label: 's1-' + item }), (prev, item) => run_agent(prev + '-' + item, { label: 's2-' + item }));`,
       { cwd: "/tmp", limiter: new ConcurrencyLimiter(4), runSubagent: upper },
     );
     expect(result.result).toEqual(["A-A", "B-B"]);
@@ -386,7 +386,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   it("returns null and logs when an agent fails", async () => {
     const logs: string[] = [];
     const subagentResults: WorkflowSubagentResultEvent[] = [];
-    const result = await runWorkflow(`${META}return await run_subagent('x', { label: 'boom' });`, {
+    const result = await runWorkflow(`${META}return await run_agent('x', { label: 'boom' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
       runSubagent: async () => {
@@ -404,7 +404,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
 
   it("does not treat a successful null subagent result as a failed subagent", async () => {
     const ended: Array<{ result: unknown; failed?: boolean }> = [];
-    const result = await runWorkflow(`${META}return await run_subagent('x', { label: 'nullable' });`, {
+    const result = await runWorkflow(`${META}return await run_agent('x', { label: 'nullable' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
       runSubagent: async () => null,
@@ -423,9 +423,9 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     };
     const result = await runWorkflow(
       `${META}return await parallel([
-        () => run_subagent('1', { label: 'ok1' }),
-        () => run_subagent('2', { label: 'bad' }),
-        () => run_subagent('3', { label: 'ok2' }),
+        () => run_agent('1', { label: 'ok1' }),
+        () => run_agent('2', { label: 'bad' }),
+        () => run_agent('3', { label: 'ok2' }),
       ]);`,
       { cwd: "/tmp", limiter: new ConcurrencyLimiter(4), runSubagent },
     );
@@ -439,7 +439,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       return "late";
     };
     await expect(
-      runWorkflow(`${META}return await run_subagent('x', { label: 'a' });`, {
+      runWorkflow(`${META}return await run_agent('x', { label: 'a' });`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent,
@@ -452,7 +452,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     const queued: number[] = [];
     const ended: Array<{ index: number; failed?: boolean }> = [];
     const result = await runWorkflow(
-      `${META}return await parallel([() => run_subagent('ok', { label: 'ok' }), () => run_subagent('bad', { label: 'bad' })]);`,
+      `${META}return await parallel([() => run_agent('ok', { label: 'ok' }), () => run_agent('bad', { label: 'bad' })]);`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(2),
@@ -482,7 +482,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     const queued: number[] = [];
     const started: number[] = [];
     const ended: Array<{ index: number; failed?: boolean }> = [];
-    const run = runWorkflow(`${META}return await run_subagent('x', { label: 'queued' });`, {
+    const run = runWorkflow(`${META}return await run_agent('x', { label: 'queued' });`, {
       cwd: "/tmp",
       limiter,
       runSubagent: echo,
@@ -508,7 +508,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     const ended: Array<{ index: number; failed?: boolean }> = [];
 
     await expect(
-      runWorkflow(`${META}return await run_subagent('x', { label: 'running' });`, {
+      runWorkflow(`${META}return await run_agent('x', { label: 'running' });`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent: async () => {
@@ -532,7 +532,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     const ended: Array<{ index: number; failed?: boolean }> = [];
 
     await expect(
-      runWorkflow(`${META}return await parallel([() => run_subagent('first'), () => run_subagent('over-limit')]);`, {
+      runWorkflow(`${META}return await parallel([() => run_agent('first'), () => run_agent('over-limit')]);`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent: async (_call, signal) => {
@@ -549,7 +549,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
         onSubagentQueued: (event) => queued.push(event.index),
         onSubagentEnd: (event) => ended.push({ index: event.index, failed: event.failed }),
       }),
-    ).rejects.toThrow(/maximum workflow subagent calls exceeded/);
+    ).rejects.toThrow(/maximum workflow run_agent calls exceeded/);
 
     expect(queued).toEqual([1]);
     expect(ended).toEqual([{ index: 1, failed: true }]);
@@ -560,7 +560,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     const limiter = new ConcurrencyLimiter(1);
     let childSettled = false;
     await expect(
-      runWorkflow(`${META}return await run_subagent('x', { label: 'a' });`, {
+      runWorkflow(`${META}return await run_agent('x', { label: 'a' });`, {
         cwd: "/tmp",
         limiter,
         runSubagent: async () => {
@@ -581,7 +581,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   it("does not let scripts swallow abort and report success", async () => {
     const controller = new AbortController();
     await expect(
-      runWorkflow(`${META}try { await run_subagent('x', { label: 'a' }); } catch { return 'ignored abort'; }`, {
+      runWorkflow(`${META}try { await run_agent('x', { label: 'a' }); } catch { return 'ignored abort'; }`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent: async () => {
@@ -617,18 +617,18 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
 
   it("enforces a maximum number of workflow subagent calls", async () => {
     await expect(
-      runWorkflow(`${META}return await parallel([1, 2, 3].map((i) => () => run_subagent('x' + i, { label: 'a' + i })));`, {
+      runWorkflow(`${META}return await parallel([1, 2, 3].map((i) => () => run_agent('x' + i, { label: 'a' + i })));`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(2),
         runSubagent: echo,
         limits: { maxSubagentCalls: 2 },
       }),
-    ).rejects.toThrow(/maximum workflow subagent calls/i);
+    ).rejects.toThrow(/maximum workflow run_agent calls/i);
   });
 
   it("requires workflow limits to be positive integers", async () => {
     await expect(
-      runWorkflow(`${META}return await run_subagent('x');`, {
+      runWorkflow(`${META}return await run_agent('x');`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent: echo,
@@ -639,7 +639,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
 
   it("rejects workflow results that cannot be represented as JSON", async () => {
     await expect(
-      runWorkflow(`${META}await run_subagent('x', { label: 'a' });\nreturn 1n;`, {
+      runWorkflow(`${META}await run_agent('x', { label: 'a' });\nreturn 1n;`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent: echo,
@@ -649,7 +649,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
 
   it("rejects class instances in workflow results instead of flattening them", async () => {
     await expect(
-      runWorkflow(`${META}await run_subagent('x', { label: 'a' });\nclass Box { constructor() { this.value = 1; } }\nreturn new Box();`, {
+      runWorkflow(`${META}await run_agent('x', { label: 'a' });\nclass Box { constructor() { this.value = 1; } }\nreturn new Box();`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent: echo,
@@ -662,7 +662,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       value = 1;
     }
     const logs: string[] = [];
-    const result = await runWorkflow(`${META}return await run_subagent('x', { label: 'a' });`, {
+    const result = await runWorkflow(`${META}return await run_agent('x', { label: 'a' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(1),
       runSubagent: async () => new Box(),
@@ -674,7 +674,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   });
 
   it("normalizes JSON-like workflow results to canonical JSON", async () => {
-    const result = await runWorkflow(`${META}await run_subagent('x', { label: 'a' });\nreturn { ok: true, omitted: undefined, bad: NaN, list: [undefined, Infinity, 'x'] };`, {
+    const result = await runWorkflow(`${META}await run_agent('x', { label: 'a' });\nreturn { ok: true, omitted: undefined, bad: NaN, list: [undefined, Infinity, 'x'] };`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(1),
       runSubagent: echo,
@@ -684,7 +684,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
 
   it("requires every subagent call to be awaited or returned", async () => {
     await expect(
-      runWorkflow(`${META}return { pending: run_subagent('x', { label: 'a' }) };`, {
+      runWorkflow(`${META}return { pending: run_agent('x', { label: 'a' }) };`, {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(1),
         runSubagent: echo,
@@ -695,7 +695,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   it("logs agent-result hook failures without aborting sibling work", async () => {
     let completed = 0;
     const logs: string[] = [];
-    const result = await runWorkflow(`${META}return await parallel([\n() => run_subagent('fast', { label: 'fast' }),\n() => run_subagent('slow', { label: 'slow' })\n]);`, {
+    const result = await runWorkflow(`${META}return await parallel([\n() => run_agent('fast', { label: 'fast' }),\n() => run_agent('slow', { label: 'slow' })\n]);`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
       runSubagent: async (call) => {
@@ -718,7 +718,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
   it("reuses cached subagent results for the longest unchanged prefix on resume", async () => {
     const firstRunEvents: any[] = [];
     const firstRun = await runWorkflow(
-      `${META}const a = await run_subagent('first', { label: 'one' });\nconst b = await run_subagent('second', { label: 'two' });\nreturn [a, b];`,
+      `${META}const a = await run_agent('first', { label: 'one' });\nconst b = await run_agent('second', { label: 'two' });\nreturn [a, b];`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
@@ -735,7 +735,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
     const queued: number[] = [];
     const ended: Array<{ index: number; cached?: boolean }> = [];
     const secondRun = await runWorkflow(
-      `${META}const a = await run_subagent('first', { label: 'one' });\nconst b = await run_subagent('second changed', { label: 'two' });\nreturn [a, b];`,
+      `${META}const a = await run_agent('first', { label: 'one' });\nconst b = await run_agent('second changed', { label: 'two' });\nreturn [a, b];`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
@@ -764,7 +764,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
 
   it("does not replay cached failed subagent results on resume", async () => {
     const firstRunEvents: any[] = [];
-    const script = `${META}const a = await run_subagent('first', { label: 'one' });\nconst b = await run_subagent('second', { label: 'two' });\nreturn [a, b];`;
+    const script = `${META}const a = await run_agent('first', { label: 'one' });\nconst b = await run_agent('second', { label: 'two' });\nreturn [a, b];`;
     await runWorkflow(script, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
@@ -806,7 +806,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       return call.label;
     };
     await runWorkflow(
-      `${META}phase('scan');\nawait run_subagent('a', { label: 'ok' });\nawait run_subagent('b', { label: 'boom' });\nreturn null;`,
+      `${META}phase('scan');\nawait run_agent('a', { label: 'ok' });\nawait run_agent('b', { label: 'boom' });\nreturn null;`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
@@ -834,7 +834,7 @@ return await run_subagent('second', { schema: { type: 'object', required: ['answ
       return call.label;
     };
     await runWorkflow(
-      `${META}await parallel([\n() => run_subagent('ok', { label: 'dup' }),\n() => run_subagent('boom', { label: 'dup' }),\n]);\nreturn null;`,
+      `${META}await parallel([\n() => run_agent('ok', { label: 'dup' }),\n() => run_agent('boom', { label: 'dup' }),\n]);\nreturn null;`,
       {
         cwd: "/tmp",
         limiter: new ConcurrencyLimiter(4),
@@ -882,7 +882,7 @@ describe("saved workflow registry", () => {
   }
 
   function workflowScript(name: string, description = "saved workflow"): string {
-    return `export const meta = { name: '${name}', description: '${description}' };\nreturn await run_subagent('hello');`;
+    return `export const meta = { name: '${name}', description: '${description}' };\nreturn await run_agent('hello');`;
   }
 
   it("loads global saved workflows from the agent dir", () => {
@@ -1062,15 +1062,15 @@ describe("run_workflow tool registration", () => {
     };
   }
 
-  it("registers both run_subagent and run_workflow by default", () => {
+  it("registers both run_agent and run_workflow by default", () => {
     const names: string[] = [];
     createSubagentExtension()(fakeApi(names) as never);
-    expect(names).toEqual(["run_subagent", "run_workflow"]);
+    expect(names).toEqual(["run_agent", "run_workflow"]);
   });
 
   it("omits run_workflow when workflow is disabled", () => {
     const names: string[] = [];
     createSubagentExtension({ workflow: false })(fakeApi(names) as never);
-    expect(names).toEqual(["run_subagent"]);
+    expect(names).toEqual(["run_agent"]);
   });
 });

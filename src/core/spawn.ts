@@ -28,7 +28,7 @@ import { createChildModelRuntime } from "./model-runtime.ts";
  * recursively fan out. Owned by the spawn core and used as the default exclude
  * list so no caller can accidentally under-specify the nesting block.
  */
-export const CHILD_EXCLUDED_TOOLS: readonly string[] = ["run_subagent", "run_workflow"];
+export const CHILD_EXCLUDED_TOOLS: readonly string[] = ["run_agent", "run_workflow"];
 
 const PI_SUBAGENT_SESSION_DIR_NAME = "subagent-sessions";
 
@@ -106,7 +106,7 @@ async function resolvePiSubagentSession({
 
 /**
  * Parameters for a single subagent run. This is the shared spawn primitive used
- * by both the `run_subagent` tool and the `run_workflow` tool's `run_subagent()` global.
+ * by both the `run_agent` tool and the `run_workflow` tool's `run_agent()` global.
  * Concurrency accounting lives in the callers, not here; callers acquire a slot
  * before invoking spawnSubagent, so the runtime timeout below excludes queue time.
  */

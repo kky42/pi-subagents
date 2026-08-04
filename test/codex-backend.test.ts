@@ -170,7 +170,7 @@ describe("pi-subagent codex backend", () => {
     })).toBe(JSON.stringify({ ok: true, text: "keep-json" }));
   });
 
-  it("runs a codex-backed subagent through the run_subagent tool", async () => {
+  it("runs a codex-backed subagent through the run_agent tool", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin");
     const argsPath = join(tempDir, "codex-args.json");
@@ -202,7 +202,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const { session, registration } = await createSession();
     registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("run_subagent", {
+      fauxAssistantMessage([fauxToolCall("run_agent", {
         label: "Codex review",
         profile: "codex-reviewer",
         prompt: "Review the latest diff.",
@@ -213,7 +213,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     await session.prompt("Delegate to Codex.");
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_subagent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
 
     const codexRun = JSON.parse(readFileSync(argsPath, "utf8"));
@@ -497,7 +497,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-tiered-cost",
@@ -549,7 +549,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-unknown-cost",
@@ -572,7 +572,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     expect(accepted).not.toHaveProperty("usage");
     expect(terminal).toMatchObject({ status: "completed", content: "unknown model done" });
     const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(final).toContain("pi-flow idle · 1 subagent and 0 workflows done · ↑800 ↓50 R200");
+    expect(final).toContain("pi-flow idle · 1 agent and 0 workflows done · ↑800 ↓50 R200");
     expect(final).toContain("$?");
 
     disposeSession(session);
@@ -602,7 +602,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_subagent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const context = makeExecutionContext({
       hasUI: true,
@@ -629,7 +629,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     await waitForTaskNotification(session, second.details.task_id, 5000);
 
     const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(final).toContain("pi-flow idle · 2 subagents and 0 workflows done · ↑1.0k ↓20 R1.0k CH50.0%");
+    expect(final).toContain("pi-flow idle · 2 agents and 0 workflows done · ↑1.0k ↓20 R1.0k CH50.0%");
 
     disposeSession(session);
   });

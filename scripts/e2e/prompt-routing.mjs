@@ -334,7 +334,7 @@ function analyzeJsonl(text) {
       for (const call of calls) {
         analysis.toolCounts[call.name] = (analysis.toolCounts[call.name] ?? 0) + 1;
         const input = call.arguments ?? {};
-        if (call.name === "run_subagent") {
+        if (call.name === "run_agent") {
           analysis.subagentCalls.push({ group, sessionKey: typeof input.session_key === "string" ? input.session_key : "" });
         } else if (call.name === "run_workflow") {
           const script = typeof input.script === "string" ? input.script : "";
@@ -351,26 +351,26 @@ function analyzeJsonl(text) {
             parallel: script.includes("parallel("),
             schema: /\bschema\s*:/.test(script),
             sessionKeyExpressions: (script.match(/\bsession_key\s*:/g) ?? []).length,
-            subagentExpressions: (script.match(/\brun_subagent\s*\(/g) ?? []).length,
+            subagentExpressions: (script.match(/\brun_agent\s*\(/g) ?? []).length,
           });
         }
       }
       if (message.stopReason === "stop") analysis.finalStop = true;
     } else if (message.role === "toolResult") {
-      if (message.toolName !== "run_subagent" && message.toolName !== "run_workflow") continue;
+      if (message.toolName !== "run_agent" && message.toolName !== "run_workflow") continue;
       const envelope = messageEnvelope(message);
-      const taskType = message.toolName === "run_subagent" ? "subagent" : "workflow";
+      const taskType = message.toolName === "run_agent" ? "agent" : "workflow";
       if (envelope?.task_type === taskType && envelope.status === "accepted" && typeof envelope.task_id === "string") {
         analysis.acceptedTasks.push({
           taskId: envelope.task_id,
           taskType,
-          sessionKey: taskType === "subagent" && typeof envelope.session_key === "string" ? envelope.session_key : undefined,
+          sessionKey: taskType === "agent" && typeof envelope.session_key === "string" ? envelope.session_key : undefined,
         });
       }
-    } else if (message.role === "custom" && message.customType === "pi-flow-task-notification-v2") {
+    } else if (message.role === "custom" && message.customType === "pi-flow-task-notification") {
       const envelope = messageEnvelope(message);
       if (
-        (envelope?.task_type === "subagent" || envelope?.task_type === "workflow")
+        (envelope?.task_type === "agent" || envelope?.task_type === "workflow")
         && (envelope.status === "completed" || envelope.status === "failed")
         && typeof envelope.task_id === "string"
       ) {
@@ -378,7 +378,7 @@ function analyzeJsonl(text) {
           taskId: envelope.task_id,
           taskType: envelope.task_type,
           status: envelope.status,
-          sessionKey: envelope.task_type === "subagent" && typeof envelope.session_key === "string"
+          sessionKey: envelope.task_type === "agent" && typeof envelope.session_key === "string"
             ? envelope.session_key
             : undefined,
         });
@@ -438,7 +438,7 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
     "--no-prompt-templates",
     "--no-themes",
     "--no-context-files",
-    "--tools", "read,bash,run_subagent,run_workflow",
+    "--tools", "read,bash,run_agent,run_workflow",
     "--approve",
     scenario.prompt,
   ];
@@ -546,14 +546,14 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
 
 function summarizedAnalysis(analysis) {
   const keyIds = new Map();
-  const subagentTasks = analysis.acceptedTasks.filter((task) => task.taskType === "subagent");
+  const subagentTasks = analysis.acceptedTasks.filter((task) => task.taskType === "agent");
   const sessionKeyPattern = subagentTasks.map((task) => {
     if (!task.sessionKey) return "missing";
     if (!keyIds.has(task.sessionKey)) keyIds.set(task.sessionKey, `key-${keyIds.size + 1}`);
     return keyIds.get(task.sessionKey);
   });
   const sessionKeyState = subagentTasks.length === 0
-    ? "no-subagent-tasks"
+    ? "no-agent-tasks"
     : sessionKeyPattern.includes("missing")
       ? "missing"
       : keyIds.size === 1
@@ -567,7 +567,7 @@ function summarizedAnalysis(analysis) {
       taskType: accepted.taskType,
       acceptedStatus: "accepted",
       outcome: terminal?.status ?? "pending",
-      ...(accepted.taskType === "subagent"
+      ...(accepted.taskType === "agent"
         ? {
             sessionKey: accepted.sessionKey ? keyIds.get(accepted.sessionKey) : null,
             terminalSessionKeyMatches: terminal ? terminal.sessionKey === accepted.sessionKey : null,

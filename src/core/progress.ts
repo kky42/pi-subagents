@@ -110,7 +110,7 @@ function getToolArgPreview(args: unknown): string {
 
 export function updateProgressFromEvent(progress: SubagentProgressNode, event: AgentSessionEvent): void {
   if (event.type === "tool_execution_start") {
-    if (event.toolName === "run_subagent") {
+    if (event.toolName === "run_agent") {
       return;
     }
     const preview = getToolArgPreview(event.args);

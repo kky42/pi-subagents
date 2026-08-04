@@ -5,7 +5,7 @@
  * verbose or crash-looping child (or one that emits a giant newline-free blob)
  * would otherwise grow the parent's resident memory without bound. These caps
  * keep a single runaway subagent from OOM-ing the host pi process. The workflow
- * worker's memory cap explicitly excludes subprocess memory, and the `run_subagent`
+ * worker's memory cap explicitly excludes subprocess memory, and the `run_agent`
  * path has no cap at all, so the guard has to live here.
  */
 
