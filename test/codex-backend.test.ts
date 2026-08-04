@@ -170,7 +170,7 @@ describe("pi-subagent codex backend", () => {
     })).toBe(JSON.stringify({ ok: true, text: "keep-json" }));
   });
 
-  it("runs a codex-backed subagent through the Agent tool", async () => {
+  it("runs a codex-backed subagent through the run_agent tool", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin");
     const argsPath = join(tempDir, "codex-args.json");
@@ -202,9 +202,9 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const { session, registration } = await createSession();
     registration.setResponses([
-      fauxAssistantMessage([fauxToolCall("Agent", {
-        description: "Codex review",
-        subagent_type: "codex-reviewer",
+      fauxAssistantMessage([fauxToolCall("run_agent", {
+        label: "Codex review",
+        profile: "codex-reviewer",
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
       fauxAssistantMessage("launch observed"),
@@ -213,7 +213,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     await session.prompt("Delegate to Codex.");
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
 
     const codexRun = JSON.parse(readFileSync(argsPath, "utf8"));
@@ -262,7 +262,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
     };
     const first = await spawnCodexSubagent({
       toolCallId: "codex-resume-1",
-      description: "Codex first",
+      label: "Codex first",
       prompt: "First prompt.",
       profile,
       thinkingLevel: "medium",
@@ -277,7 +277,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
 
     const second = await spawnCodexSubagent({
       toolCallId: "codex-resume-2",
-      description: "Codex second",
+      label: "Codex second",
       prompt: "Second prompt.",
       profile,
       thinkingLevel: "medium",
@@ -312,7 +312,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
 
     const result = await spawnCodexSubagent({
       toolCallId: "codex-missing-session",
-      description: "Codex missing session",
+      label: "Codex missing session",
       prompt: "Persist this conversation.",
       profile: {
         name: "codex-missing-session",
@@ -356,7 +356,7 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
 
     const result = await spawnCodexSubagent({
       toolCallId: "codex-resume-usage",
-      description: "Codex resumed usage",
+      label: "Codex resumed usage",
       prompt: "Continue.",
       profile: {
         name: "codex-resume-usage",
@@ -413,7 +413,7 @@ setTimeout(() => {
 
     const result = await spawnCodexSubagent({
       toolCallId: "codex-abort-race",
-      description: "Codex abort race",
+      label: "Codex abort race",
       prompt: "This should be aborted before stdin is sent.",
       profile: {
         name: "codex-race",
@@ -453,7 +453,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
 
     const result = await spawnCodexSubagent({
       toolCallId: "codex-oversize",
-      description: "Codex oversize",
+      label: "Codex oversize",
       prompt: "Trigger oversize stdout.",
       profile: {
         name: "codex-oversize",
@@ -475,7 +475,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
     expect(result.details.error).toContain("without a newline");
   });
 
-  it("renders priced Codex usage above 272K in the Agent widget", async () => {
+  it("renders priced Codex usage above 272K in the subagent widget", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-tiered-cost");
     mkdirSync(subagentsDir, { recursive: true });
@@ -497,13 +497,13 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-tiered-cost",
       {
-        description: "Tiered cost",
-        subagent_type: "codex-tiered",
+        label: "Tiered cost",
+        profile: "codex-tiered",
         prompt: "Do it.",
       },
       undefined,
@@ -549,13 +549,13 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const accepted = await tool.execute(
       "codex-unknown-cost",
       {
-        description: "Unknown cost",
-        subagent_type: "codex-unknown",
+        label: "Unknown cost",
+        profile: "codex-unknown",
         prompt: "Do it.",
       },
       undefined,
@@ -602,7 +602,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const { session, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const context = makeExecutionContext({
       hasUI: true,
@@ -613,7 +613,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const first = await tool.execute(
       "codex-cache-first",
-      { description: "First cache", subagent_type: "codex-cache", prompt: "First" },
+      { label: "First cache", profile: "codex-cache", prompt: "First" },
       undefined,
       undefined,
       context,
@@ -621,7 +621,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     await waitForTaskNotification(session, first.details.task_id, 5000);
     const second = await tool.execute(
       "codex-cache-second",
-      { description: "Second cache", subagent_type: "codex-cache", prompt: "Second" },
+      { label: "Second cache", profile: "codex-cache", prompt: "Second" },
       undefined,
       undefined,
       context,

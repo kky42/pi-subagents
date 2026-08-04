@@ -12,18 +12,18 @@ Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI*
 
 </div>
 
-![A real Pi interactive session showing four direct Agents and two Workflows, live Workflow child progress, and the final one-line idle summary](./assets/pi-flow-interactive.png)
+![A real Pi interactive session showing parallel subagents and workflows with live progress](./assets/pi-flow-interactive.png)
 
-<p align="center"><sub>Captured from a real Pi interactive session with four direct Agents, two Workflows, and four Workflow child agents.</sub></p>
+<p align="center"><sub>Captured from a real Pi interactive session running parallel subagents and workflows.</sub></p>
 
 ## One coordinator, asynchronous specialists
 
-`Agent` and `workflow` run as background tasks. Pi receives an `accepted` result immediately, continues independent work, then receives one correlated `completed` or `failed` notification. `accepted` means launched, not finished, and there is nothing to poll.
+`run_agent` and `run_workflow` run as background tasks. Pi receives an `accepted` result immediately, continues independent work, then receives one correlated `completed` or `failed` notification. `accepted` means launched, not finished, and there is nothing to poll.
 
 | Primitive | Use it for |
 | --- | --- |
-| **`Agent`** | One focused, resumable specialist or several independent specialists in parallel. |
-| **`workflow`** | Parallel or staged child agents, branching, structured results, saved orchestration, and replay. |
+| **`run_agent`** | One focused, resumable specialist or several independent specialists in parallel. |
+| **`run_workflow`** | Parallel or staged subagents, branching, structured results, saved orchestration, and replay. |
 
 Every subagent runs through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
 
@@ -36,7 +36,7 @@ pi install npm:@kky42/pi-flow
 Ask Pi naturally:
 
 ```text
-Use three agents in parallel to review architecture, tests, and documentation, then synthesize their findings.
+Use three subagents in parallel to review architecture, tests, and documentation, then synthesize their findings.
 ```
 
 ```text
@@ -45,7 +45,7 @@ Use a workflow to classify each changed file by risk, run the matching review, a
 
 ### Add simple specialists
 
-Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the `subagent_type`.
+Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the profile name.
 
 **Pi explorer**
 
@@ -80,15 +80,15 @@ Inspect the UI and recommend specific improvements.
 ## Why pi-flow?
 
 - **Asynchronous by default.** Delegation runs in the background while Pi remains available.
-- **Parallel but bounded.** Direct Agents and Workflow children share one concurrency limit.
+- **Parallel but bounded.** Direct and workflow subagents share one concurrency limit.
 - **Multi-backend.** Mix Pi, Codex CLI, and Claude Code through simple profiles.
 - **Real orchestration.** Workflows support parallel stages, pipelines, branching, schemas, saved scripts, and replay.
-- **Resumable specialists.** Reuse a direct Agent's `session_key` to continue its backend conversation.
-- **Visible progress.** Pi's TUI distinguishes queued from running direct Agents, folds each Workflow's child progress into one row, and reports cumulative tokens, cache usage, and cost when available. The widget stays within five lines while active and collapses to one idle line.
+- **Resumable specialists.** Reuse a direct subagent's `session_key` to continue its backend conversation.
+- **Visible progress.** Pi's TUI distinguishes queued from running subagents, folds each workflow's child progress into one row, and reports cumulative tokens, cache usage, and cost when available. The widget stays within five lines while active and collapses to one idle line.
 
 ## Extension coordination events
 
-PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an Agent or Workflow is accepted and immediately before its terminal notification:
+PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an agent or workflow task is accepted and immediately before its terminal notification:
 
 ```ts
 {

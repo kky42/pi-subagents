@@ -4,7 +4,7 @@ import type {
   SubagentProgressNode,
   SubagentTelemetry,
   SubagentToolDetails,
-  SubagentType,
+  SubagentProfileName,
   SubagentUsage,
 } from "../types.ts";
 
@@ -25,19 +25,19 @@ export function textResult(text: string, details: SubagentToolDetails, usage?: S
   return result;
 }
 
-export type AgentToolResult = ReturnType<typeof textResult>;
+export type SubagentToolResult = ReturnType<typeof textResult>;
 
 export function createProgressNode(
   id: string,
-  description: string,
-  subagentType: SubagentType,
+  label: string,
+  profile: SubagentProfileName,
   status: SubagentProgressNode["status"] = "running",
   backend?: SubagentBackend,
 ): SubagentProgressNode {
   return {
     id,
-    description,
-    subagentType,
+    label,
+    profile,
     ...(backend ? { backend } : {}),
     status,
     startedAt: Date.now(),
@@ -97,7 +97,8 @@ function getToolArgPreview(args: unknown): string {
   }
   const record = args as Record<string, unknown>;
   const value =
-    typeof record.description === "string" ? record.description
+    typeof record.label === "string" ? record.label
+    : typeof record.description === "string" ? record.description
     : typeof record.path === "string" ? record.path
     : typeof record.command === "string" ? record.command
     : typeof record.pattern === "string" ? record.pattern
@@ -109,7 +110,7 @@ function getToolArgPreview(args: unknown): string {
 
 export function updateProgressFromEvent(progress: SubagentProgressNode, event: AgentSessionEvent): void {
   if (event.type === "tool_execution_start") {
-    if (event.toolName === "Agent") {
+    if (event.toolName === "run_agent") {
       return;
     }
     const preview = getToolArgPreview(event.args);
@@ -154,11 +155,11 @@ export function updateProgressFromEvent(progress: SubagentProgressNode, event: A
 
 export interface ProgressEmitterOptions {
   toolCallId: string;
-  description: string;
-  subagentType: SubagentType;
+  label: string;
+  profile: SubagentProfileName;
   backend?: SubagentBackend;
   enabled: boolean;
-  onProgress: ((result: AgentToolResult) => void) | undefined;
+  onProgress: ((result: SubagentToolResult) => void) | undefined;
 }
 
 export interface ProgressEmitter {
@@ -179,9 +180,9 @@ export interface ProgressEmitter {
  * hand-synchronized copies that silently drift.
  */
 export function createProgressEmitter(options: ProgressEmitterOptions): ProgressEmitter {
-  const { toolCallId, description, subagentType, backend, enabled, onProgress } = options;
+  const { toolCallId, label, profile, backend, enabled, onProgress } = options;
   const progress = enabled
-    ? createProgressNode(toolCallId, description, subagentType, "running", backend)
+    ? createProgressNode(toolCallId, label, profile, "running", backend)
     : undefined;
   const live = Boolean(progress && onProgress);
 
@@ -200,9 +201,9 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
     }
     lastProgressEmit = Date.now();
     onProgress(
-      textResult(`Subagent "${description}" (${subagentType}) is running.`, {
-        description,
-        subagentType,
+      textResult(`Subagent "${label}" (${profile}) is running.`, {
+        label,
+        profile,
         ...(backend ? { backend } : {}),
         status: progress.status,
         result: progress.result,

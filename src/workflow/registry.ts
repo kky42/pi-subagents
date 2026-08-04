@@ -123,7 +123,7 @@ export function loadWorkflowScriptPath(
 ): LoadWorkflowScriptPathResult {
   const warnings: string[] = [];
   if (extname(scriptPath) !== WORKFLOW_FILE_EXTENSION) {
-    return { ok: false, message: `Workflow scriptPath must point to a ${WORKFLOW_FILE_EXTENSION} file.`, warnings };
+    return { ok: false, message: `Workflow script_path must point to a ${WORKFLOW_FILE_EXTENSION} file.`, warnings };
   }
 
   let realPath: string;
@@ -131,11 +131,11 @@ export function loadWorkflowScriptPath(
     const candidate = isAbsolute(scriptPath) ? scriptPath : resolve(options.cwd, scriptPath);
     realPath = realpathSync(candidate);
   } catch (error) {
-    return { ok: false, message: `Could not resolve workflow scriptPath ${scriptPath}: ${errorMessage(error)}`, warnings };
+    return { ok: false, message: `Could not resolve workflow script_path ${scriptPath}: ${errorMessage(error)}`, warnings };
   }
 
   if (extname(realPath) !== WORKFLOW_FILE_EXTENSION) {
-    return { ok: false, message: `Workflow scriptPath must resolve to a ${WORKFLOW_FILE_EXTENSION} file.`, warnings };
+    return { ok: false, message: `Workflow script_path must resolve to a ${WORKFLOW_FILE_EXTENSION} file.`, warnings };
   }
 
   const roots = getWorkflowPathRoots(options)
@@ -145,24 +145,24 @@ export function loadWorkflowScriptPath(
   if (!root) {
     return {
       ok: false,
-      message: `Workflow scriptPath is outside allowed workflow roots: ${scriptPath}`,
+      message: `Workflow script_path is outside allowed workflow roots: ${scriptPath}`,
       warnings,
     };
   }
 
   try {
     if (!statSync(realPath).isFile()) {
-      return { ok: false, message: `Workflow scriptPath is not a file: ${scriptPath}`, warnings };
+      return { ok: false, message: `Workflow script_path is not a file: ${scriptPath}`, warnings };
     }
   } catch (error) {
-    return { ok: false, message: `Could not stat workflow scriptPath ${scriptPath}: ${errorMessage(error)}`, warnings };
+    return { ok: false, message: `Could not stat workflow script_path ${scriptPath}: ${errorMessage(error)}`, warnings };
   }
 
   let script: string;
   try {
     script = readFileSync(realPath, "utf8");
   } catch (error) {
-    return { ok: false, message: `Could not read workflow scriptPath ${scriptPath}: ${errorMessage(error)}`, warnings };
+    return { ok: false, message: `Could not read workflow script_path ${scriptPath}: ${errorMessage(error)}`, warnings };
   }
 
   try {
@@ -171,7 +171,7 @@ export function loadWorkflowScriptPath(
     if (root.scope !== "session" && !isValidSavedWorkflowName(name)) {
       return {
         ok: false,
-        message: `Workflow scriptPath is invalid: meta.name must match ${VALID_SAVED_WORKFLOW_NAME}`,
+        message: `Workflow script_path is invalid: meta.name must match ${VALID_SAVED_WORKFLOW_NAME}`,
         warnings,
       };
     }
@@ -179,7 +179,7 @@ export function loadWorkflowScriptPath(
   } catch (error) {
     return {
       ok: false,
-      message: `Workflow scriptPath is invalid: ${errorMessage(error)}`,
+      message: `Workflow script_path is invalid: ${errorMessage(error)}`,
       warnings,
     };
   }

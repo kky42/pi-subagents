@@ -1,47 +1,47 @@
 import { assertPortableOutputSchema } from "./output-schema.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
-import { fingerprintWorkflowAgentCall } from "./replay-cache.ts";
+import { fingerprintWorkflowSubagentCall } from "./replay-cache.ts";
 import { createWorkflowScriptWorker, type ParentToWorkerMessage, type WorkerToParentMessage } from "./script-worker.ts";
 import {
-  defaultAgentLabel,
-  normalizeAgentOptions,
+  defaultSubagentLabel,
+  normalizeSubagentOptions,
   normalizeJsonSerializable,
   requireString,
   truncateLogLine,
 } from "./runtime-values.ts";
 import type {
   RunWorkflowOptions,
-  WorkflowAgentResultEvent,
+  WorkflowSubagentResultEvent,
   WorkflowLimits,
   WorkflowRunResult,
 } from "./types.ts";
 
 export type {
   RunWorkflowOptions,
-  WorkflowAgentCall,
-  WorkflowAgentResultEvent,
-  WorkflowAgentRunner,
-  WorkflowCachedAgentResult,
+  WorkflowSubagentCall,
+  WorkflowSubagentResultEvent,
+  WorkflowSubagentRunner,
+  WorkflowCachedSubagentResult,
   WorkflowLimits,
   WorkflowMeta,
   WorkflowMetaPhase,
   WorkflowRunResult,
 } from "./types.ts";
 export { parseWorkflowScript } from "./script-validation.ts";
-export { fingerprintWorkflowAgentCall, hashStableValue } from "./replay-cache.ts";
+export { fingerprintWorkflowSubagentCall, hashStableValue } from "./replay-cache.ts";
 
 interface RuntimeState {
   currentPhase?: string;
   logs: string[];
   phases: string[];
-  agentCount: number;
+  subagentCount: number;
   resumePrefixActive: boolean;
 }
 
-const DEFAULT_SUBAGENT_TYPE = "general-purpose";
+const DEFAULT_PROFILE = "general-purpose";
 
 const DEFAULT_WORKFLOW_LIMITS: WorkflowLimits = {
-  maxAgentCalls: 1_000,
+  maxSubagentCalls: 1_000,
   maxLogs: 500,
   maxLogLength: 4_000,
   workerHeartbeatIntervalMs: 250,
@@ -79,12 +79,12 @@ export async function runWorkflow<T = unknown>(
   const state: RuntimeState = {
     logs: [],
     phases: [],
-    agentCount: 0,
-    resumePrefixActive: Boolean(options.resumeAgentResults?.length),
+    subagentCount: 0,
+    resumePrefixActive: Boolean(options.resumeSubagentResults?.length),
   };
-  const resumeAgentResults = options.resumeAgentResults ?? [];
+  const resumeSubagentResults = options.resumeSubagentResults ?? [];
   const limiter = options.limiter;
-  const defaultSubagentType = options.defaultSubagentType ?? DEFAULT_SUBAGENT_TYPE;
+  const defaultProfile = options.defaultProfile ?? DEFAULT_PROFILE;
   const runtimeAbortController = new AbortController();
   const compositeSignal = AbortSignal.any(
     [options.signal, runtimeAbortController.signal].filter((signal): signal is AbortSignal => Boolean(signal)),
@@ -135,58 +135,58 @@ export async function runWorkflow<T = unknown>(
     options.onPhase?.(text);
   };
 
-  const recordAgentResult = async (event: WorkflowAgentResultEvent) => {
+  const recordSubagentResult = async (event: WorkflowSubagentResultEvent) => {
     try {
-      await options.onAgentResult?.(event);
+      await options.onSubagentResult?.(event);
     } catch (error) {
-      log(`workflow agent-result hook failed: ${error instanceof Error ? error.message : String(error)}`);
+      log(`workflow subagent-result hook failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
-  const runAgentCall = async (prompt: unknown, agentOptions: unknown = {}) => {
+  const runSubagentCall = async (prompt: unknown, subagentOptions: unknown = {}) => {
     throwIfAborted();
-    if (state.agentCount >= limits.maxAgentCalls) {
-      const error = new WorkflowFatalError(`maximum workflow agent calls exceeded (${limits.maxAgentCalls})`);
+    if (state.subagentCount >= limits.maxSubagentCalls) {
+      const error = new WorkflowFatalError(`maximum workflow run_agent calls exceeded (${limits.maxSubagentCalls})`);
       abortRuntime(error);
       throw error;
     }
-    const taskPrompt = requireString(prompt, "agent prompt");
-    const opts = normalizeAgentOptions(agentOptions);
+    const taskPrompt = requireString(prompt, "run_agent prompt");
+    const opts = normalizeSubagentOptions(subagentOptions);
     if (opts.schema != null) {
       try {
         assertPortableOutputSchema(opts.schema);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        const fatal = new WorkflowFatalError(`Workflow schema validation failed before launching agent: ${detail}`);
+        const fatal = new WorkflowFatalError(`Workflow schema validation failed before launching subagent: ${detail}`);
         abortRuntime(fatal);
         throw fatal;
       }
     }
     const assignedPhase = opts.phase ?? state.currentPhase;
-    const subagentType = opts.subagentType ?? defaultSubagentType;
+    const profile = opts.profile ?? defaultProfile;
 
-    const index = ++state.agentCount;
-    const label = opts.label || defaultAgentLabel(assignedPhase, index);
+    const index = ++state.subagentCount;
+    const label = opts.label || defaultSubagentLabel(assignedPhase, index);
     const call = {
       index,
       prompt: taskPrompt,
       label,
       phase: assignedPhase,
-      subagentType,
+      profile,
       backend: undefined as string | undefined,
       sessionKey: opts.sessionKey,
       sessionId: undefined as string | undefined,
       schema: opts.schema,
     };
-    const fingerprint = fingerprintWorkflowAgentCall(call);
-    options.onAgentQueued?.({ index, label, phase: assignedPhase, subagentType, sessionKey: opts.sessionKey, prompt: taskPrompt });
-    const cachedResult = state.resumePrefixActive ? resumeAgentResults[index - 1] : undefined;
+    const fingerprint = fingerprintWorkflowSubagentCall(call);
+    options.onSubagentQueued?.({ index, label, phase: assignedPhase, profile, sessionKey: opts.sessionKey, prompt: taskPrompt });
+    const cachedResult = state.resumePrefixActive ? resumeSubagentResults[index - 1] : undefined;
     if (cachedResult?.index === index && cachedResult.fingerprint === fingerprint && !cachedResult.failed) {
       call.sessionId = cachedResult.sessionId;
       call.backend = cachedResult.backend;
-      options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, sessionKey: opts.sessionKey, prompt: taskPrompt, cached: true });
-      options.onAgentEnd?.({ index, label, phase: assignedPhase, result: cachedResult.result, cached: true, failed: false });
-      await recordAgentResult({ ...call, index, fingerprint, result: cachedResult.result, failed: false, cached: true });
+      options.onSubagentStart?.({ index, label, phase: assignedPhase, profile, sessionKey: opts.sessionKey, prompt: taskPrompt, cached: true });
+      options.onSubagentEnd?.({ index, label, phase: assignedPhase, result: cachedResult.result, cached: true, failed: false });
+      await recordSubagentResult({ ...call, index, fingerprint, result: cachedResult.result, failed: false, cached: true });
       return cachedResult.result;
     }
     state.resumePrefixActive = false;
@@ -194,14 +194,14 @@ export async function runWorkflow<T = unknown>(
     // Queue on session_key serialization first, then on the shared global cap.
     // Same-key followers stay queued and do not occupy a global subagent slot
     // while waiting for the earlier turn in that child conversation to finish.
-    const runLiveAgent = async () => {
+    const runLiveSubagent = async () => {
       const release = await limiter.acquire(compositeSignal);
       try {
-        options.onAgentStart?.({ index, label, phase: assignedPhase, subagentType, sessionKey: opts.sessionKey, prompt: taskPrompt });
+        options.onSubagentStart?.({ index, label, phase: assignedPhase, profile, sessionKey: opts.sessionKey, prompt: taskPrompt });
         throwIfAborted();
-        const liveResult = await options.runAgent(call, compositeSignal);
+        const liveResult = await options.runSubagent(call, compositeSignal);
         throwIfAborted();
-        return normalizeJsonSerializable(liveResult, "agent result");
+        return normalizeJsonSerializable(liveResult, "subagent result");
       } finally {
         release();
       }
@@ -211,31 +211,31 @@ export async function runWorkflow<T = unknown>(
     let failed = false;
     let failureMessage: string | undefined;
     let ended = false;
-    const endAgent = () => {
+    const endSubagent = () => {
       if (ended) {
         return;
       }
       ended = true;
-      options.onAgentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
+      options.onSubagentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
     };
     try {
-      result = options.serializeAgent
-        ? await options.serializeAgent(opts.sessionKey, runLiveAgent)
-        : await runLiveAgent();
+      result = options.serializeSubagent
+        ? await options.serializeSubagent(opts.sessionKey, runLiveSubagent)
+        : await runLiveSubagent();
     } catch (error) {
       failed = true;
       if (options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error)) {
         try {
-          endAgent();
+          endSubagent();
         } catch {}
         throw error;
       }
       failureMessage = error instanceof Error ? error.message : String(error);
-      log(`agent ${label} failed: ${failureMessage}`);
+      log(`subagent ${label} failed: ${failureMessage}`);
       result = null;
     }
-    endAgent();
-    await recordAgentResult({ ...call, index, fingerprint, result, failed, error: failureMessage, cached: false });
+    endSubagent();
+    await recordSubagentResult({ ...call, index, fingerprint, result, failed, error: failureMessage, cached: false });
     return result;
   };
 
@@ -253,7 +253,7 @@ export async function runWorkflow<T = unknown>(
     let lastProgressAt = Date.now();
     let abortTimer: ReturnType<typeof setTimeout> | undefined;
     let stallTimer: ReturnType<typeof setInterval> | undefined;
-    const activeAgentTasks = new Set<Promise<void>>();
+    const activeSubagentTasks = new Set<Promise<void>>();
 
     const cleanup = () => {
       if (options.signal && onExternalAbort) {
@@ -270,7 +270,7 @@ export async function runWorkflow<T = unknown>(
 
     const drainRuntime = async () => {
       cleanup();
-      await Promise.allSettled([worker.terminate(), ...activeAgentTasks]);
+      await Promise.allSettled([worker.terminate(), ...activeSubagentTasks]);
     };
 
     const finishReject = (error: Error) => {
@@ -292,8 +292,8 @@ export async function runWorkflow<T = unknown>(
         if (fatalError) {
           throw fatalError;
         }
-        if (state.agentCount === 0) {
-          throw new Error("workflow must call agent() at least once");
+        if (state.subagentCount === 0) {
+          throw new Error("workflow must call run_agent() at least once");
         }
         normalizedResult = normalizeJsonSerializable(result, "workflow result");
       } catch (error) {
@@ -307,7 +307,7 @@ export async function runWorkflow<T = unknown>(
         result: normalizedResult as T,
         logs: state.logs,
         phases: state.phases,
-        agentCount: state.agentCount,
+        subagentCount: state.subagentCount,
       }));
     };
 
@@ -351,7 +351,7 @@ export async function runWorkflow<T = unknown>(
         return;
       }
       const idleFor = now - lastProgressAt;
-      if (activeAgentTasks.size === 0 && idleFor >= limits.workerIdleTimeoutMs) {
+      if (activeSubagentTasks.size === 0 && idleFor >= limits.workerIdleTimeoutMs) {
         finishReject(new WorkflowFatalError(`workflow script made no progress for ${idleFor}ms`));
       }
     }, watchdogIntervalMs);
@@ -368,12 +368,12 @@ export async function runWorkflow<T = unknown>(
       }
     }
 
-    function handleAgentRequest(message: Extract<WorkerToParentMessage, { type: "agent" }>): void {
+    function handleSubagentRequest(message: Extract<WorkerToParentMessage, { type: "subagent" }>): void {
       const task = (async () => {
         try {
-          const result = await runAgentCall(message.prompt, message.options);
+          const result = await runSubagentCall(message.prompt, message.options);
           lastProgressAt = Date.now();
-          postToWorker({ type: "agentResult", id: message.id, ok: true, result });
+          postToWorker({ type: "subagentResult", id: message.id, ok: true, result });
         } catch (error) {
           const fatal = options.signal?.aborted || runtimeAbortController.signal.aborted || isWorkflowFatalError(error);
           if (fatal) {
@@ -381,7 +381,7 @@ export async function runWorkflow<T = unknown>(
           }
           lastProgressAt = Date.now();
           postToWorker({
-            type: "agentResult",
+            type: "subagentResult",
             id: message.id,
             ok: false,
             fatal,
@@ -389,9 +389,9 @@ export async function runWorkflow<T = unknown>(
           });
         }
       })().finally(() => {
-        activeAgentTasks.delete(task);
+        activeSubagentTasks.delete(task);
       });
-      activeAgentTasks.add(task);
+      activeSubagentTasks.add(task);
     }
 
     worker.on("message", (message: WorkerToParentMessage) => {
@@ -403,9 +403,9 @@ export async function runWorkflow<T = unknown>(
           case "heartbeat":
             lastHeartbeat = Date.now();
             break;
-          case "agent":
+          case "subagent":
             lastProgressAt = Date.now();
-            handleAgentRequest(message);
+            handleSubagentRequest(message);
             break;
           case "log":
             lastProgressAt = Date.now();

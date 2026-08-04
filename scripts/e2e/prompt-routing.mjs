@@ -303,7 +303,7 @@ function analyzeJsonl(text) {
   const analysis = {
     malformedLines: 0,
     toolCounts: {},
-    agentCalls: [],
+    subagentCalls: [],
     workflowCalls: [],
     acceptedTasks: [],
     notifications: [],
@@ -334,26 +334,32 @@ function analyzeJsonl(text) {
       for (const call of calls) {
         analysis.toolCounts[call.name] = (analysis.toolCounts[call.name] ?? 0) + 1;
         const input = call.arguments ?? {};
-        if (call.name === "Agent") {
-          analysis.agentCalls.push({ group, sessionKey: typeof input.session_key === "string" ? input.session_key : "" });
-        } else if (call.name === "workflow") {
+        if (call.name === "run_agent") {
+          analysis.subagentCalls.push({ group, sessionKey: typeof input.session_key === "string" ? input.session_key : "" });
+        } else if (call.name === "run_workflow") {
           const script = typeof input.script === "string" ? input.script : "";
           analysis.workflowCalls.push({
             group,
-            source: script ? "inline" : input.name ? "saved" : "path",
+            source: script
+              ? "inline"
+              : typeof input.script_path === "string"
+                ? "path"
+                : typeof input.resume_from_task_id === "string"
+                  ? "replay"
+                  : "saved",
             pipeline: script.includes("pipeline("),
             parallel: script.includes("parallel("),
             schema: /\bschema\s*:/.test(script),
             sessionKeyExpressions: (script.match(/\bsession_key\s*:/g) ?? []).length,
-            agentExpressions: (script.match(/\bagent\s*\(/g) ?? []).length,
+            subagentExpressions: (script.match(/\brun_agent\s*\(/g) ?? []).length,
           });
         }
       }
       if (message.stopReason === "stop") analysis.finalStop = true;
     } else if (message.role === "toolResult") {
-      if (message.toolName !== "Agent" && message.toolName !== "workflow") continue;
+      if (message.toolName !== "run_agent" && message.toolName !== "run_workflow") continue;
       const envelope = messageEnvelope(message);
-      const taskType = message.toolName === "Agent" ? "agent" : "workflow";
+      const taskType = message.toolName === "run_agent" ? "agent" : "workflow";
       if (envelope?.task_type === taskType && envelope.status === "accepted" && typeof envelope.task_id === "string") {
         analysis.acceptedTasks.push({
           taskId: envelope.task_id,
@@ -432,7 +438,7 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
     "--no-prompt-templates",
     "--no-themes",
     "--no-context-files",
-    "--tools", "read,bash,Agent,workflow",
+    "--tools", "read,bash,run_agent,run_workflow",
     "--approve",
     scenario.prompt,
   ];
@@ -540,13 +546,13 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
 
 function summarizedAnalysis(analysis) {
   const keyIds = new Map();
-  const agentTasks = analysis.acceptedTasks.filter((task) => task.taskType === "agent");
-  const sessionKeyPattern = agentTasks.map((task) => {
+  const subagentTasks = analysis.acceptedTasks.filter((task) => task.taskType === "agent");
+  const sessionKeyPattern = subagentTasks.map((task) => {
     if (!task.sessionKey) return "missing";
     if (!keyIds.has(task.sessionKey)) keyIds.set(task.sessionKey, `key-${keyIds.size + 1}`);
     return keyIds.get(task.sessionKey);
   });
-  const sessionKeyState = agentTasks.length === 0
+  const sessionKeyState = subagentTasks.length === 0
     ? "no-agent-tasks"
     : sessionKeyPattern.includes("missing")
       ? "missing"
@@ -581,9 +587,9 @@ function summarizedAnalysis(analysis) {
   return {
     rootModels: analysis.rootModels,
     toolCounts: analysis.toolCounts,
-    agentCallCount: analysis.agentCalls.length,
-    agentCallGroups: analysis.agentCalls.map((call) => call.group),
-    requestedSessionKeys: analysis.agentCalls.map((call) =>
+    subagentCallCount: analysis.subagentCalls.length,
+    subagentCallGroups: analysis.subagentCalls.map((call) => call.group),
+    requestedSessionKeys: analysis.subagentCalls.map((call) =>
       call.sessionKey ? keyIds.get(call.sessionKey) ?? "provided-unmatched" : "fresh"),
     sessionKeyState,
     sessionKeyPattern,

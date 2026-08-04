@@ -18,8 +18,8 @@ describe("pi-subagent rendering", () => {
     const flags = new Map<string, boolean | string>();
     const mockApi: any = {
       registerTool: (tool: any) => {
-        if (tool.name === "Agent") agentTool = tool;
-        if (tool.name === "workflow") workflowTool = tool;
+        if (tool.name === "run_agent") agentTool = tool;
+        if (tool.name === "run_workflow") workflowTool = tool;
       },
       registerMessageRenderer: (customType: string, renderer: unknown) => {
         if (customType === "pi-flow-task-notification") notificationRenderer = renderer;
@@ -51,19 +51,19 @@ describe("pi-subagent rendering", () => {
     })).toBe("↑1.0k ↓0 CH0.0% $?");
   });
 
-  it("renders an Agent launch as a compact accepted task", () => {
+  it("renders a run_agent launch as a compact accepted task", () => {
     mkdirSync(join(agentDir, "subagents"), { recursive: true });
     writeFileSync(join(agentDir, "subagents", "code-searcher.md"), "---\ndescription: Searches code.\n---\n");
     const { agentTool } = captureRenderers();
     const theme = makeMockTheme();
 
     const call = renderToText(agentTool.renderCall(
-      { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
+      { label: "Find auth files", profile: "code-searcher", prompt: "..." },
       theme,
       { executionStarted: false },
     ));
     const runningCall = renderToText(agentTool.renderCall(
-      { description: "Find auth files", subagent_type: "code-searcher", prompt: "..." },
+      { label: "Find auth files", profile: "code-searcher", prompt: "..." },
       theme,
       { executionStarted: true },
     ));
@@ -74,7 +74,7 @@ describe("pi-subagent rendering", () => {
         task_type: "agent",
         status: "accepted",
         session_key: "session_123",
-        name: "Find auth files",
+        label: "Find auth files",
         display: {
           backend: "pi",
           profile: "code-searcher",
@@ -88,7 +88,7 @@ describe("pi-subagent rendering", () => {
         task_type: "agent",
         status: "accepted",
         session_key: "session_old",
-        name: "Old task",
+        label: "Old task",
       },
     }, {}, theme, {}));
 
@@ -107,7 +107,7 @@ describe("pi-subagent rendering", () => {
       task_type: "agent",
       status: "completed",
       session_key: "session_done",
-      name: "Inspect auth",
+      label: "Inspect auth",
       content: "Detailed child result",
       display: {
         backend: "codex",
@@ -119,7 +119,7 @@ describe("pi-subagent rendering", () => {
       task_type: "agent",
       status: "failed",
       session_key: "session_failed",
-      name: "Inspect tests",
+      label: "Inspect tests",
       content: "Provider failed",
       display: {
         backend: "claude",
@@ -138,7 +138,7 @@ describe("pi-subagent rendering", () => {
     expect(failure).toContain("Provider failed");
   });
 
-  it("renders Workflow calls and notifications with the parenthesized name", () => {
+  it("renders run_workflow calls and notifications with the parenthesized name", () => {
     const { workflowTool, notificationRenderer } = captureRenderers();
     const theme = makeMockTheme();
     const call = renderToText(workflowTool.renderCall(

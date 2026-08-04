@@ -28,7 +28,7 @@ vi.mock("../src/profiles.ts", () => ({
 
 import { getSubagentUsage, textResult } from "../src/core/progress.ts";
 import { incrementalPiUsage } from "../src/core/spawn.ts";
-import { createWorkflowAgentRunner } from "../src/workflow/agent-runner.ts";
+import { createWorkflowSubagentRunner } from "../src/workflow/subagent-runner.ts";
 import { executeWorkflow } from "../headless.ts";
 
 const profile: SubagentProfile = { name: "reviewer", description: "review", backend: "codex", model: "gpt-test", thinking: "high" };
@@ -56,8 +56,8 @@ beforeEach(() => {
 describe("canonical workflow agent runner", () => {
   it("omits standard tool usage when telemetry is unavailable", () => {
     expect(textResult("done", {
-      description: "unknown",
-      subagentType: "reviewer",
+      label: "unknown",
+      profile: "reviewer",
       status: "done",
     })).not.toHaveProperty("usage");
   });
@@ -86,43 +86,43 @@ describe("canonical workflow agent runner", () => {
   });
 
   it("restores cached session_key bindings before the next live call", async () => {
-    const runner = createWorkflowAgentRunner({
+    const runner = createWorkflowSubagentRunner({
       profiles: new Map([[profile.name, profile]]),
       ctx: { cwd: "/tmp", modelRegistry: {} } as never,
       timeoutMs: 123,
     });
     runner.restoreSessionBinding({
       index: 1, fingerprint: "cached", result: "old", label: "old", prompt: "old",
-      subagentType: "reviewer", backend: "codex", sessionKey: "worker", sessionId: "session-1", cached: true,
+      profile: "reviewer", backend: "codex", sessionKey: "worker", sessionId: "session-1", cached: true,
     });
-    await runner.runAgent({ prompt: "continue", label: "lane", subagentType: "reviewer", sessionKey: "worker" }, new AbortController().signal);
+    await runner.runSubagent({ prompt: "continue", label: "lane", profile: "reviewer", sessionKey: "worker" }, new AbortController().signal);
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1", persistSession: true }));
   });
 
   it("rejects keyed replay when the profile backend changed", async () => {
-    const runner = createWorkflowAgentRunner({
+    const runner = createWorkflowSubagentRunner({
       profiles: new Map([[profile.name, profile]]),
       ctx: { cwd: "/tmp", modelRegistry: {} } as never,
       timeoutMs: 123,
     });
     runner.restoreSessionBinding({
       index: 1, fingerprint: "cached", result: "old", label: "old", prompt: "old",
-      subagentType: "reviewer", backend: "pi", sessionKey: "worker", sessionId: "session-1", cached: true,
+      profile: "reviewer", backend: "pi", sessionKey: "worker", sessionId: "session-1", cached: true,
     });
-    await expect(runner.runAgent(
-      { prompt: "continue", label: "lane", subagentType: "reviewer", sessionKey: "worker" },
+    await expect(runner.runSubagent(
+      { prompt: "continue", label: "lane", profile: "reviewer", sessionKey: "worker" },
       new AbortController().signal,
     )).rejects.toThrow(/already belongs/i);
     expect(spawn).not.toHaveBeenCalled();
   });
 
   it("forwards profile model and thinking to the backend spawn", async () => {
-    const runner = createWorkflowAgentRunner({
+    const runner = createWorkflowSubagentRunner({
       profiles: new Map([[profile.name, profile]]),
       ctx: { cwd: "/tmp", modelRegistry: {} } as never,
       thinkingLevel: "low", timeoutMs: 123,
     });
-    await runner.runAgent({ prompt: "inspect", label: "lane", subagentType: "reviewer" }, new AbortController().signal);
+    await runner.runSubagent({ prompt: "inspect", label: "lane", profile: "reviewer" }, new AbortController().signal);
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ profile, thinkingLevel: "high", timeoutMs: 123 }));
   });
 });
@@ -131,7 +131,7 @@ describe("headless workflow", () => {
   it("resolves separate default provider/model settings", async () => {
     await executeWorkflow({
       cwd: process.cwd(),
-      script: `export const meta = { name: "model", description: "test" };\nreturn await agent("inspect", { subagent_type: "pi-reviewer" });`,
+      script: `export const meta = { name: "model", description: "test" };\nreturn await run_agent("inspect", { profile: "pi-reviewer" });`,
     });
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ model: { provider: "configured", id: "model-a" } }));
   });
@@ -140,14 +140,14 @@ describe("headless workflow", () => {
     sdkState.provider = "missing";
     await executeWorkflow({
       cwd: process.cwd(),
-      script: `export const meta = { name: "fallback", description: "test" };\nreturn await agent("inspect", { subagent_type: "pi-reviewer" });`,
+      script: `export const meta = { name: "fallback", description: "test" };\nreturn await run_agent("inspect", { profile: "pi-reviewer" });`,
     });
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ model: { provider: "fallback", id: "model-b" } }));
   });
 
   it("distinguishes caller abort from workflow timeout", async () => {
     spawn.mockImplementation(async ({ signal }) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true })));
-    const script = `export const meta = { name: "abort", description: "test" };\nreturn await agent("inspect", { subagent_type: "reviewer" });`;
+    const script = `export const meta = { name: "abort", description: "test" };\nreturn await run_agent("inspect", { profile: "reviewer" });`;
     const controller = new AbortController();
     const aborted = executeWorkflow({ cwd: process.cwd(), script, signal: controller.signal });
     setTimeout(() => controller.abort(), 5);
@@ -157,16 +157,16 @@ describe("headless workflow", () => {
 
   it("computes aggregate cache hit rate from cumulative child usage", async () => {
     spawn.mockImplementation(async (params) => {
-      const first = params.description === "one";
+      const first = params.label === "one";
       const usage = first
         ? { input: 50, output: 1, cacheRead: 50, cacheWrite: 0, totalTokens: 101, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
         : { input: 100, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 101, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
       params.onUsage(usage, { tokensKnown: true, costKnown: false, costBreakdownKnown: false });
-      return { content: [], details: { status: "done", result: params.description }, usage };
+      return { content: [], details: { status: "done", result: params.label }, usage };
     });
     const result = await executeWorkflow({
       cwd: process.cwd(),
-      script: `export const meta = { name: "cache", description: "test" };\nreturn await parallel([() => agent("a", { label: "one", subagent_type: "reviewer" }), () => agent("b", { label: "two", subagent_type: "reviewer" })]);`,
+      script: `export const meta = { name: "cache", description: "test" };\nreturn await parallel([() => run_agent("a", { label: "one", profile: "reviewer" }), () => run_agent("b", { label: "two", profile: "reviewer" })]);`,
     });
     expect(result.usage).toMatchObject({ input: 150, cacheRead: 50, totalTokens: 202 });
   });
@@ -175,10 +175,10 @@ describe("headless workflow", () => {
     const usage: unknown[] = [];
     const result = await executeWorkflow({
       cwd: process.cwd(), allowedBackends: ["codex"], onUsage: (value) => usage.push(value),
-      script: `export const meta = { name: "headless", description: "test" };\nreturn await agent("inspect", { subagent_type: "reviewer" });`,
+      script: `export const meta = { name: "headless", description: "test" };\nreturn await run_agent("inspect", { profile: "reviewer" });`,
     });
     expect(result.result).toBe("ok");
-    expect(result.usage).toMatchObject({ input: 2, output: 3, totalTokens: 5, childAgents: 1 });
+    expect(result.usage).toMatchObject({ input: 2, output: 3, totalTokens: 5, childSubagents: 1 });
     expect(usage.length).toBeGreaterThan(0);
   });
 });

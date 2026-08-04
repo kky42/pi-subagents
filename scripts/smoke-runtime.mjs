@@ -5,6 +5,16 @@
 // consumer gets from `@kky42/pi-flow/runtime`, including the worker-thread
 // script host, parallel/pipeline/phase/log globals, and the shared limiter.
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+
+for (const path of [
+  "../dist/src/core/agent-values.js",
+  "../dist/src/core/agent-values.d.ts",
+  "../dist/src/workflow/agent-runner.js",
+  "../dist/src/workflow/agent-runner.d.ts",
+]) {
+  assert.equal(existsSync(new URL(path, import.meta.url)), false, `obsolete build output remains: ${path}`);
+}
 
 const direct = await import(new URL("../dist/runtime.js", import.meta.url));
 const profilesModule = await import(new URL("../dist/src/profiles.js", import.meta.url));
@@ -24,9 +34,9 @@ assert.deepEqual([...profilesModule.loadBuiltinSubagentProfiles().keys()], ["gen
 
 const script = `export const meta = { name: "smoke-runtime", description: "compiled runtime smoke test" };
 phase("fan-out");
-const [alpha] = await parallel([() => agent("Return the word alpha.", { label: "alpha" })]);
+const [alpha] = await parallel([() => run_agent("Return the word alpha.", { label: "alpha" })]);
 phase("pipe");
-const piped = await pipeline(["beta"], (item) => agent("Return the word " + item + ".", { label: item }));
+const piped = await pipeline(["beta"], (item) => run_agent("Return the word " + item + ".", { label: item }));
 log("alpha=" + alpha + " beta=" + piped[0]);
 return { alpha, beta: piped[0], args };`;
 
@@ -38,9 +48,9 @@ const result = await runWorkflow(script, {
   cwd: process.cwd(),
   args: { run: "smoke" },
   limiter,
-  runAgent: async (call, signal) => {
-    assert.ok(signal instanceof AbortSignal, "runAgent must receive an AbortSignal");
-    seenCalls.push({ label: call.label, phase: call.phase, subagentType: call.subagentType });
+  runSubagent: async (call, signal) => {
+    assert.ok(signal instanceof AbortSignal, "runSubagent must receive an AbortSignal");
+    seenCalls.push({ label: call.label, phase: call.phase, profile: call.profile });
     return `result:${call.label}`;
   },
 });
@@ -51,12 +61,12 @@ assert.deepEqual(result.result, {
   args: { run: "smoke" },
 });
 assert.equal(result.meta.name, "smoke-runtime");
-assert.equal(result.agentCount, 2);
+assert.equal(result.subagentCount, 2);
 assert.deepEqual(result.phases, ["fan-out", "pipe"]);
 assert.deepEqual(result.logs, ["alpha=result:alpha beta=result:beta"]);
 assert.deepEqual(seenCalls, [
-  { label: "alpha", phase: "fan-out", subagentType: "general-purpose" },
-  { label: "beta", phase: "pipe", subagentType: "general-purpose" },
+  { label: "alpha", phase: "fan-out", profile: "general-purpose" },
+  { label: "beta", phase: "pipe", profile: "general-purpose" },
 ]);
 assert.equal(limiter.activeCount, 0, "all limiter slots must be released");
 assert.equal(limiter.pendingCount, 0);
@@ -67,7 +77,7 @@ const aborted = await runWorkflow(script, {
   cwd: process.cwd(),
   limiter,
   signal: abortController.signal,
-  runAgent: async () => "unreachable",
+  runSubagent: async () => "unreachable",
 }).then(
   () => {
     throw new Error("aborted workflow must reject");
@@ -76,4 +86,4 @@ const aborted = await runWorkflow(script, {
 );
 assert.ok(isWorkflowAbortError(aborted), `expected WorkflowAbortError, got: ${aborted}`);
 
-console.log("smoke:runtime OK — compiled dist/runtime.js ran a workflow on plain node");
+console.log("smoke:runtime OK - compiled dist/runtime.js ran a workflow on plain node");

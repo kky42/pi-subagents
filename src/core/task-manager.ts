@@ -17,30 +17,33 @@ interface TaskEnvelopeBase {
   task_id: string;
   task_type: TaskType;
   status: PublicTaskStatus;
-  name: string;
 }
 
 export interface AgentAcceptedTaskEnvelope extends TaskEnvelopeBase {
   task_type: "agent";
   status: "accepted";
   session_key: string;
+  label: string;
 }
 
 export interface WorkflowAcceptedTaskEnvelope extends TaskEnvelopeBase {
   task_type: "workflow";
   status: "accepted";
+  name: string;
 }
 
 export interface AgentTerminalTaskEnvelope extends TaskEnvelopeBase {
   task_type: "agent";
   status: "completed" | "failed";
   session_key: string;
+  label: string;
   content: string;
 }
 
 export interface WorkflowTerminalTaskEnvelope extends TaskEnvelopeBase {
   task_type: "workflow";
   status: "completed" | "failed";
+  name: string;
   content: string;
 }
 
@@ -53,22 +56,17 @@ export interface TaskCounts {
   workflow: { finished: number; total: number };
 }
 
-export interface TaskRunResult {
-  content: string;
-  name?: string;
-}
-
 type AgentTaskOptions = {
   taskType: "agent";
-  name: string;
+  label: string;
   sessionKey: string;
-  run: (signal: AbortSignal, taskId: string) => Promise<string | TaskRunResult>;
+  run: (signal: AbortSignal, taskId: string) => Promise<string>;
 };
 
 type WorkflowTaskOptions = {
   taskType: "workflow";
   name: string;
-  run: (signal: AbortSignal, taskId: string) => Promise<string | TaskRunResult>;
+  run: (signal: AbortSignal, taskId: string) => Promise<string>;
 };
 
 type StartTaskOptions = AgentTaskOptions | WorkflowTaskOptions;
@@ -109,7 +107,7 @@ export class BackgroundTaskManager {
           task_type: "agent" as const,
           status: "accepted" as const,
           session_key: options.sessionKey,
-          name: options.name,
+          label: options.label,
         }
       : {
           task_id: taskId,
@@ -177,27 +175,25 @@ export class BackgroundTaskManager {
     accepted: AcceptedTaskEnvelope,
     signal: AbortSignal,
     status: "completed" | "failed",
-    value: string | TaskRunResult,
+    value: string,
   ): void {
     const terminalStatus = signal.aborted ? "failed" : status;
-    const terminalValue = signal.aborted ? errorMessage(signal.reason) : value;
-    const result = typeof terminalValue === "string" ? { content: terminalValue } : terminalValue;
-    const name = result.name ?? accepted.name;
+    const content = signal.aborted ? errorMessage(signal.reason) : value;
     const envelope: TerminalTaskEnvelope = options.taskType === "agent"
       ? {
           task_id: accepted.task_id,
           task_type: "agent",
           status: terminalStatus,
           session_key: options.sessionKey,
-          name,
-          content: result.content,
+          label: options.label,
+          content,
         }
       : {
           task_id: accepted.task_id,
           task_type: "workflow",
           status: terminalStatus,
-          name,
-          content: result.content,
+          name: options.name,
+          content,
         };
 
     this.counts[options.taskType].finished++;

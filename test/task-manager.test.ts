@@ -17,14 +17,14 @@ function deferred<T>() {
 }
 
 describe("BackgroundTaskManager", () => {
-  it("returns a compact Agent acceptance before completion and correlates the terminal notification", async () => {
+  it("returns a compact agent acceptance before completion and correlates the terminal notification", async () => {
     const run = deferred<string>();
     const notifications: TerminalTaskEnvelope[] = [];
     const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
 
     const accepted = manager.start({
       taskType: "agent",
-      name: "inspect auth",
+      label: "inspect auth",
       sessionKey: "worker",
       run: () => run.promise,
     });
@@ -34,7 +34,7 @@ describe("BackgroundTaskManager", () => {
       task_type: "agent",
       status: "accepted",
       session_key: "worker",
-      name: "inspect auth",
+      label: "inspect auth",
     });
     expect(notifications).toEqual([]);
     expect(manager.getCounts()).toEqual({
@@ -50,7 +50,7 @@ describe("BackgroundTaskManager", () => {
       task_type: "agent",
       status: "completed",
       session_key: "worker",
-      name: "inspect auth",
+      label: "inspect auth",
       content: "auth result",
     }]);
     expect(manager.getCounts().agent).toEqual({ finished: 1, total: 1 });
@@ -72,7 +72,7 @@ describe("BackgroundTaskManager", () => {
 
     const accepted = manager.start({
       taskType: "agent",
-      name: "coordinate extensions",
+      label: "coordinate extensions",
       sessionKey: "coordination",
       run: () => run.promise,
     });
@@ -115,7 +115,7 @@ describe("BackgroundTaskManager", () => {
     const accepted = manager.start({
       taskType: "workflow",
       name: "review_flow",
-      run: async () => ({ name: "review_flow", content: "review passed" }),
+      run: async () => "review passed",
     });
     await manager.waitForIdle();
 
@@ -149,7 +149,7 @@ describe("BackgroundTaskManager", () => {
 
     const accepted = manager.start({
       taskType: "agent",
-      name: "broken task",
+      label: "broken task",
       sessionKey: "broken",
       run: async () => { throw new Error("backend unavailable"); },
     });
@@ -160,7 +160,7 @@ describe("BackgroundTaskManager", () => {
       task_type: "agent",
       status: "failed",
       session_key: "broken",
-      name: "broken task",
+      label: "broken task",
       content: "backend unavailable",
     }]);
   });

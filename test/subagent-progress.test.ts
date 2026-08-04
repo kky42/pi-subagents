@@ -36,7 +36,7 @@ describe("pi-subagent background progress and status", () => {
     setContextRoutingResponses,
     taskNotifications,
     waitForTaskNotification,
-    executeAgentTask,
+    executeSubagentTask,
     makeExecutionContext,
   } = setupPiSubagentTestHarness((state) => {
     agentDir = state.agentDir;
@@ -52,7 +52,7 @@ describe("pi-subagent background progress and status", () => {
     const { session, registration, model, modelRegistry } = await createSession({
       extensionFactories: [taskStateObserver],
     });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const updates: unknown[] = [];
     const terminalDelivered = deferred();
     let notificationContexts = 0;
@@ -71,7 +71,7 @@ describe("pi-subagent background progress and status", () => {
       release = resolve;
     });
     setContextRoutingResponses(registration, async (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         const notifications = context.messages.filter((message) =>
           JSON.stringify(message).includes("child complete"));
         if (notifications.length > 0) {
@@ -86,7 +86,7 @@ describe("pi-subagent background progress and status", () => {
 
     const result = await tool.execute(
       "detached-call",
-      { description: "Research config", prompt: "Inspect config loading." },
+      { label: "Research config", prompt: "Inspect config loading." },
       undefined,
       (update: unknown) => updates.push(update),
       makeExecutionContext({ hasUI: true, model, modelRegistry, tui: true }),
@@ -97,7 +97,7 @@ describe("pi-subagent background progress and status", () => {
       task_type: "agent",
       status: "accepted",
       session_key: expect.stringMatching(/^session_[a-f0-9]+$/),
-      name: "Research config",
+      label: "Research config",
       display: {
         backend: "pi",
         profile: "general-purpose",
@@ -108,7 +108,7 @@ describe("pi-subagent background progress and status", () => {
       task_type: "agent",
       status: "accepted",
       session_key: result.details.session_key,
-      name: "Research config",
+      label: "Research config",
     });
     expect(result).not.toHaveProperty("usage");
     expect(updates).toEqual([]);
@@ -154,20 +154,20 @@ describe("pi-subagent background progress and status", () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         await gate;
         return fauxAssistantMessage("interactive child done");
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Interactive child", prompt: "Wait for release." }),
+          fauxToolCall("run_agent", { label: "Interactive child", prompt: "Wait for release." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage(serialized.includes("interactive child done") ? "notification handled" : "task launched");
     });
 
     await session.prompt("Launch one background task.");
-    const accepted = session.messages.find((message: any) => message.role === "toolResult" && message.toolName === "Agent") as any;
+    const accepted = session.messages.find((message: any) => message.role === "toolResult" && message.toolName === "run_agent") as any;
     expect(accepted.details.status).toBe("accepted");
 
     release();
@@ -185,13 +185,13 @@ describe("pi-subagent background progress and status", () => {
     });
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         await childGate.promise;
         return fauxAssistantMessage("rpc child done");
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "RPC child", prompt: "Wait for release." }),
+          fauxToolCall("run_agent", { label: "RPC child", prompt: "Wait for release." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage(serialized.includes("rpc child done") ? "notification handled" : "task launched");
@@ -202,7 +202,7 @@ describe("pi-subagent background progress and status", () => {
       widget.lines?.some((line) => line.includes("Pi Agent(general-purpose: RPC child)")) === true));
     childGate.resolve();
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     await waitForTaskNotification(session, accepted.details.task_id);
     await session.waitForIdle();
 
@@ -265,7 +265,7 @@ describe("pi-subagent background progress and status", () => {
 
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         await childGate.promise;
         return fauxAssistantMessage("active batch child done");
       }
@@ -276,9 +276,9 @@ describe("pi-subagent background progress and status", () => {
         notificationCopies += notifications.length;
         return fauxAssistantMessage("active batch notification handled");
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Active batch child", prompt: "Wait during the active tool batch." }),
+          fauxToolCall("run_agent", { label: "Active batch child", prompt: "Wait during the active tool batch." }),
           fauxToolCall("active_gate", {}),
         ], { stopReason: "toolUse" });
       }
@@ -301,7 +301,7 @@ describe("pi-subagent background progress and status", () => {
     await session.waitForIdle();
 
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
     expect(modelResponsesBeforeNotification).toBe(0);
     expect(notificationContexts).toBe(1);
@@ -327,7 +327,7 @@ describe("pi-subagent background progress and status", () => {
 
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         await childGate.promise;
         return fauxAssistantMessage("cleared child done");
       }
@@ -335,9 +335,9 @@ describe("pi-subagent background progress and status", () => {
         notificationContexts++;
         return fauxAssistantMessage("notification handled");
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Cleared child", prompt: "Wait while the root response is active." }),
+          fauxToolCall("run_agent", { label: "Cleared child", prompt: "Wait while the root response is active." }),
         ], { stopReason: "toolUse" });
       }
       rootProviderActive.resolve();
@@ -348,7 +348,7 @@ describe("pi-subagent background progress and status", () => {
     const prompt = session.prompt("Launch one background task.");
     await rootProviderActive.promise;
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     childGate.resolve();
     await taskFinished.promise;
     expect((session as any).agent.hasQueuedMessages()).toBe(true);
@@ -415,7 +415,7 @@ describe("pi-subagent background progress and status", () => {
 
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         await childGate.promise;
         return fauxAssistantMessage("settling child done");
       }
@@ -432,9 +432,9 @@ describe("pi-subagent background progress and status", () => {
       if (serialized.includes("Process the late completion.")) {
         modelResponsesBeforeNotification++;
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Settling child", prompt: "Wait for agent_end." }),
+          fauxToolCall("run_agent", { label: "Settling child", prompt: "Wait for agent_end." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage("task launched");
@@ -448,7 +448,7 @@ describe("pi-subagent background progress and status", () => {
     await prompt;
 
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(0);
     expect((session as any).agent.hasQueuedMessages()).toBe(true);
 
@@ -516,7 +516,7 @@ describe("pi-subagent background progress and status", () => {
 
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         await childGate.promise;
         return fauxAssistantMessage("continuation child done");
       }
@@ -534,9 +534,9 @@ describe("pi-subagent background progress and status", () => {
         modelResponsesBeforeNotification++;
         return fauxAssistantMessage("continued without notification");
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Continuation child", prompt: "Wait for tool batch." }),
+          fauxToolCall("run_agent", { label: "Continuation child", prompt: "Wait for tool batch." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage("task launched");
@@ -553,7 +553,7 @@ describe("pi-subagent background progress and status", () => {
     unsubscribe();
 
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
     expect(modelResponsesBeforeNotification).toBe(0);
     expect(notificationContexts).toBe(1);
@@ -566,7 +566,7 @@ describe("pi-subagent background progress and status", () => {
     let releaseChild!: () => void;
     setContextRoutingResponses(registration, (context, options) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         return new Promise((resolve) => {
           releaseChild = () => resolve(fauxAssistantMessage("branch child done"));
           options.signal?.addEventListener("abort", () => resolve(fauxAssistantMessage("branch child aborted")), { once: true });
@@ -575,9 +575,9 @@ describe("pi-subagent background progress and status", () => {
       if (serialized.includes("pi-flow-task-notification")) {
         return fauxAssistantMessage("notification observed");
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Branch child", prompt: "Wait during tree navigation." }),
+          fauxToolCall("run_agent", { label: "Branch child", prompt: "Wait during tree navigation." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage("task launched");
@@ -585,7 +585,7 @@ describe("pi-subagent background progress and status", () => {
 
     await session.prompt("Launch one background task.");
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
     await waitUntil(() => typeof releaseChild === "function");
     const userEntry = sessionManager.getEntries().find((entry: any) =>
       entry.type === "message" && entry.message.role === "user") as any;
@@ -614,17 +614,17 @@ describe("pi-subagent background progress and status", () => {
 
     let newBranchChildContext: Context | undefined;
     setContextRoutingResponses(registration, (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         return fauxAssistantMessage("notification observed");
       }
       newBranchChildContext = context;
       return fauxAssistantMessage("new branch child done");
     });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const next = await tool.execute(
       "new-branch-call",
       {
-        description: "New branch child",
+        label: "New branch child",
         prompt: "Start fresh after navigation.",
         session_key: accepted.details.session_key,
       },
@@ -656,13 +656,13 @@ describe("pi-subagent background progress and status", () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     setContextRoutingResponses(registration, async (context) => {
       const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         await gate;
         return fauxAssistantMessage(`${mode} child done`);
       }
-      if (!serialized.includes('"toolName":"Agent"')) {
+      if (!serialized.includes('"toolName":"run_agent"')) {
         return fauxAssistantMessage([
-          fauxToolCall("Agent", { description: "Print child", prompt: "Wait for release." }),
+          fauxToolCall("run_agent", { label: "Print child", prompt: "Wait for release." }),
         ], { stopReason: "toolUse" });
       }
       return fauxAssistantMessage(serialized.includes(`${mode} child done`) ? `${mode} notification handled` : "task launched");
@@ -675,7 +675,7 @@ describe("pi-subagent background progress and status", () => {
 
     release();
     await prompt;
-    const accepted = session.messages.find((message: any) => message.role === "toolResult" && message.toolName === "Agent") as any;
+    const accepted = session.messages.find((message: any) => message.role === "toolResult" && message.toolName === "run_agent") as any;
     const terminal = await waitForTaskNotification(session, accepted.details.task_id);
     expect(terminal).toMatchObject({ status: "completed", content: `${mode} child done` });
     expect(JSON.stringify(session.messages)).toContain(`${mode} notification handled`);
@@ -689,14 +689,14 @@ describe("pi-subagent background progress and status", () => {
     let rootContinuationStarted = false;
     let releaseRoot!: () => void;
     setContextRoutingResponses(registration, (context, options) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         const serialized = JSON.stringify(context.messages);
         if (serialized.includes("pi-flow-task-notification")) {
           rootNotificationCalls++;
         }
-        if (!serialized.includes('"toolName":"Agent"')) {
+        if (!serialized.includes('"toolName":"run_agent"')) {
           return fauxAssistantMessage([
-            fauxToolCall("Agent", { description: "Reload child", prompt: "Wait until reload." }),
+            fauxToolCall("run_agent", { label: "Reload child", prompt: "Wait until reload." }),
           ], { stopReason: "toolUse" });
         }
         rootContinuationStarted = true;
@@ -716,7 +716,7 @@ describe("pi-subagent background progress and status", () => {
     const prompt = session.prompt("Launch one background task before reload.");
     await waitUntil(() => childStarted && rootContinuationStarted);
     const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "Agent") as any;
+      message.role === "toolResult" && message.toolName === "run_agent") as any;
 
     await session.reload();
     releaseRoot();
@@ -736,11 +736,11 @@ describe("pi-subagent background progress and status", () => {
     disposeSession(session);
   });
 
-  it("starts Agent and workflow tasks after a reused extension session boundary", async () => {
+  it("starts run_agent and run_workflow tasks after a reused extension session boundary", async () => {
     const { session, registration, model, modelRegistry, sessionManager } = await createSession({ mode: "tui" });
     let oldChildStarted = false;
     setContextRoutingResponses(registration, (context, options) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         return fauxAssistantMessage("notification observed");
       }
       oldChildStarted = true;
@@ -757,10 +757,10 @@ describe("pi-subagent background progress and status", () => {
       });
     });
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
-    const oldAgentTool = session.getToolDefinition("Agent") as any;
-    const oldAccepted = await oldAgentTool.execute(
+    const oldSubagentTool = session.getToolDefinition("run_agent") as any;
+    const oldAccepted = await oldSubagentTool.execute(
       "old-session-call",
-      { description: "Old session child", prompt: "Wait for the session boundary." },
+      { label: "Old session child", prompt: "Wait for the session boundary." },
       undefined,
       undefined,
       context,
@@ -779,26 +779,27 @@ describe("pi-subagent background progress and status", () => {
     await session.extensionRunner.emit({ type: "session_start", reason: "new" });
 
     setContextRoutingResponses(registration, (providerContext) => {
-      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         return fauxAssistantMessage("notification observed");
       }
       return fauxAssistantMessage("new session child done");
     });
-    const agentTool = session.getToolDefinition("Agent") as any;
+    const agentTool = session.getToolDefinition("run_agent") as any;
     const agentAccepted = await agentTool.execute(
       "new-session-agent",
-      { description: "New session agent", prompt: "Complete after the session boundary." },
+      { label: "New session agent", prompt: "Complete after the session boundary." },
       undefined,
       undefined,
       context,
     );
     const agentTerminal = await waitForTaskNotification(session, agentAccepted.details.task_id);
 
-    const workflowTool = session.getToolDefinition("workflow") as any;
+    const workflowTool = session.getToolDefinition("run_workflow") as any;
     const workflowAccepted = await workflowTool.execute(
       "new-session-workflow",
       {
-        script: "export const meta = { name: 'new_session', description: 'Run after a new session' };\nreturn await agent('Complete after the session boundary.', { label: 'worker' });",
+        name: "new_session",
+        script: "export const meta = { name: 'new_session', description: 'Run after a new session' };\nreturn await run_agent('Complete after the session boundary.', { label: 'worker' });",
       },
       undefined,
       undefined,
@@ -814,11 +815,11 @@ describe("pi-subagent background progress and status", () => {
 
   it("does not bind background execution to the foreground tool signal", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const controller = new AbortController();
     let childContext: Context | undefined;
     setContextRoutingResponses(registration, (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         return fauxAssistantMessage("notification observed");
       }
       childContext = context;
@@ -828,7 +829,7 @@ describe("pi-subagent background progress and status", () => {
     controller.abort();
     const accepted = await tool.execute(
       "pre-aborted-call",
-      { description: "Detached child", prompt: "Run despite the foreground signal." },
+      { label: "Detached child", prompt: "Run despite the foreground signal." },
       controller.signal,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
@@ -844,16 +845,16 @@ describe("pi-subagent background progress and status", () => {
   it("reports timeout through one failed terminal notification", async () => {
     const { session, registration, model, modelRegistry } = await createSession({ subagentTimeoutMs: 20 });
     setContextRoutingResponses(registration, async (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "Agent")) {
+      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
         return fauxAssistantMessage("notification observed");
       }
       await delay(80);
       return fauxAssistantMessage("late output");
     });
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const accepted = await tool.execute(
       "timeout-call",
-      { description: "Slow child", prompt: "Take too long." },
+      { label: "Slow child", prompt: "Take too long." },
       undefined,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
@@ -873,7 +874,7 @@ describe("pi-subagent background progress and status", () => {
     const progressUpdates: unknown[] = [];
     const result = await spawnSubagent({
       toolCallId: "internal-progress",
-      description: "Internal child",
+      label: "Internal child",
       prompt: "Inspect internals.",
       profile,
       model,
@@ -904,7 +905,7 @@ describe("pi-subagent background progress and status", () => {
     ]);
     const result = await spawnSubagent({
       toolCallId: "provider-error",
-      description: "Research config",
+      label: "Research config",
       prompt: "Inspect config loading.",
       profile,
       model,
@@ -934,11 +935,11 @@ describe("pi-subagent background progress and status", () => {
       onWidget: (key, lines) => widgets.push({ key, lines }),
     });
 
-    await executeAgentTask(
+    await executeSubagentTask(
       session,
       registration,
       context,
-      { description: "Usage child", prompt: "Report usage." },
+      { label: "Usage child", prompt: "Report usage." },
       async () => fauxAssistantMessage("usage child done"),
     );
 

@@ -18,10 +18,10 @@ export function getBackendAgentLabel(backend: SubagentBackend | undefined): stri
   return "Agent";
 }
 
-export function getAgentDisplayDescriptor(profile: string, name: string): string {
-  return name ? `${profile}: ${name}` : profile;
+export function getAgentDisplayDescriptor(profile: string, label: string): string {
+  return label ? `${profile}: ${label}` : profile;
 }
 
-export function formatAgentDisplayLabel(metadata: AgentDisplayMetadata, name: string): string {
-  return `${getBackendAgentLabel(metadata.backend)}(${getAgentDisplayDescriptor(metadata.profile, name)})`;
+export function formatAgentDisplayLabel(metadata: AgentDisplayMetadata, label: string): string {
+  return `${getBackendAgentLabel(metadata.backend)}(${getAgentDisplayDescriptor(metadata.profile, label)})`;
 }

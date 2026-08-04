@@ -19,24 +19,24 @@ describe("delegation scenario execution", () => {
     await session.prompt("Answer this narrow local question directly.");
 
     expect(session.messages.some((message: any) =>
-      message.role === "assistant" && Array.isArray(message.content) && message.content.some((item: any) => item.name === "Agent"))).toBe(false);
+      message.role === "assistant" && Array.isArray(message.content) && message.content.some((item: any) => item.name === "run_agent"))).toBe(false);
     expect(JSON.stringify(session.messages)).toContain("direct result");
     disposeSession(session);
   });
 
   it("runs a flat fan-out as independent accepted background tasks", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("Agent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
       const text = JSON.stringify(providerContext.messages);
       return fauxAssistantMessage(text.includes("source") ? "source result" : "test result");
     });
 
     const accepted = await Promise.all([
-      tool.execute("source", { description: "Inspect source", prompt: "Inspect source correctness." }, undefined, undefined, context),
-      tool.execute("tests", { description: "Inspect tests", prompt: "Inspect test coverage." }, undefined, undefined, context),
+      tool.execute("source", { label: "Inspect source", prompt: "Inspect source correctness." }, undefined, undefined, context),
+      tool.execute("tests", { label: "Inspect tests", prompt: "Inspect test coverage." }, undefined, undefined, context),
     ]);
     const terminals = await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
 
@@ -48,11 +48,11 @@ describe("delegation scenario execution", () => {
 
   it("continues one logical child stream with a returned session key", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("Agent") as any;
+    const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     let continuedChildContext: Context | undefined;
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("Agent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
       if (JSON.stringify(providerContext.messages).includes("Recall and refine")) {
         continuedChildContext = providerContext;
         return fauxAssistantMessage("refined flow");
@@ -62,7 +62,7 @@ describe("delegation scenario execution", () => {
 
     const first = await tool.execute(
       "initial",
-      { description: "Initial investigation", prompt: "Inspect and remember the flow." },
+      { label: "Initial investigation", prompt: "Inspect and remember the flow." },
       undefined,
       undefined,
       context,
@@ -71,7 +71,7 @@ describe("delegation scenario execution", () => {
     const second = await tool.execute(
       "continue",
       {
-        description: "Continue investigation",
+        label: "Continue investigation",
         prompt: "Recall and refine the flow.",
         session_key: first.details.session_key,
       },

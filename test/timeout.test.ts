@@ -5,15 +5,15 @@ import type { SubagentToolDetails } from "../src/types.ts";
 describe("subagent timeout helpers", () => {
   it("treats a late successful result as timed out once the timeout has fired", () => {
     const details: SubagentToolDetails = {
-      description: "Late child",
-      subagentType: "general-purpose",
+      label: "Late child",
+      profile: "general-purpose",
       backend: "pi",
       status: "done",
       result: "late success after timeout",
       progress: {
         id: "late-child",
-        description: "Late child",
-        subagentType: "general-purpose",
+        label: "Late child",
+        profile: "general-purpose",
         backend: "pi",
         status: "done",
         startedAt: 1,

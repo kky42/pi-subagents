@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { SubagentBackend, SubagentType } from "../types.ts";
+import type { SubagentBackend, SubagentProfileName } from "../types.ts";
 
 export const SUBAGENT_SESSION_KEY_CUSTOM_TYPE = "pi-flow-subagent-session-key";
 
 export interface SessionKeyBinding {
   key: string;
   sessionId: string;
-  subagentType: SubagentType;
+  profile: SubagentProfileName;
   backend: SubagentBackend;
 }
 
@@ -15,7 +15,7 @@ interface SessionKeyEntryData {
   version?: unknown;
   key?: unknown;
   sessionId?: unknown;
-  subagentType?: unknown;
+  profile?: unknown;
   backend?: unknown;
 }
 
@@ -38,23 +38,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
 }
 
-function parseBindingData(data: unknown): SessionKeyBinding | undefined {
-  if (!isRecord(data)) {
+function parseBindingData(data: unknown, requestedKey: string): SessionKeyBinding | undefined {
+  if (!isRecord(data) || data.key !== requestedKey) {
     return undefined;
   }
   const candidate = data as SessionKeyEntryData;
+  if (candidate.version !== 2) {
+    throw new Error(
+      `session_key "${requestedKey}" uses unsupported persisted binding version ${String(candidate.version)}`,
+    );
+  }
   if (
-    typeof candidate.key !== "string" ||
     typeof candidate.sessionId !== "string" ||
-    typeof candidate.subagentType !== "string" ||
+    typeof candidate.profile !== "string" ||
     (candidate.backend !== "pi" && candidate.backend !== "codex" && candidate.backend !== "claude")
   ) {
-    return undefined;
+    throw new Error(`session_key "${requestedKey}" has invalid persisted binding data`);
   }
   return {
-    key: candidate.key,
+    key: requestedKey,
     sessionId: candidate.sessionId,
-    subagentType: candidate.subagentType,
+    profile: candidate.profile,
     backend: candidate.backend,
   };
 }
@@ -70,7 +74,7 @@ export function getPersistedSessionKeyBinding(ctx: ExtensionContext, key: string
     if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== SUBAGENT_SESSION_KEY_CUSTOM_TYPE) {
       continue;
     }
-    const binding = parseBindingData(entry.data);
+    const binding = parseBindingData(entry.data, key);
     if (binding?.key === key) {
       latest = binding;
     }
@@ -81,22 +85,22 @@ export function getPersistedSessionKeyBinding(ctx: ExtensionContext, key: string
 export function persistSessionKeyBinding(ctx: ExtensionContext, binding: SessionKeyBinding): void {
   const manager = ctx.sessionManager as SessionManagerLike | undefined;
   manager?.appendCustomEntry?.(SUBAGENT_SESSION_KEY_CUSTOM_TYPE, {
-    version: 1,
+    version: 2,
     key: binding.key,
     sessionId: binding.sessionId,
-    subagentType: binding.subagentType,
+    profile: binding.profile,
     backend: binding.backend,
   });
 }
 
 export function assertBindingMatchesProfile(binding: SessionKeyBinding, params: {
-  subagentType: SubagentType;
+  profile: SubagentProfileName;
   backend: SubagentBackend;
 }): void {
-  if (binding.subagentType !== params.subagentType || binding.backend !== params.backend) {
+  if (binding.profile !== params.profile || binding.backend !== params.backend) {
     throw new Error(
-      `session_key "${binding.key}" already belongs to ${binding.subagentType} (${binding.backend}); ` +
-        `cannot reuse it for ${params.subagentType} (${params.backend})`,
+      `session_key "${binding.key}" already belongs to ${binding.profile} (${binding.backend}); ` +
+        `cannot reuse it for ${params.profile} (${params.backend})`,
     );
   }
 }

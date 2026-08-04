@@ -26,7 +26,7 @@ export function subagentTimeoutMessage(timeoutMs: number): string {
   return `Subagent timed out after ${formatDurationMs(timeoutMs)}`;
 }
 
-export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeoutMs: number, description: string): TimeoutSignalState {
+export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeoutMs: number, label: string): TimeoutSignalState {
   if (timeoutMs <= 0 || baseSignal?.aborted) {
     return { signal: baseSignal, timedOut: () => false, cleanup: () => undefined };
   }
@@ -37,7 +37,7 @@ export function createTimeoutSignal(baseSignal: AbortSignal | undefined, timeout
   const timer = setTimeout(() => {
     timedOut = true;
     removeBaseAbortListener();
-    timeoutController.abort(new Error(`Subagent "${description}" timed out after ${formatDurationMs(timeoutMs)}`));
+    timeoutController.abort(new Error(`Subagent "${label}" timed out after ${formatDurationMs(timeoutMs)}`));
   }, timeoutMs);
   timer.unref?.();
 

@@ -11,17 +11,17 @@ import {
 } from "./journal.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "./registry.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
-import type { WorkflowCachedAgentResult } from "./types.ts";
+import type { WorkflowCachedSubagentResult } from "./types.ts";
 
 export const WORKFLOW_PROMPT_SNIPPET = "Orchestrate dependent or larger multi-agent work";
 
 export const WORKFLOW_PROMPT_GUIDELINES = [
-  "Call workflow with exactly one of name, scriptPath, or script, unless replaying a prior task with resumeFromTaskId.",
+  "Always provide name. Omit script and script_path to run that saved workflow; replay with the same name and resume_from_task_id.",
   "Only run trusted workflow scripts; worker VM isolation detects stalls but is not a security boundary.",
 ];
 
 export const WORKFLOW_TOOL_DESCRIPTION = [
-  "Use workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, replay, or larger fan-out.",
+  "Use run_workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, replay, or larger fan-out.",
   "Run a matching saved workflow when available; otherwise provide a trusted ad-hoc script.",
 ].join(" ");
 
@@ -34,19 +34,19 @@ const replySchema = {
 };
 const results = await pipeline(
   args?.items ?? ['src', 'test'],
-  (item, _original, index) => agent('Inspect ' + item, {
+  (item, _original, index) => run_agent('Inspect ' + item, {
     label: 'inspect-' + index,
     phase: 'inspect',
-    subagent_type: 'general-purpose',
+    profile: 'general-purpose',
     session_key: 'item-' + index,
     schema: replySchema,
   }),
   async (first, item, index) => {
     if (!first) return { item, first: null, followup: null };
-    const followup = await agent('Continue with one-sentence advice.', {
+    const followup = await run_agent('Continue with one-sentence advice.', {
       label: 'followup-' + index,
       phase: 'followup',
-      subagent_type: 'general-purpose',
+      profile: 'general-purpose',
       session_key: 'item-' + index,
       schema: replySchema,
     });
@@ -56,43 +56,41 @@ const results = await pipeline(
 return { results };`;
 
 export const workflowToolParameters = Type.Object({
+  name: Type.String({
+    minLength: 1,
+    pattern: ".*\\S.*",
+    description: "Workflow meta.name; required and must match the selected script, path, or replay journal.",
+  }),
   script: Type.Optional(
     Type.String({
-      description: "Trusted ad-hoc workflow JavaScript source; do not include explanatory prose.",
+      description: "Trusted ad-hoc workflow JavaScript source whose meta.name matches name; do not include explanatory prose.",
     }),
   ),
-  name: Type.Optional(
+  script_path: Type.Optional(
     Type.String({
-      description: "Registered saved workflow meta.name.",
-    }),
-  ),
-  scriptPath: Type.Optional(
-    Type.String({
-      description: "Path to a trusted saved or session-persisted workflow script.",
+      description: "Path to a trusted saved or session-persisted workflow script whose meta.name matches name.",
     }),
   ),
   args: Type.Optional(
     Type.Any({ description: "Optional JSON value exposed unchanged to the workflow as the global `args`." }),
   ),
-  resumeFromTaskId: Type.Optional(
+  resume_from_task_id: Type.Optional(
     Type.String({
       description:
-        "Prior workflow task ID to replay. Add scriptPath to replay an edited script; the longest unchanged successful prefix is reused.",
+        "Prior workflow task ID to replay with the same name. Add script_path for an edited replay; the longest unchanged successful prefix is reused.",
     }),
   ),
-});
+}, { additionalProperties: false });
 
 export type WorkflowToolParams = Static<typeof workflowToolParameters>;
 
 export type PreparedWorkflowToolSource = {
   script: string;
-  metaName: string;
   journalWriter?: WorkflowJournalWriter;
-  resumeAgentResults?: WorkflowCachedAgentResult[];
+  resumeSubagentResults?: WorkflowCachedSubagentResult[];
 };
 
 interface PrepareErrorDetails {
-  name: string;
   error: string;
 }
 
@@ -106,10 +104,8 @@ type WorkflowSource =
       script: string;
       source: "inline" | "saved" | "path";
       sourcePath?: string;
-      requestedName?: string;
-      warnings: string[];
     }
-  | { ok: false; message: string; warnings: string[] };
+  | { ok: false; message: string };
 
 function isProjectTrusted(ctx: ExtensionContext): boolean {
   try {
@@ -127,28 +123,22 @@ function redactAbsolutePaths(message: string): string {
   return message.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s:]+/g, "<path>");
 }
 
-function sourceError(
-  _text: string,
-  details: PrepareErrorDetails & Record<string, unknown>,
-): PrepareWorkflowToolSourceResult {
-  return { ok: false, details: { name: details.name, error: details.error } };
+function sourceError(error: string): PrepareWorkflowToolSourceResult {
+  return { ok: false, details: { error } };
 }
 
 function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext): WorkflowSource {
   const inlineScript = typeof params.script === "string" && params.script.trim() ? params.script : undefined;
-  const savedName = typeof params.name === "string" && params.name.trim() ? params.name.trim() : undefined;
-  const scriptPath = typeof params.scriptPath === "string" && params.scriptPath.trim() ? params.scriptPath.trim() : undefined;
-  const sourceCount = Number(Boolean(inlineScript)) + Number(Boolean(savedName)) + Number(Boolean(scriptPath));
-  if (sourceCount !== 1) {
+  const savedName = params.name.trim();
+  const scriptPath = typeof params.script_path === "string" && params.script_path.trim() ? params.script_path.trim() : undefined;
+  if (inlineScript && scriptPath) {
     return {
       ok: false,
-      message:
-        "Workflow requires exactly one non-empty source: `script` for an ad-hoc workflow, `name` for a saved workflow, or `scriptPath` for a persisted script.",
-      warnings: [],
+      message: "Workflow accepts at most one script source: `script` or `script_path`.",
     };
   }
   if (inlineScript) {
-    return { ok: true, script: inlineScript, source: "inline", warnings: [] };
+    return { ok: true, script: inlineScript, source: "inline" };
   }
 
   const sessionWorkflowDir = getSessionWorkflowDir(ctx);
@@ -161,15 +151,13 @@ function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext
       sessionWorkflowDir,
     });
     if (!result.ok) {
-      return { ok: false, message: result.message, warnings: result.warnings };
+      return { ok: false, message: result.message };
     }
     return {
       ok: true,
       script: result.workflow.script,
       source: "path",
       sourcePath: result.workflow.path,
-      requestedName: result.workflow.meta.name,
-      warnings: result.warnings,
     };
   }
 
@@ -178,14 +166,13 @@ function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext
     cwd: ctx.cwd,
     projectTrusted,
   });
-  const workflow = registry.workflows.get(savedName ?? "");
+  const workflow = registry.workflows.get(savedName);
   if (!workflow) {
     return {
       ok: false,
       message: `Unknown saved workflow "${savedName}". Available workflows: ${formatAvailableWorkflowNames([
         ...registry.workflows.keys(),
       ].sort())}.`,
-      warnings: registry.warnings,
     };
   }
   return {
@@ -193,8 +180,6 @@ function resolveWorkflowSource(params: WorkflowToolParams, ctx: ExtensionContext
     script: workflow.script,
     source: "saved",
     sourcePath: workflow.path,
-    requestedName: savedName,
-    warnings: registry.warnings,
   };
 }
 
@@ -213,161 +198,87 @@ export async function prepareWorkflowToolSource(
   taskId: string,
   isTaskActive: (taskId: string) => boolean = () => false,
 ): Promise<PrepareWorkflowToolSourceResult> {
-  const resumeFromTaskId = typeof params.resumeFromTaskId === "string" && params.resumeFromTaskId.trim()
-    ? params.resumeFromTaskId.trim()
+  const workflowName = params.name.trim();
+  const resumeFromTaskId = typeof params.resume_from_task_id === "string" && params.resume_from_task_id.trim()
+    ? params.resume_from_task_id.trim()
     : undefined;
-  const hasExplicitReplayScriptPath = typeof params.scriptPath === "string" && params.scriptPath.trim().length > 0;
+  const hasExplicitReplayScriptPath = typeof params.script_path === "string" && params.script_path.trim().length > 0;
   const sessionWorkflowDir = getSessionWorkflowDir(ctx);
-  if (resumeFromTaskId && (params.script || params.name)) {
-    const message = "Cannot resume workflow: resumeFromTaskId may only be used alone or with scriptPath.";
-    return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+  if (resumeFromTaskId && params.script) {
+    return sourceError(
+      "Cannot resume workflow: resume_from_task_id may only be used with name and optional script_path.",
+    );
   }
 
   let resumeJournal: LoadedWorkflowJournal | undefined;
   let sourceParams = params;
-  if (resumeFromTaskId && !hasExplicitReplayScriptPath) {
+  if (resumeFromTaskId) {
     if (!sessionWorkflowDir) {
-      const message = "Cannot resume workflow: current session has no persisted workflow state.";
-      return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+      return sourceError("Cannot resume workflow: current session has no persisted workflow state.");
     }
     try {
       resumeJournal = await loadWorkflowJournal(sessionWorkflowDir, resumeFromTaskId);
-    } catch {
-      const message = `Cannot resume workflow: task journal for ${resumeFromTaskId} could not be read.`;
-      return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return sourceError(
+        `Cannot resume workflow: task journal for ${resumeFromTaskId} could not be read: ${redactAbsolutePaths(detail)}`,
+      );
     }
     if (!resumeJournal) {
-      const message = `Cannot resume workflow: task journal not found for ${resumeFromTaskId}.`;
-      return sourceError(message, { name: "workflow", error: message, resumeFromTaskId });
+      return sourceError(`Cannot resume workflow: task journal not found for ${resumeFromTaskId}.`);
+    }
+    if (resumeJournal.name !== workflowName) {
+      return sourceError(
+        `Cannot resume workflow: task ${resumeFromTaskId} belongs to workflow "${resumeJournal.name ?? "unknown"}", not "${workflowName}".`,
+      );
     }
     if (resumeJournal.status === "running" && isTaskActive(resumeFromTaskId)) {
-      const message = `Cannot resume workflow: task ${resumeFromTaskId} is still running.`;
-      return sourceError(message, { name: resumeJournal.name ?? "workflow", error: message, resumeFromTaskId });
+      return sourceError(`Cannot resume workflow: task ${resumeFromTaskId} is still running.`);
     }
-    if (!resumeJournal.scriptPath) {
-      const message = `Cannot resume workflow: task ${resumeFromTaskId} has no persisted script.`;
-      return sourceError(message, { name: resumeJournal.name ?? "workflow", error: message, resumeFromTaskId });
+    if (!hasExplicitReplayScriptPath && !resumeJournal.scriptPath) {
+      return sourceError(`Cannot resume workflow: task ${resumeFromTaskId} has no persisted script.`);
     }
-    sourceParams = { ...params, scriptPath: resumeJournal.scriptPath };
+    if (!hasExplicitReplayScriptPath) {
+      sourceParams = { ...params, script_path: resumeJournal.scriptPath };
+    }
   }
 
   const source = resolveWorkflowSource(sourceParams, ctx);
   if (!source.ok) {
-    const message = redactAbsolutePaths(source.message);
-    return sourceError(message, {
-      name: "workflow",
-      error: message,
-    });
+    return sourceError(redactAbsolutePaths(source.message));
   }
 
   const script = normalizeWorkflowScript(source.script);
-  let metaName = source.requestedName ?? "workflow";
+  let scriptName: string;
   try {
-    metaName = parseWorkflowScript(script).meta.name;
+    scriptName = parseWorkflowScript(script).meta.name.trim();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const publicError = `Workflow script is invalid; no subagents were started: ${message}`;
-    return sourceError(publicError, {
-      name: metaName,
-      error: publicError,
-      logs: source.warnings,
-      source: source.source,
-      sourcePath: source.sourcePath,
-      scriptPath: source.sourcePath,
-    });
+    return sourceError(`Workflow script is invalid; no subagents were started: ${message}`);
+  }
+  if (scriptName !== workflowName) {
+    return sourceError(`Workflow name "${workflowName}" does not match script meta.name "${scriptName}".`);
   }
 
   const identity = createWorkflowTaskIdentity(taskId, script, params.args);
   if (resumeFromTaskId && !hasExplicitReplayScriptPath && resumeJournal?.scriptHash !== identity.scriptHash) {
-    const message = `Cannot resume workflow: persisted script for task ${resumeFromTaskId} has changed.`;
-    return sourceError(message, {
-      name: metaName,
-      error: message,
-      logs: source.warnings,
-      source: source.source,
-      sourcePath: source.sourcePath,
-      scriptPath: source.sourcePath,
-      taskId: identity.taskId,
-      resumeFromTaskId,
-    });
+    return sourceError(`Cannot resume workflow: persisted script for task ${resumeFromTaskId} has changed.`);
   }
   let scriptPath = source.sourcePath;
   if (sessionWorkflowDir) {
     try {
-      scriptPath = await persistWorkflowScript({ dir: sessionWorkflowDir, metaName, scriptHash: identity.scriptHash, script });
-    } catch {
-      const message = "Workflow persistence failed.";
-      return sourceError(message, {
-        name: metaName,
-        error: message,
-        logs: source.warnings,
-        source: source.source,
-        sourcePath: source.sourcePath,
-        taskId: identity.taskId,
+      scriptPath = await persistWorkflowScript({
+        dir: sessionWorkflowDir,
+        metaName: workflowName,
+        scriptHash: identity.scriptHash,
+        script,
       });
+    } catch {
+      return sourceError("Workflow persistence failed.");
     }
   }
 
-  let resumeAgentResults: WorkflowCachedAgentResult[] | undefined = undefined;
-  if (resumeFromTaskId) {
-    if (!sessionWorkflowDir) {
-      const message = "Cannot resume workflow: current session has no persisted workflow state.";
-      return sourceError(message, {
-        name: metaName,
-        error: message,
-        logs: source.warnings,
-        source: source.source,
-        sourcePath: source.sourcePath,
-        scriptPath,
-        taskId: identity.taskId,
-        resumeFromTaskId,
-      });
-    }
-    if (!resumeJournal) {
-      try {
-        resumeJournal = await loadWorkflowJournal(sessionWorkflowDir, resumeFromTaskId);
-      } catch {
-        const message = `Cannot resume workflow: task journal for ${resumeFromTaskId} could not be read.`;
-        return sourceError(message, {
-          name: metaName,
-          error: message,
-          logs: source.warnings,
-          source: source.source,
-          sourcePath: source.sourcePath,
-          scriptPath,
-          taskId: identity.taskId,
-          resumeFromTaskId,
-        });
-      }
-    }
-    if (!resumeJournal) {
-      const message = `Cannot resume workflow: task journal not found for ${resumeFromTaskId}.`;
-      return sourceError(message, {
-        name: metaName,
-        error: message,
-        logs: source.warnings,
-        source: source.source,
-        sourcePath: source.sourcePath,
-        scriptPath,
-        taskId: identity.taskId,
-        resumeFromTaskId,
-      });
-    }
-    if (resumeJournal.status === "running" && isTaskActive(resumeFromTaskId)) {
-      const message = `Cannot resume workflow: task ${resumeFromTaskId} is still running.`;
-      return sourceError(message, {
-        name: metaName,
-        error: message,
-        logs: source.warnings,
-        source: source.source,
-        sourcePath: source.sourcePath,
-        scriptPath,
-        taskId: identity.taskId,
-        resumeFromTaskId,
-      });
-    }
-    resumeAgentResults = resumeJournal.agentResults;
-  }
+  const resumeSubagentResults: WorkflowCachedSubagentResult[] | undefined = resumeJournal?.subagentResults;
 
   let journalWriter: WorkflowJournalWriter | undefined;
   if (sessionWorkflowDir) {
@@ -375,23 +286,13 @@ export async function prepareWorkflowToolSource(
       journalWriter = await createWorkflowJournalWriter({
         dir: sessionWorkflowDir,
         identity,
-        name: metaName,
+        name: workflowName,
         source: source.source,
         scriptPath,
         resumeFromTaskId,
       });
     } catch {
-      const message = "Workflow journal setup failed.";
-      return sourceError(message, {
-        name: metaName,
-        error: message,
-        logs: source.warnings,
-        source: source.source,
-        sourcePath: source.sourcePath,
-        scriptPath,
-        taskId: identity.taskId,
-        resumeFromTaskId,
-      });
+      return sourceError("Workflow journal setup failed.");
     }
   }
 
@@ -399,9 +300,8 @@ export async function prepareWorkflowToolSource(
     ok: true,
     value: {
       script,
-      metaName,
       journalWriter,
-      resumeAgentResults,
+      resumeSubagentResults,
     },
   };
 }

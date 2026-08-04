@@ -15,7 +15,7 @@ import {
 } from "../core/task-manager.ts";
 import { getSubagentProfiles } from "../profiles.ts";
 import type { SubagentTelemetry, SubagentUsage } from "../types.ts";
-import { createWorkflowAgentRunner } from "./agent-runner.ts";
+import { createWorkflowSubagentRunner } from "./subagent-runner.ts";
 import { runWorkflow } from "./runtime.ts";
 import {
   prepareWorkflowToolSource,
@@ -28,14 +28,13 @@ import {
 
 interface WorkflowStatusCallbacks {
   start(ctx: ExtensionContext, taskId: string, name: string): void;
-  rename(ctx: ExtensionContext, taskId: string, name: string): void;
-  queueAgent(ctx: ExtensionContext, taskId: string): void;
-  finishAgent(ctx: ExtensionContext, taskId: string): void;
+  queueSubagent(ctx: ExtensionContext, taskId: string): void;
+  finishSubagent(ctx: ExtensionContext, taskId: string): void;
   refresh(ctx: ExtensionContext): void;
   finish(taskId: string): void;
 }
 
-export interface CreateWorkflowToolOptions {
+export interface CreateRunWorkflowToolOptions {
   getTaskManager: () => BackgroundTaskManager;
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -44,25 +43,27 @@ export interface CreateWorkflowToolOptions {
   updateStatus: (ctx: ExtensionContext, taskId: string, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
 }
 
-export function createWorkflowTool(
-  options: CreateWorkflowToolOptions,
+export function createRunWorkflowTool(
+  options: CreateRunWorkflowToolOptions,
 ): ToolDefinition<typeof workflowToolParameters, WorkflowAcceptedTaskEnvelope> {
   return defineTool({
-    name: "workflow",
-    label: "Workflow",
+    name: "run_workflow",
+    label: "Run Workflow",
     description: WORKFLOW_TOOL_DESCRIPTION,
     promptSnippet: WORKFLOW_PROMPT_SNIPPET,
     promptGuidelines: WORKFLOW_PROMPT_GUIDELINES,
     parameters: workflowToolParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const name = requiredWorkflowName(params);
+      const normalizedParams = { ...params, name };
       const taskManager = options.getTaskManager();
       const accepted = taskManager.start({
         taskType: "workflow",
-        name: initialWorkflowName(params),
+        name,
         run: async (signal, taskId) => {
-          options.status?.start(ctx, taskId, initialWorkflowName(params));
+          options.status?.start(ctx, taskId, name);
           try {
-            const prepared = await prepareWorkflowToolSource(params, ctx, taskId, (resumeTaskId) =>
+            const prepared = await prepareWorkflowToolSource(normalizedParams, ctx, taskId, (resumeTaskId) =>
               taskManager.isActive(resumeTaskId));
             if (!prepared.ok) {
               throw new Error(prepared.details.error);
@@ -70,41 +71,39 @@ export function createWorkflowTool(
 
             const {
               script,
-              metaName,
               journalWriter,
-              resumeAgentResults,
+              resumeSubagentResults,
             } = prepared.value;
-            options.status?.rename(ctx, taskId, metaName);
             const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
-            const runner = createWorkflowAgentRunner({
+            const runner = createWorkflowSubagentRunner({
               profiles,
               ctx,
               thinkingLevel: options.getThinkingLevel(),
               timeoutMs: options.getSubagentTimeoutMs(),
               toolCallId: taskId,
               onProgress: ctx.hasUI && options.status ? () => options.status?.refresh(ctx) : undefined,
-              onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:agent:${index}`, usage, telemetry),
+              onUsage: (index, usage, telemetry) => options.updateStatus(ctx, `${taskId}:subagent:${index}`, usage, telemetry),
             });
 
             try {
               const result = await runWorkflow(script, {
-                args: params.args,
+                args: normalizedParams.args,
                 cwd: ctx.cwd,
                 signal,
                 limiter: options.getLimiter(),
-                serializeAgent: runner.serializeAgent,
-                runAgent: runner.runAgent,
-                resumeAgentResults,
-                onAgentQueued: () => options.status?.queueAgent(ctx, taskId),
-                onAgentEnd: () => options.status?.finishAgent(ctx, taskId),
+                serializeSubagent: runner.serializeSubagent,
+                runSubagent: runner.runSubagent,
+                resumeSubagentResults,
+                onSubagentQueued: () => options.status?.queueSubagent(ctx, taskId),
+                onSubagentEnd: () => options.status?.finishSubagent(ctx, taskId),
                 onLog: (message) => {
                   if (journalWriter) {
                     void journalWriter.appendLog(message).catch(() => {});
                   }
                 },
-                onAgentResult: async (event) => {
+                onSubagentResult: async (event) => {
                   runner.restoreSessionBinding(event);
-                  await journalWriter?.appendAgentResult(event);
+                  await journalWriter?.appendSubagentResult(event);
                 },
               });
               try {
@@ -112,10 +111,7 @@ export function createWorkflowTool(
               } catch {
                 // A completed workflow result remains valid when only replay journaling fails.
               }
-              return {
-                name: result.meta.name,
-                content: workflowContent(result.result),
-              };
+              return workflowContent(result.result);
             } catch (error) {
               try {
                 await journalWriter?.fail(error instanceof Error ? error.message : String(error));
@@ -135,7 +131,7 @@ export function createWorkflowTool(
       if (context.executionStarted) {
         return new Text("", 0, 0);
       }
-      const name = initialWorkflowName(args);
+      const name = typeof args.name === "string" ? args.name.trim() : "";
       return new Text(`${theme.bold("Workflow")}${theme.fg("muted", `(${name})`)}`, 0, 0);
     },
     renderResult(result, _options, theme) {
@@ -149,22 +145,12 @@ export function createWorkflowTool(
   });
 }
 
-function initialWorkflowName(params: WorkflowToolParams): string {
+function requiredWorkflowName(params: WorkflowToolParams): string {
   const name = typeof params.name === "string" ? params.name.trim() : "";
-  if (name) {
-    return name;
+  if (!name) {
+    throw new Error("Workflow name must contain non-whitespace characters");
   }
-  if (typeof params.script === "string" && params.script.trim()) {
-    const prefix = params.script.slice(0, 4096);
-    const match = prefix.match(
-      /^\s*(?:```(?:js|javascript)?\s*)?export\s+const\s+meta\s*=\s*\{[\s\S]*?\bname\s*:\s*(['"])([a-z0-9][a-z0-9_-]*)\1/i,
-    );
-    return match?.[2] ?? "workflow";
-  }
-  if (typeof params.scriptPath === "string" && params.scriptPath.trim()) {
-    return params.scriptPath.trim().split(/[\\/]/).at(-1)?.replace(/\.js$/i, "") || "workflow";
-  }
-  return "workflow";
+  return name;
 }
 
 function workflowContent(result: unknown): string {

@@ -70,7 +70,7 @@ function parseArgs(argv) {
 function printHelp() {
   console.log(`Usage: node scripts/e2e/duplicate-messages.mjs [options]
 
-Runs the real foreground Pi and background PiFlow Agent scenario that originally exposed repeated
+Runs the real foreground Pi and background PiFlow run_agent scenario that originally exposed repeated
 commentary/final-answer text blocks. Message block shapes and exact duplicates are observations only.
 Only process, timeout, and incomplete background-task delivery failures make the command fail.
 
@@ -161,7 +161,7 @@ function prepareFixture(root) {
 
 For a comprehensive review of repo-a, repo-b, and repo-c:
 
-- Delegate each repository review and the cross-repository compatibility review to independent expert Agents.
+- Delegate each repository review and the cross-repository compatibility review to independent expert run_agent tasks using the expert profile.
 - While those background reviews run, independently inspect the evidence chain starting at chain/start.txt.
 - Each chain file reveals the next path in its NEXT field. Read every link in order with the read tool until NEXT: END.
 - The foreground chain and all delegated reviews are required evidence for the final answer.
@@ -214,7 +214,7 @@ async function runOnce(options, runRoot, repetition) {
     "--no-skills",
     "--no-prompt-templates",
     "--no-themes",
-    "--tools", "read,Agent",
+    "--tools", "read,run_agent",
     "--approve",
   ], { cwd: fixture, env: environment, stdio: ["pipe", "pipe", "pipe"] });
 
@@ -275,7 +275,7 @@ async function runOnce(options, runRoot, repetition) {
         return;
       }
       if (event.type === "tool_execution_end") {
-        if (event.toolName === "Agent" && event.result?.details?.status === "accepted") accepted += 1;
+        if (event.toolName === "run_agent" && event.result?.details?.status === "accepted") accepted += 1;
         if (event.toolName === "read" && !event.isError) reads += 1;
       }
       if (event.type === "message_end") {

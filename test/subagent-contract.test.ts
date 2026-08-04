@@ -24,7 +24,7 @@ function expectDescribedProperties(properties: Record<string, { description?: st
   }
 }
 
-describe("pi-subagent agent contract", () => {
+describe("pi-subagent tool contract", () => {
   let cwd = "";
   let agentDir = "";
   let registrations: Array<{ unregister: () => void }> = [];
@@ -51,35 +51,39 @@ describe("pi-subagent agent contract", () => {
     return rootContext?.systemPrompt ?? "";
   }
 
-  it("registers the Agent API shape", async () => {
+  it("registers the run_agent API shape", async () => {
     const { session } = await createSession();
-    const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
+    const tool = session.getAllTools().find((candidate) => candidate.name === "run_agent");
     const schema = tool?.parameters as {
       required?: string[];
+      additionalProperties?: boolean;
       properties: Record<string, { description?: string }>;
     } | undefined;
     const properties = schema?.properties ?? {};
 
     expect(tool?.description.trim().length).toBeGreaterThan(0);
-    expect(schema?.required).toEqual(["description", "prompt"]);
-    expect(Object.keys(properties).sort()).toEqual(["description", "prompt", "session_key", "subagent_type"]);
+    expect(schema?.required).toEqual(["label", "prompt"]);
+    expect(schema?.additionalProperties).toBe(false);
+    expect(Object.keys(properties).sort()).toEqual(["label", "profile", "prompt", "session_key"]);
     expectDescribedProperties(properties);
 
     disposeSession(session);
   });
 
-  it("registers the workflow API shape", async () => {
+  it("registers the run_workflow API shape", async () => {
     const { session } = await createSession();
-    const tool = session.getAllTools().find((candidate) => candidate.name === "workflow");
+    const tool = session.getAllTools().find((candidate) => candidate.name === "run_workflow");
     const schema = tool?.parameters as {
       required?: string[];
+      additionalProperties?: boolean;
       properties: Record<string, { description?: string }>;
     } | undefined;
     const properties = schema?.properties ?? {};
 
     expect(tool?.description.trim().length).toBeGreaterThan(0);
-    expect(schema?.required ?? []).toEqual([]);
-    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resumeFromTaskId", "script", "scriptPath"]);
+    expect(schema?.required).toEqual(["name"]);
+    expect(schema?.additionalProperties).toBe(false);
+    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resume_from_task_id", "script", "script_path"]);
     expectDescribedProperties(properties);
 
     disposeSession(session);
@@ -118,10 +122,10 @@ describe("pi-subagent agent contract", () => {
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     writeFileSync(
       join(agentDir, "workflows", "review.js"),
-      `export const meta = { name: 'review_flow', description: 'Review source and tests.' };\nreturn await agent('${workflowBodySentinel}');`,
+      `export const meta = { name: 'review_flow', description: 'Review source and tests.' };\nreturn await run_agent('${workflowBodySentinel}');`,
     );
 
-    const prompt = await captureRootPrompt(["Agent", "workflow"]);
+    const prompt = await captureRootPrompt(["run_agent", "run_workflow"]);
     const profiles = getSubagentProfiles(agentDir);
 
     expect(occurrenceCount(prompt, "- reviewer: Reviews source changes.")).toBe(1);
@@ -151,7 +155,7 @@ describe("pi-subagent agent contract", () => {
       const description = index === 25 ? longDescription : `Description ${index}`;
       writeFileSync(
         join(workflowsDir, `${name}.js`),
-        `export const meta = { name: '${name}', description: '${description}' };\nreturn await agent('run');`,
+        `export const meta = { name: '${name}', description: '${description}' };\nreturn await run_agent('run');`,
       );
     }
 
@@ -164,7 +168,7 @@ describe("pi-subagent agent contract", () => {
     expect(prompt).toContain(longDescription);
   });
 
-  it("registers Agent when loaded through additionalExtensionPaths", async () => {
+  it("registers run_agent when loaded through additionalExtensionPaths", async () => {
     const faux = fauxProvider({
       models: [{ id: "faux-thinker", name: "Faux Thinker", reasoning: true }],
     });
@@ -205,9 +209,9 @@ describe("pi-subagent agent contract", () => {
     trackSession(session);
     await session.bindExtensions({});
 
-    const tool = session.getAllTools().find((candidate) => candidate.name === "Agent");
+    const tool = session.getAllTools().find((candidate) => candidate.name === "run_agent");
     expect(tool).toBeDefined();
-    expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty("subagent_type");
+    expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty("profile");
     expect((tool?.parameters as { properties: Record<string, unknown> }).properties).toHaveProperty("session_key");
 
     disposeSession(session);

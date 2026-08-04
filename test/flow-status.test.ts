@@ -30,17 +30,17 @@ function usage(input: number, output: number, cacheRead = 0, cost = 0): Subagent
 }
 
 describe("flow status display", () => {
-  it("renders at most five active lines with fair Agent and Workflow detail", () => {
+  it("renders at most five active lines with fair subagent and workflow detail", () => {
     const state = createFlowStatusState();
     state.tasks = {
       agent: { finished: 0, total: 4 },
       workflow: { finished: 0, total: 2 },
     };
     for (let index = 0; index < 4; index++) {
-      state.activeAgents.set(`agent-${index}`, {
+      state.activeSubagents.set(`agent-${index}`, {
         id: `agent-${index}`,
-        name: `task ${index}`,
-        subagentType: index === 0 ? "context-gather" : "expert",
+        label: `task ${index}`,
+        profile: index === 0 ? "context-gather" : "expert",
         backend: index === 0 ? "codex" : "pi",
         executionState: "running",
         queuedAt: index * 1000,
@@ -54,10 +54,10 @@ describe("flow status display", () => {
         id: `workflow-${index}`,
         name: `review_${index}`,
         startedAt: 4000 + index * 1000,
-        finishedAgents: index + 2,
-        totalAgents: 6,
+        finishedSubagents: index + 2,
+        totalSubagents: 6,
       });
-      recordFlowUsage(state, `workflow-${index}:agent:1`, usage(200, 20), telemetry);
+      recordFlowUsage(state, `workflow-${index}:subagent:1`, usage(200, 20), telemetry);
     }
 
     const lines = buildFlowStatusLines(state, 32_000);
@@ -69,24 +69,24 @@ describe("flow status display", () => {
     expect(lines.at(-1)).toBe("… 2 more agents, 1 more workflow");
   });
 
-  it("keeps queued Agents static beside running Agents and one Workflow row", () => {
+  it("keeps queued subagents static beside running subagents and one workflow row", () => {
     const state = createFlowStatusState();
     state.tasks = {
       agent: { finished: 0, total: 2 },
       workflow: { finished: 0, total: 1 },
     };
-    state.activeAgents.set("queued-agent", {
+    state.activeSubagents.set("queued-agent", {
       id: "queued-agent",
-      name: "waiting",
-      subagentType: "general-purpose",
+      label: "waiting",
+      profile: "general-purpose",
       backend: "pi",
       executionState: "queued",
       queuedAt: 1_000,
     });
-    state.activeAgents.set("running-agent", {
+    state.activeSubagents.set("running-agent", {
       id: "running-agent",
-      name: "working",
-      subagentType: "reviewer",
+      label: "working",
+      profile: "reviewer",
       backend: "codex",
       executionState: "running",
       queuedAt: 2_000,
@@ -97,8 +97,8 @@ describe("flow status display", () => {
       id: "workflow",
       name: "review_flow",
       startedAt: 3_000,
-      finishedAgents: 1,
-      totalAgents: 3,
+      finishedSubagents: 1,
+      totalSubagents: 3,
     });
     recordFlowUsage(state, "queued-agent", usage(500, 50), telemetry);
     recordFlowUsage(state, "running-agent", usage(100, 10), telemetry);
@@ -110,7 +110,7 @@ describe("flow status display", () => {
     expect(lines[1]).toBe("◌ Pi Agent(general-purpose: waiting) queued");
     expect(lines[1]).not.toMatch(/\d+s|event|↑|↓/);
     expect(lines[2]).toContain("Codex Agent(reviewer: working) 1s · 3 events · ↑100 ↓10 CH0.0%");
-    expect(lines[3]).toContain("Workflow(review_flow) 7s · 1/3 agents");
+    expect(lines[3]).toContain("Workflow(review_flow) 7s · 1/3 subagents");
   });
 
   it("uses pi's spinner animation while keeping widget text consistently dim", () => {
@@ -120,10 +120,10 @@ describe("flow status display", () => {
       agent: { finished: 0, total: 1 },
       workflow: { finished: 0, total: 0 },
     };
-    state.activeAgents.set("agent", {
+    state.activeSubagents.set("agent", {
       id: "agent",
-      name: "working",
-      subagentType: "general-purpose",
+      label: "working",
+      profile: "general-purpose",
       backend: "pi",
       executionState: "running",
       queuedAt: 1_000,
@@ -171,19 +171,19 @@ describe("flow status display", () => {
       workflow: { finished: 0, total: 1 },
     };
     for (let index = 0; index < 4; index++) {
-      state.activeAgents.set(`agent-${index}`, index === 3
+      state.activeSubagents.set(`agent-${index}`, index === 3
         ? {
             id: `agent-${index}`,
-            name: `long-queued-agent-${index}`,
-            subagentType: "general-purpose",
+            label: `long-queued-agent-${index}`,
+            profile: "general-purpose",
             backend: "pi",
             executionState: "queued",
             queuedAt: index,
           }
         : {
             id: `agent-${index}`,
-            name: `long-running-agent-${index}`,
-            subagentType: "general-purpose",
+            label: `long-running-agent-${index}`,
+            profile: "general-purpose",
             backend: "pi",
             executionState: "running",
             queuedAt: index,
@@ -195,8 +195,8 @@ describe("flow status display", () => {
       id: "workflow-1",
       name: "long-running-workflow",
       startedAt: 10,
-      finishedAgents: 2,
-      totalAgents: 8,
+      finishedSubagents: 2,
+      totalSubagents: 8,
     });
     let widget: unknown;
     const ctx = {
@@ -230,10 +230,10 @@ describe("flow status display", () => {
       agent: { finished: 6, total: 6 },
       workflow: { finished: 1, total: 1 },
     };
-    state.activeAgents.set("stale", {
+    state.activeSubagents.set("stale", {
       id: "stale",
-      name: "must not render",
-      subagentType: "expert",
+      label: "must not render",
+      profile: "expert",
       backend: "pi",
       executionState: "running",
       queuedAt: 0,

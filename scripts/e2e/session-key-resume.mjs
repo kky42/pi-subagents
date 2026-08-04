@@ -131,9 +131,9 @@ function analyzeTaskMessages(root) {
       try { record = JSON.parse(line); } catch { continue; }
       const message = record.message;
       for (const item of Array.isArray(message?.content) ? message.content : []) {
-        if (item?.type === "toolCall" && item.name === "Agent") calls.push(item.arguments ?? {});
+        if (item?.type === "toolCall" && item.name === "run_agent") calls.push(item.arguments ?? {});
       }
-      if (message?.role === "toolResult" && message.toolName === "Agent" && message.details?.status === "accepted") {
+      if (message?.role === "toolResult" && message.toolName === "run_agent" && message.details?.status === "accepted") {
         accepted.push(message.details);
       }
       const custom = record.type === "custom_message" ? record : message?.role === "custom" ? message : undefined;
@@ -206,7 +206,7 @@ function writePrompt(runRoot, backend, profileName, expectedPrefix) {
   ensureDir(path.dirname(promptPath));
   const firstPrompt = "Read e2e-secret.txt in a way that leaves its exact trimmed content visible in this subagent session's tool transcript, remember that exact content, delete e2e-secret.txt, and then reply exactly STEP1_DONE.";
   const secondPrompt = `Using only the prior conversation in this same subagent session, reply exactly ${expectedPrefix}:<remembered secret>. Do not read files.`;
-  writeFileSync(promptPath, `You are testing pi-flow generated session_key continuation for backend ${backend}.\n\nYou MUST call the Agent tool exactly twice, sequentially, with subagent_type "${profileName}". Do not pass session_key on the first call. Wait for its completed task notification, copy the returned session_key exactly, and pass that key on the second call. Do not invent or preselect a key.\n\nFirst Agent call:\n- description: "${backend} remember secret"\n- prompt exactly:\n${firstPrompt}\n\nSecond Agent call after the first terminal notification:\n- description: "${backend} recall secret"\n- session_key: the exact generated session_key returned by the first Agent task\n- prompt exactly:\n${secondPrompt}\n\nAfter the second terminal notification arrives, reply with exactly the second subagent's token line and nothing else.\n`, "utf8");
+  writeFileSync(promptPath, `You are testing pi-flow generated session_key continuation for backend ${backend}.\n\nYou MUST call the run_agent tool exactly twice, sequentially, with profile "${profileName}". Do not pass session_key on the first call. Wait for its completed task notification, copy the returned session_key exactly, and pass that key on the second call. Do not invent or preselect a key.\n\nFirst run_agent call:\n- label: "${backend} remember secret"\n- prompt exactly:\n${firstPrompt}\n\nSecond run_agent call after the first terminal notification:\n- label: "${backend} recall secret"\n- session_key: the exact generated session_key returned by the first run_agent task\n- prompt exactly:\n${secondPrompt}\n\nAfter the second terminal notification arrives, reply with exactly the second subagent's token line and nothing else.\n`, "utf8");
   return promptPath;
 }
 
@@ -244,7 +244,7 @@ async function runBackend(options, backend) {
       "--no-prompt-templates",
       "--no-themes",
       "--no-context-files",
-      "--tools", "Agent",
+      "--tools", "run_agent",
       "--approve",
       `@${promptPath}`,
     ];
@@ -267,15 +267,17 @@ async function runBackend(options, backend) {
     assert(!run.timedOut, `[${backend}] pi timed out after ${options.timeoutMs}ms`);
     assert(run.code === 0, `[${backend}] pi exited with ${run.code}${run.signal ? ` (${run.signal})` : ""}\nSTDOUT:\n${run.stdout}\nSTDERR:\n${run.stderr}`);
     assert(transcriptText.includes(profileName), `[${backend}] session/output did not mention profile ${profileName}`);
-    assert(tasks.calls.length === 2, `[${backend}] expected exactly two Agent calls, observed ${tasks.calls.length}`);
-    assert(tasks.calls[0].session_key === undefined, `[${backend}] first Agent call must omit session_key`);
-    assert(tasks.accepted.length === 2, `[${backend}] expected two accepted Agent results, observed ${tasks.accepted.length}`);
+    assert(tasks.calls.length === 2, `[${backend}] expected exactly two run_agent calls, observed ${tasks.calls.length}`);
+    assert(tasks.calls.every((call) => call.profile === profileName), `[${backend}] run_agent calls did not select profile ${profileName}`);
+    assert(tasks.calls[0].session_key === undefined, `[${backend}] first run_agent call must omit session_key`);
+    assert(tasks.accepted.length === 2, `[${backend}] expected two accepted run_agent results, observed ${tasks.accepted.length}`);
+    assert(tasks.accepted.every((item) => item.task_type === "agent"), `[${backend}] accepted task_type was not agent`);
     const generatedKey = tasks.accepted[0].session_key;
-    assert(/^session_[a-f0-9]{32}$/.test(generatedKey ?? ""), `[${backend}] first Agent did not return a generated session_key`);
-    assert(tasks.calls[1].session_key === generatedKey, `[${backend}] second Agent call did not reuse the generated session_key`);
+    assert(/^session_[a-f0-9]{32}$/.test(generatedKey ?? ""), `[${backend}] first run_agent did not return a generated session_key`);
+    assert(tasks.calls[1].session_key === generatedKey, `[${backend}] second run_agent call did not reuse the generated session_key`);
     assert(tasks.accepted[1].session_key === generatedKey, `[${backend}] second accepted result changed session_key`);
-    assert(tasks.terminal.length === 2, `[${backend}] expected two terminal Agent notifications, observed ${tasks.terminal.length}`);
-    assert(tasks.terminal.every((item) => item.status === "completed"), `[${backend}] an Agent task did not complete successfully`);
+    assert(tasks.terminal.length === 2, `[${backend}] expected two terminal run_agent notifications, observed ${tasks.terminal.length}`);
+    assert(tasks.terminal.every((item) => item.status === "completed"), `[${backend}] a run_agent task did not complete successfully`);
     assert(tasks.terminal.every((item) => tasks.accepted.some((start) => start.task_id === item.task_id)), `[${backend}] terminal task_id did not match an accepted task`);
     assert(transcriptText.includes("STEP1_DONE"), `[${backend}] first child result was not observed`);
     assert(transcriptText.includes(expected), `[${backend}] expected resumed token not found: ${expected}`);
