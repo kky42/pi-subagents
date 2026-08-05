@@ -137,6 +137,12 @@ describe("pi-subagent tool contract", () => {
     }
   });
 
+  it("does not inject the removed background lifecycle contract", async () => {
+    const prompt = await captureRootPrompt(["run_agent", "run_workflow"]);
+
+    expect(prompt).not.toMatch(/accepted task|completion notification|background task|sleep or poll/i);
+  });
+
   it("retains a custom base system prompt", async () => {
     const customPrompt = "CUSTOM_SYSTEM_PROMPT_SENTINEL";
     const prompt = await captureRootPrompt([], customPrompt);

@@ -1,11 +1,14 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
-import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
-import { getSubagentProfiles } from "../src/profiles.ts";
-import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../src/core/spawn.ts";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, type Context } from "@earendil-works/pi-ai";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createProgressEmitter,
+  MAX_ACTIVITY_LINE_CHARS,
+  MAX_ACTIVITY_LINES,
+  MAX_PROGRESS_METADATA_CHARS,
+  MAX_PROGRESS_RESULT_CHARS,
+  MAX_PROGRESS_UPDATE_JSON_CHARS,
+} from "../src/core/progress.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 function delay(ms: number): Promise<void> {
@@ -24,928 +27,331 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1000): Promise<vo
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
-describe("pi-subagent background progress and status", () => {
-  let agentDir = "";
+function terminalEnvelope(result: { content: Array<{ text: string }> }) {
+  return JSON.parse(result.content[0].text) as {
+    task_id: string;
+    task_type: "agent";
+    status: "completed" | "failed";
+    session_key: string;
+    label: string;
+    content: string;
+  };
+}
+
+function customTaskNotifications(session: { messages: readonly unknown[] }): unknown[] {
+  return session.messages.filter((message: any) =>
+    message?.role === "custom" && message.customType === "pi-flow-task-notification");
+}
+
+describe("direct subagent progress payloads", () => {
+  it("bounds heartbeat updates and keeps prior snapshots immutable", async () => {
+    vi.useFakeTimers();
+    try {
+      const updates: any[] = [];
+      const emitter = createProgressEmitter({
+        toolCallId: `call-${"i".repeat(10_000)}`,
+        label: `label-${"l".repeat(10_000)}`,
+        profile: `profile-${"p".repeat(10_000)}`,
+        backend: "pi",
+        enabled: true,
+        onProgress: (update) => updates.push(update),
+      });
+      for (let index = 0; index < 100; index++) {
+        emitter.addActivity(`Read item ${index}: ${"activity ".repeat(2_000)}TAIL_${index}`);
+      }
+
+      emitter.emit();
+      emitter.startHeartbeat();
+      const firstUpdate = updates[0];
+      const firstSerialized = JSON.stringify(firstUpdate);
+      await vi.advanceTimersByTimeAsync(2_100);
+      emitter.replaceLatestActivity(`Updated ${"z".repeat(20_000)}FINAL_TAIL`);
+      emitter.emit();
+      emitter.stop();
+
+      expect(updates.length).toBeGreaterThanOrEqual(4);
+      expect(JSON.stringify(firstUpdate)).toBe(firstSerialized);
+      expect(updates.every((update) => JSON.stringify(update).length <= MAX_PROGRESS_UPDATE_JSON_CHARS)).toBe(true);
+      for (const update of updates) {
+        expect(update.details.label.length).toBeLessThanOrEqual(MAX_PROGRESS_METADATA_CHARS);
+        expect(update.details.profile.length).toBeLessThanOrEqual(MAX_PROGRESS_METADATA_CHARS);
+        expect(update.details.progress.activity).toHaveLength(MAX_ACTIVITY_LINES);
+        expect(update.details.progress.activity.every((line: string) => line.length <= MAX_ACTIVITY_LINE_CHARS)).toBe(true);
+        expect(update.details.progress.activityCount).toBe(100);
+      }
+      expect(JSON.stringify(updates.at(-1))).not.toContain("FINAL_TAIL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("pi-subagent synchronous progress and lifecycle", () => {
   const {
     disposeSession,
     createSession,
     setContextRoutingResponses,
-    taskNotifications,
-    waitForTaskNotification,
-    executeSubagentTask,
     makeExecutionContext,
-  } = setupPiSubagentTestHarness((state) => {
-    agentDir = state.agentDir;
-  });
+  } = setupPiSubagentTestHarness();
 
-  it("returns an accepted envelope without live tool updates or waiting for the child", async () => {
+  it("waits for the child and returns the terminal Tool result", async () => {
     const taskStates: unknown[] = [];
     const taskStateObserver: ExtensionFactory = (pi) => {
-      pi.events.on("pi-flow:task-state", (event) => {
-        taskStates.push(event);
-      });
+      pi.events.on("pi-flow:task-state", (event) => taskStates.push(event));
     };
     const { session, registration, model, modelRegistry } = await createSession({
       extensionFactories: [taskStateObserver],
     });
-    const tool = session.getToolDefinition("run_agent") as any;
-    const updates: unknown[] = [];
-    const terminalDelivered = deferred();
-    let notificationContexts = 0;
-    let notificationCopies = 0;
-    const unsubscribe = session.subscribe((event) => {
-      if (
-        event.type === "message_end" &&
-        event.message.role === "custom" &&
-        event.message.customType === "pi-flow-task-notification"
-      ) {
-        terminalDelivered.resolve();
-      }
-    });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    setContextRoutingResponses(registration, async (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        const notifications = context.messages.filter((message) =>
-          JSON.stringify(message).includes("child complete"));
-        if (notifications.length > 0) {
-          notificationContexts++;
-          notificationCopies += notifications.length;
-        }
-        return fauxAssistantMessage("notification observed");
-      }
-      await gate;
+    const childGate = deferred();
+    let childStarted = false;
+    setContextRoutingResponses(registration, async () => {
+      childStarted = true;
+      await childGate.promise;
       return fauxAssistantMessage("child complete");
     });
+    const tool = session.getToolDefinition("run_agent") as any;
+    let settled = false;
+    const pending = tool.execute(
+      "blocking-call",
+      { label: "Research config", prompt: "Inspect config loading." },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+    ).then((result: any) => {
+      settled = true;
+      return result;
+    });
+
+    await waitUntil(() => childStarted);
+    expect(settled).toBe(false);
+    expect(taskStates).toEqual([{
+      version: 1,
+      task_id: expect.stringMatching(/^task_[a-f0-9]+$/),
+      task_type: "agent",
+      status: "accepted",
+    }]);
+
+    childGate.resolve();
+    const result = await pending;
+    const terminal = terminalEnvelope(result);
+
+    expect(terminal).toEqual({
+      task_id: result.details.taskId,
+      task_type: "agent",
+      status: "completed",
+      session_key: result.details.sessionKey,
+      label: "Research config",
+      content: "child complete",
+    });
+    expect(result.details).toMatchObject({
+      label: "Research config",
+      profile: "general-purpose",
+      backend: "pi",
+      status: "done",
+      result: "child complete",
+      taskId: expect.stringMatching(/^task_[a-f0-9]+$/),
+      sessionKey: expect.stringMatching(/^session_[a-f0-9]+$/),
+    });
+    expect(taskStates).toEqual([
+      { version: 1, task_id: result.details.taskId, task_type: "agent", status: "accepted" },
+      { version: 1, task_id: result.details.taskId, task_type: "agent", status: "completed" },
+    ]);
+    expect(customTaskNotifications(session)).toEqual([]);
+    disposeSession(session);
+  });
+
+  it("keeps the terminal envelope complete while bounding direct UI details and updates", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const fullResult = `${"large direct result ".repeat(4_000)}DIRECT_RESULT_TAIL`;
+    setContextRoutingResponses(registration, async () => fauxAssistantMessage(fullResult));
+    const tool = session.getToolDefinition("run_agent") as any;
+    const updates: any[] = [];
 
     const result = await tool.execute(
-      "detached-call",
-      { label: "Research config", prompt: "Inspect config loading." },
+      "large-result-call",
+      { label: "Large result", prompt: "Return the large result." },
+      undefined,
+      (update: unknown) => updates.push(update),
+      makeExecutionContext({ hasUI: true, model, modelRegistry, tui: true }),
+    );
+    const terminal = terminalEnvelope(result);
+
+    expect(terminal.content).toBe(fullResult);
+    expect(terminal.content).toContain("DIRECT_RESULT_TAIL");
+    expect(result.details.result).toContain("[truncated]");
+    expect(result.details.result.length).toBeLessThanOrEqual(MAX_PROGRESS_RESULT_CHARS);
+    expect(result.details.progress.result).toContain("[truncated]");
+    expect(result.details.progress.result.length).toBeLessThanOrEqual(MAX_PROGRESS_RESULT_CHARS);
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.every((update) => JSON.stringify(update).length <= MAX_PROGRESS_UPDATE_JSON_CHARS)).toBe(true);
+    expect(updates.some((update) => update.details.status === "done")).toBe(true);
+    disposeSession(session);
+  });
+
+  it("emits queued, running, and terminal progress through onUpdate", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const childGate = deferred();
+    setContextRoutingResponses(registration, async () => {
+      await childGate.promise;
+      return fauxAssistantMessage("progress child done");
+    });
+    const tool = session.getToolDefinition("run_agent") as any;
+    const updates: any[] = [];
+    const pending = tool.execute(
+      "progress-call",
+      { label: "Progress child", prompt: "Wait for release." },
       undefined,
       (update: unknown) => updates.push(update),
       makeExecutionContext({ hasUI: true, model, modelRegistry, tui: true }),
     );
 
-    expect(result.details).toEqual({
-      task_id: expect.stringMatching(/^task_[a-f0-9]+$/),
-      task_type: "agent",
-      status: "accepted",
-      session_key: expect.stringMatching(/^session_[a-f0-9]+$/),
-      label: "Research config",
-      display: {
-        backend: "pi",
-        profile: "general-purpose",
+    await waitUntil(() => updates.some((update) => update.details.status === "running"));
+    expect(updates.some((update) => update.details.status === "queued")).toBe(true);
+    const queued = updates.find((update) => update.details.status === "queued");
+    const running = updates.find((update) => update.details.status === "running");
+    expect(running.details).toMatchObject({
+      label: "Progress child",
+      profile: "general-purpose",
+      backend: "pi",
+      taskId: expect.stringMatching(/^task_[a-f0-9]+$/),
+      sessionKey: expect.stringMatching(/^session_[a-f0-9]+$/),
+      progress: {
+        id: "progress-call",
+        status: "running",
       },
     });
-    expect(JSON.parse(result.content[0].text)).toEqual({
-      task_id: result.details.task_id,
-      task_type: "agent",
-      status: "accepted",
-      session_key: result.details.session_key,
-      label: "Research config",
-    });
-    expect(result).not.toHaveProperty("usage");
-    expect(updates).toEqual([]);
-    expect(taskStates).toEqual([{
-      version: 1,
-      task_id: result.details.task_id,
-      task_type: "agent",
-      status: "accepted",
-    }]);
 
-    release();
-    await terminalDelivered.promise;
-    await session.waitForIdle();
-    const terminal = taskNotifications(session, result.details.task_id)[0];
-    expect(terminal).toEqual({
-      ...result.details,
-      status: "completed",
-      content: "child complete",
-    });
-    expect(notificationContexts).toBe(1);
-    expect(notificationCopies).toBe(1);
-    expect(taskStates).toEqual([
-      {
-        version: 1,
-        task_id: result.details.task_id,
-        task_type: "agent",
-        status: "accepted",
-      },
-      {
-        version: 1,
-        task_id: result.details.task_id,
-        task_type: "agent",
-        status: "completed",
-      },
-    ]);
-    unsubscribe();
-    disposeSession(session);
-  });
-
-  it.each(["tui", "rpc"] as const)("lets a %s root turn settle while its task keeps running", async (mode) => {
-    const { session, registration } = await createSession({ mode });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    setContextRoutingResponses(registration, async (context) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        await gate;
-        return fauxAssistantMessage("interactive child done");
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "Interactive child", prompt: "Wait for release." }),
-        ], { stopReason: "toolUse" });
-      }
-      return fauxAssistantMessage(serialized.includes("interactive child done") ? "notification handled" : "task launched");
-    });
-
-    await session.prompt("Launch one background task.");
-    const accepted = session.messages.find((message: any) => message.role === "toolResult" && message.toolName === "run_agent") as any;
-    expect(accepted.details.status).toBe("accepted");
-
-    release();
-    await waitForTaskNotification(session, accepted.details.task_id);
-    await session.waitForIdle();
-    disposeSession(session);
-  });
-
-  it("publishes active and idle widget lines through RPC mode", async () => {
-    const childGate = deferred();
-    const widgets: Array<{ lines: string[] | undefined; placement: string | undefined }> = [];
-    const { session, registration } = await createSession({
-      mode: "rpc",
-      onWidget: (_key, lines, placement) => widgets.push({ lines, placement }),
-    });
-    setContextRoutingResponses(registration, async (context) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        await childGate.promise;
-        return fauxAssistantMessage("rpc child done");
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "RPC child", prompt: "Wait for release." }),
-        ], { stopReason: "toolUse" });
-      }
-      return fauxAssistantMessage(serialized.includes("rpc child done") ? "notification handled" : "task launched");
-    });
-
-    await session.prompt("Launch one RPC background task.");
-    await waitUntil(() => widgets.some((widget) =>
-      widget.lines?.some((line) => line.includes("Pi Agent(general-purpose: RPC child)")) === true));
     childGate.resolve();
-    const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_agent") as any;
-    await waitForTaskNotification(session, accepted.details.task_id);
-    await session.waitForIdle();
-
-    const active = widgets.find((widget) =>
-      widget.lines?.some((line) => line.includes("Pi Agent(general-purpose: RPC child)")));
-    expect(active?.placement).toBe("belowEditor");
-    expect(active?.lines?.length).toBeLessThanOrEqual(5);
-    expect(widgets.at(-1)?.lines).toHaveLength(1);
-    expect(widgets.at(-1)?.lines?.[0]).toContain("pi-flow idle · 1 agent and 0 workflows done");
+    const result = await pending;
+    const done = updates.slice().reverse().find((update) => update.details.status === "done");
+    expect(done).toBeDefined();
+    expect(queued.details).toMatchObject({
+      status: "queued",
+      progress: { status: "queued", activity: [] },
+    });
+    expect(running.details).toMatchObject({
+      status: "running",
+      progress: { status: "running", activity: [] },
+    });
+    expect(result.details).toMatchObject({
+      status: "done",
+      progress: { id: "progress-call", status: "done" },
+      taskId: running.details.taskId,
+      sessionKey: running.details.sessionKey,
+    });
+    expect(result.usage?.input).toBeGreaterThan(0);
+    expect(result.usage?.output).toBeGreaterThan(0);
+    expect(done.usage).toEqual(result.usage);
+    expect(done.usage).not.toBe(result.usage);
+    expect(done.usage.cost).not.toBe(result.usage?.cost);
     disposeSession(session);
   });
 
-  it("steers one completion after an active root tool batch", async () => {
-    const childGate = deferred();
-    const toolBatchStarted = deferred();
-    const finishToolBatch = deferred();
-    const taskFinished = deferred();
-    const terminalDelivered = deferred();
-    const widgets: string[][] = [];
-    const toolExtension: ExtensionFactory = (pi) => {
-      pi.registerTool({
-        name: "active_gate",
-        label: "active_gate",
-        description: "Hold the active root tool batch",
-        parameters: Type.Object({}),
-        async execute() {
-          toolBatchStarted.resolve();
-          await finishToolBatch.promise;
-          return {
-            content: [{ type: "text" as const, text: "active batch complete" }],
-            details: {},
-          };
-        },
-      });
-    };
-    const { session, registration } = await createSession({
-      mode: "tui",
-      extensionFactories: [toolExtension],
-      onWidget: (_key, lines) => {
-        if (lines) {
-          widgets.push(lines);
-        }
-        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
-          taskFinished.resolve();
-        }
-      },
-    });
-    let notificationContexts = 0;
-    let notificationCopies = 0;
-    let modelResponsesBeforeNotification = 0;
-    const unsubscribe = session.subscribe((event) => {
-      if (
-        event.type === "message_end" &&
-        event.message.role === "custom" &&
-        event.message.customType === "pi-flow-task-notification"
-      ) {
-        terminalDelivered.resolve();
-      }
-    });
-
-    setContextRoutingResponses(registration, async (context) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        await childGate.promise;
-        return fauxAssistantMessage("active batch child done");
-      }
-      const notifications = context.messages.filter((message) =>
-        JSON.stringify(message).includes("active batch child done"));
-      if (notifications.length > 0) {
-        notificationContexts++;
-        notificationCopies += notifications.length;
-        return fauxAssistantMessage("active batch notification handled");
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "Active batch child", prompt: "Wait during the active tool batch." }),
-          fauxToolCall("active_gate", {}),
-        ], { stopReason: "toolUse" });
-      }
-      modelResponsesBeforeNotification++;
-      return fauxAssistantMessage("continued before notification");
-    });
-
-    const prompt = session.prompt("Launch one background task in an active tool batch.");
-    await toolBatchStarted.promise;
-    childGate.resolve();
-    await taskFinished.promise;
-    expect(widgets.some((lines) => lines.some((line) => line.includes("Pi Agent(general-purpose: Active batch child)")))).toBe(true);
-    expect(widgets.at(-1)).toHaveLength(1);
-    expect(widgets.at(-1)?.[0]).toContain("pi-flow idle · 1 agent and 0 workflows done");
-    expect((session as any).agent.hasQueuedMessages()).toBe(true);
-    expect(taskNotifications(session)).toHaveLength(0);
-    finishToolBatch.resolve();
-    await prompt;
-    await terminalDelivered.promise;
-    await session.waitForIdle();
-
-    const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_agent") as any;
-    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
-    expect(modelResponsesBeforeNotification).toBe(0);
-    expect(notificationContexts).toBe(1);
-    expect(notificationCopies).toBe(1);
-    unsubscribe();
-    disposeSession(session);
-  });
-
-  it("does not retry a cleared notification and persists it once", async () => {
-    const childGate = deferred();
-    const rootProviderActive = deferred();
-    const finishRootResponse = deferred();
-    const taskFinished = deferred();
-    const { session, registration, sessionManager } = await createSession({
-      mode: "tui",
-      onWidget: (_key, lines) => {
-        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
-          taskFinished.resolve();
-        }
-      },
-    });
-    let notificationContexts = 0;
-
-    setContextRoutingResponses(registration, async (context) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        await childGate.promise;
-        return fauxAssistantMessage("cleared child done");
-      }
-      if (serialized.includes("cleared child done")) {
-        notificationContexts++;
-        return fauxAssistantMessage("notification handled");
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "Cleared child", prompt: "Wait while the root response is active." }),
-        ], { stopReason: "toolUse" });
-      }
-      rootProviderActive.resolve();
-      await finishRootResponse.promise;
-      return fauxAssistantMessage("task launched");
-    });
-
-    const prompt = session.prompt("Launch one background task.");
-    await rootProviderActive.promise;
-    const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_agent") as any;
-    childGate.resolve();
-    await taskFinished.promise;
-    expect((session as any).agent.hasQueuedMessages()).toBe(true);
-    session.clearQueue();
-    expect((session as any).agent.hasQueuedMessages()).toBe(false);
-    finishRootResponse.resolve();
-    await prompt;
-    await session.waitForIdle();
-
-    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(0);
-    expect(notificationContexts).toBe(0);
-
-    await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-    const persistedTerminals = sessionManager.getEntries().filter((entry: any) =>
-      entry.type === "custom_message" &&
-      entry.customType === "pi-flow-task-notification" &&
-      entry.details?.task_id === accepted.details.task_id);
-    expect(persistedTerminals).toHaveLength(1);
-    expect((persistedTerminals[0] as any).details).toMatchObject({
-      status: "completed",
-      content: "cleared child done",
-    });
-    disposeSession(session);
-  });
-
-  it("consumes a post-check completion on the next root run", async () => {
-    const childGate = deferred();
-    const postRunChecked = deferred();
-    const finishPostRun = deferred();
-    const taskFinished = deferred();
-    const terminalDelivered = deferred();
-    const { session, registration } = await createSession({
-      mode: "tui",
-      onWidget: (_key, lines) => {
-        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
-          taskFinished.resolve();
-        }
-      },
-    });
-    let notificationContexts = 0;
-    let notificationCopies = 0;
-    let nextRunNotificationContexts = 0;
-    let modelResponsesBeforeNotification = 0;
-    const originalHandlePostAgentRun = (session as any)._handlePostAgentRun.bind(session);
-    let interceptedPostRun = false;
-    (session as any)._handlePostAgentRun = async () => {
-      const shouldContinue = await originalHandlePostAgentRun();
-      if (!shouldContinue && !interceptedPostRun) {
-        interceptedPostRun = true;
-        postRunChecked.resolve();
-        await finishPostRun.promise;
-      }
-      return shouldContinue;
-    };
-    const unsubscribe = session.subscribe((event) => {
-      if (
-        event.type === "message_end" &&
-        event.message.role === "custom" &&
-        event.message.customType === "pi-flow-task-notification"
-      ) {
-        terminalDelivered.resolve();
-      }
-    });
-
-    setContextRoutingResponses(registration, async (context) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        await childGate.promise;
-        return fauxAssistantMessage("settling child done");
-      }
-      const notifications = context.messages.filter((message) =>
-        JSON.stringify(message).includes("settling child done"));
-      if (notifications.length > 0) {
-        notificationContexts++;
-        notificationCopies += notifications.length;
-        if (serialized.includes("Process the late completion.")) {
-          nextRunNotificationContexts++;
-        }
-        return fauxAssistantMessage("notification handled");
-      }
-      if (serialized.includes("Process the late completion.")) {
-        modelResponsesBeforeNotification++;
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "Settling child", prompt: "Wait for agent_end." }),
-        ], { stopReason: "toolUse" });
-      }
-      return fauxAssistantMessage("task launched");
-    });
-
-    const prompt = session.prompt("Launch one background task.");
-    await postRunChecked.promise;
-    childGate.resolve();
-    await taskFinished.promise;
-    finishPostRun.resolve();
-    await prompt;
-
-    const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_agent") as any;
-    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(0);
-    expect((session as any).agent.hasQueuedMessages()).toBe(true);
-
-    await session.prompt("Process the late completion.");
-    await terminalDelivered.promise;
-    await session.waitForIdle();
-    unsubscribe();
-
-    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
-    expect(modelResponsesBeforeNotification).toBe(0);
-    expect(nextRunNotificationContexts).toBe(1);
-    expect(notificationContexts).toBe(1);
-    expect(notificationCopies).toBe(1);
-    disposeSession(session);
-  });
-
-  it("steers a completion into an automatic continuation's next model context", async () => {
-    const childGate = deferred();
-    const toolBatchStarted = deferred();
-    const finishToolBatch = deferred();
-    const taskFinished = deferred();
-    const terminalDelivered = deferred();
-    const toolExtension: ExtensionFactory = (pi) => {
-      pi.registerTool({
-        name: "settling_gate",
-        label: "settling_gate",
-        description: "Hold an automatic continuation tool batch",
-        parameters: Type.Object({}),
-        async execute() {
-          toolBatchStarted.resolve();
-          await finishToolBatch.promise;
-          return {
-            content: [{ type: "text" as const, text: "tool batch complete" }],
-            details: {},
-          };
-        },
-      });
-    };
-    const { session, registration } = await createSession({
-      mode: "tui",
-      extensionFactories: [toolExtension],
-      onWidget: (_key, lines) => {
-        if (lines?.[0]?.includes("pi-flow idle · 1 agent")) {
-          taskFinished.resolve();
-        }
-      },
-    });
-    let queueAutomaticContinuation = true;
-    let notificationContexts = 0;
-    let notificationCopies = 0;
-    let modelResponsesBeforeNotification = 0;
-    const unsubscribe = session.subscribe((event) => {
-      if (event.type === "agent_end" && queueAutomaticContinuation) {
-        queueAutomaticContinuation = false;
-        void session.steer("automatic continuation");
-      }
-      if (
-        event.type === "message_end" &&
-        event.message.role === "custom" &&
-        event.message.customType === "pi-flow-task-notification"
-      ) {
-        terminalDelivered.resolve();
-      }
-    });
-
-    setContextRoutingResponses(registration, async (context) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        await childGate.promise;
-        return fauxAssistantMessage("continuation child done");
-      }
-      const notifications = context.messages.filter((message) =>
-        JSON.stringify(message).includes("continuation child done"));
-      if (notifications.length > 0) {
-        notificationContexts++;
-        notificationCopies += notifications.length;
-        return fauxAssistantMessage("notification handled");
-      }
-      if (serialized.includes("automatic continuation")) {
-        if (!serialized.includes('"toolName":"settling_gate"')) {
-          return fauxAssistantMessage([fauxToolCall("settling_gate", {})], { stopReason: "toolUse" });
-        }
-        modelResponsesBeforeNotification++;
-        return fauxAssistantMessage("continued without notification");
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "Continuation child", prompt: "Wait for tool batch." }),
-        ], { stopReason: "toolUse" });
-      }
-      return fauxAssistantMessage("task launched");
-    });
-
-    const prompt = session.prompt("Launch one background task.");
-    await toolBatchStarted.promise;
-    childGate.resolve();
-    await taskFinished.promise;
-    finishToolBatch.resolve();
-    await prompt;
-    await terminalDelivered.promise;
-    await session.waitForIdle();
-    unsubscribe();
-
-    const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_agent") as any;
-    expect(taskNotifications(session, accepted.details.task_id)).toHaveLength(1);
-    expect(modelResponsesBeforeNotification).toBe(0);
-    expect(notificationContexts).toBe(1);
-    expect(notificationCopies).toBe(1);
-    disposeSession(session);
-  });
-
-  it("keeps task completion on its originating branch during tree navigation", async () => {
-    const { session, registration, model, modelRegistry, sessionManager } = await createSession({ mode: "tui" });
-    let releaseChild!: () => void;
-    setContextRoutingResponses(registration, (context, options) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        return new Promise((resolve) => {
-          releaseChild = () => resolve(fauxAssistantMessage("branch child done"));
-          options.signal?.addEventListener("abort", () => resolve(fauxAssistantMessage("branch child aborted")), { once: true });
-        });
-      }
-      if (serialized.includes("pi-flow-task-notification")) {
-        return fauxAssistantMessage("notification observed");
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "Branch child", prompt: "Wait during tree navigation." }),
-        ], { stopReason: "toolUse" });
-      }
-      return fauxAssistantMessage("task launched");
-    });
-
-    await session.prompt("Launch one background task.");
-    const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_agent") as any;
-    await waitUntil(() => typeof releaseChild === "function");
-    const userEntry = sessionManager.getEntries().find((entry: any) =>
-      entry.type === "message" && entry.message.role === "user") as any;
-
-    const navigation = await session.navigateTree(userEntry.id, { summarize: false });
-    releaseChild();
-    await waitUntil(() => sessionManager.getEntries().some((entry: any) =>
-      entry.type === "custom_message" && entry.details?.task_id === accepted.details.task_id));
-    await session.waitForIdle();
-
-    expect(navigation.cancelled).toBe(false);
-    const terminalEntry = sessionManager.getEntries().find((entry: any) =>
-      entry.type === "custom_message" &&
-      entry.customType === "pi-flow-task-notification" &&
-      entry.details?.task_id === accepted.details.task_id) as any;
-    expect(terminalEntry?.details).toMatchObject({
-      status: "failed",
-      task_id: accepted.details.task_id,
-      content: "Pi session tree changed",
-    });
-    expect(JSON.stringify(sessionManager.buildSessionContext().messages)).not.toContain(accepted.details.task_id);
-    expect(sessionManager.getEntries().some((entry: any) =>
-      entry.type === "custom" &&
-      entry.customType === "pi-flow-subagent-session-key" &&
-      entry.data?.key === accepted.details.session_key)).toBe(true);
-
-    let newBranchChildContext: Context | undefined;
-    setContextRoutingResponses(registration, (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        return fauxAssistantMessage("notification observed");
-      }
-      newBranchChildContext = context;
-      return fauxAssistantMessage("new branch child done");
-    });
-    const tool = session.getToolDefinition("run_agent") as any;
-    const next = await tool.execute(
-      "new-branch-call",
-      {
-        label: "New branch child",
-        prompt: "Start fresh after navigation.",
-        session_key: accepted.details.session_key,
-      },
-      undefined,
-      undefined,
-      makeExecutionContext({ hasUI: false, model, modelRegistry, sessionManager }),
-    );
-    const nextTerminal = await waitForTaskNotification(session, next.details.task_id);
-
-    expect(nextTerminal).toMatchObject({ status: "completed", content: "new branch child done" });
-    const newBranchMessages = JSON.stringify(newBranchChildContext?.messages);
-    expect(newBranchMessages).toContain("Start fresh after navigation.");
-    expect(newBranchMessages).not.toContain("Wait during tree navigation.");
-    disposeSession(session);
-  });
-
-  it.each(["print", "json"] as const)("keeps %s mode open until task notifications are processed", async (mode) => {
-    const { session, registration } = await createSession({ mode });
-    const agentEndStarted = deferred();
-    const extensionRunner = session.extensionRunner as any;
-    const originalEmit = extensionRunner.emit.bind(extensionRunner);
-    extensionRunner.emit = async (event: { type: string }) => {
-      if (event.type === "agent_end") {
-        agentEndStarted.resolve();
-      }
-      return originalEmit(event);
-    };
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    setContextRoutingResponses(registration, async (context) => {
-      const serialized = JSON.stringify(context.messages);
-      if (!context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        await gate;
-        return fauxAssistantMessage(`${mode} child done`);
-      }
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([
-          fauxToolCall("run_agent", { label: "Print child", prompt: "Wait for release." }),
-        ], { stopReason: "toolUse" });
-      }
-      return fauxAssistantMessage(serialized.includes(`${mode} child done`) ? `${mode} notification handled` : "task launched");
-    });
-
-    let settled = false;
-    const prompt = session.prompt("Launch one background task.").then(() => { settled = true; });
-    await agentEndStarted.promise;
-    expect(settled).toBe(false);
-
-    release();
-    await prompt;
-    const accepted = session.messages.find((message: any) => message.role === "toolResult" && message.toolName === "run_agent") as any;
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id);
-    expect(terminal).toMatchObject({ status: "completed", content: `${mode} child done` });
-    expect(JSON.stringify(session.messages)).toContain(`${mode} notification handled`);
-    disposeSession(session);
-  });
-
-  it("persists failed terminal notifications when extension reload aborts tasks", async () => {
-    const { session, registration, sessionManager } = await createSession({ mode: "tui" });
-    let childStarted = false;
-    let rootNotificationCalls = 0;
-    let rootContinuationStarted = false;
-    let releaseRoot!: () => void;
-    setContextRoutingResponses(registration, (context, options) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        const serialized = JSON.stringify(context.messages);
-        if (serialized.includes("pi-flow-task-notification")) {
-          rootNotificationCalls++;
-        }
-        if (!serialized.includes('"toolName":"run_agent"')) {
-          return fauxAssistantMessage([
-            fauxToolCall("run_agent", { label: "Reload child", prompt: "Wait until reload." }),
-          ], { stopReason: "toolUse" });
-        }
-        rootContinuationStarted = true;
-        return new Promise((resolve) => {
-          releaseRoot = () => resolve(fauxAssistantMessage("task launched"));
-        });
-      }
-      childStarted = true;
-      return new Promise((resolve) => {
-        if (options.signal?.aborted) {
-          resolve(fauxAssistantMessage("aborted child"));
-          return;
-        }
-        options.signal?.addEventListener("abort", () => resolve(fauxAssistantMessage("aborted child")), { once: true });
-      });
-    });
-    const prompt = session.prompt("Launch one background task before reload.");
-    await waitUntil(() => childStarted && rootContinuationStarted);
-    const accepted = session.messages.find((message: any) =>
-      message.role === "toolResult" && message.toolName === "run_agent") as any;
-
-    await session.reload();
-    releaseRoot();
-    await prompt;
-
-    expect(taskNotifications(session, accepted.details.task_id)).toEqual([]);
-    const terminalEntry = sessionManager.getEntries().find((entry: any) =>
-      entry.type === "custom_message" &&
-      entry.customType === "pi-flow-task-notification" &&
-      entry.details?.task_id === accepted.details.task_id) as any;
-    expect(terminalEntry?.details).toMatchObject({
-      status: "failed",
-      task_id: accepted.details.task_id,
-      content: "Pi session shut down",
-    });
-    expect(rootNotificationCalls).toBe(0);
-    disposeSession(session);
-  });
-
-  it("starts run_agent and run_workflow tasks after a reused extension session boundary", async () => {
-    const { session, registration, model, modelRegistry, sessionManager } = await createSession({ mode: "tui" });
-    let oldChildStarted = false;
-    setContextRoutingResponses(registration, (context, options) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        return fauxAssistantMessage("notification observed");
-      }
-      oldChildStarted = true;
-      return new Promise((resolve) => {
-        if (options.signal?.aborted) {
-          resolve(fauxAssistantMessage("aborted old child"));
-          return;
-        }
-        options.signal?.addEventListener(
-          "abort",
-          () => resolve(fauxAssistantMessage("aborted old child")),
-          { once: true },
-        );
-      });
-    });
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
-    const oldSubagentTool = session.getToolDefinition("run_agent") as any;
-    const oldAccepted = await oldSubagentTool.execute(
-      "old-session-call",
-      { label: "Old session child", prompt: "Wait for the session boundary." },
-      undefined,
-      undefined,
-      context,
-    );
-    await waitUntil(() => oldChildStarted);
-
-    await session.extensionRunner.emit({ type: "session_shutdown", reason: "new" });
-    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([]);
-    const terminalEntry = sessionManager.getEntries().find((entry) =>
-      entry.type === "custom_message" && entry.customType === "pi-flow-task-notification");
-    expect(terminalEntry?.type === "custom_message" ? terminalEntry.details : undefined).toMatchObject({
-      status: "failed",
-      task_id: oldAccepted.details.task_id,
-      content: "Pi session shut down",
-    });
-    await session.extensionRunner.emit({ type: "session_start", reason: "new" });
-
-    setContextRoutingResponses(registration, (providerContext) => {
-      if (providerContext.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        return fauxAssistantMessage("notification observed");
-      }
-      return fauxAssistantMessage("new session child done");
-    });
-    const agentTool = session.getToolDefinition("run_agent") as any;
-    const agentAccepted = await agentTool.execute(
-      "new-session-agent",
-      { label: "New session agent", prompt: "Complete after the session boundary." },
-      undefined,
-      undefined,
-      context,
-    );
-    const agentTerminal = await waitForTaskNotification(session, agentAccepted.details.task_id);
-
-    const workflowTool = session.getToolDefinition("run_workflow") as any;
-    const workflowAccepted = await workflowTool.execute(
-      "new-session-workflow",
-      {
-        name: "new_session",
-        script: "export const meta = { name: 'new_session', description: 'Run after a new session' };\nreturn await run_agent('Complete after the session boundary.', { label: 'worker' });",
-      },
-      undefined,
-      undefined,
-      context,
-    );
-    const workflowTerminal = await waitForTaskNotification(session, workflowAccepted.details.task_id);
-
-    expect(agentTerminal).toMatchObject({ status: "completed", content: "new session child done" });
-    expect(workflowTerminal).toMatchObject({ status: "completed", content: "new session child done" });
-    expect(taskNotifications(session, oldAccepted.details.task_id)).toEqual([]);
-    disposeSession(session);
-  });
-
-  it("does not bind background execution to the foreground tool signal", async () => {
+  it("returns an aborted Tool result without starting a pre-aborted call", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const tool = session.getToolDefinition("run_agent") as any;
     const controller = new AbortController();
     let childContext: Context | undefined;
     setContextRoutingResponses(registration, (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        return fauxAssistantMessage("notification observed");
-      }
       childContext = context;
-      return fauxAssistantMessage("detached child done");
+      return fauxAssistantMessage("should not run");
     });
-
     controller.abort();
-    const accepted = await tool.execute(
+
+    const tool = session.getToolDefinition("run_agent") as any;
+    const result = await tool.execute(
       "pre-aborted-call",
-      { label: "Detached child", prompt: "Run despite the foreground signal." },
+      { label: "Cancelled child", prompt: "Do not start." },
       controller.signal,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id);
+    const terminal = terminalEnvelope(result);
 
-    expect(accepted.details.status).toBe("accepted");
-    expect(terminal.status).toBe("completed");
-    expect(childContext).toBeDefined();
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.error).toBeTruthy();
+    expect(terminal).toMatchObject({
+      task_id: result.details.taskId,
+      status: "failed",
+      session_key: result.details.sessionKey,
+      label: "Cancelled child",
+    });
+    expect(childContext).toBeUndefined();
+    expect(customTaskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
-  it("reports timeout through one failed terminal notification", async () => {
+  it("returns timeout failure through the Tool result", async () => {
     const { session, registration, model, modelRegistry } = await createSession({ subagentTimeoutMs: 20 });
-    setContextRoutingResponses(registration, async (context) => {
-      if (context.tools?.some((candidate: { name?: string }) => candidate.name === "run_agent")) {
-        return fauxAssistantMessage("notification observed");
-      }
+    setContextRoutingResponses(registration, async () => {
       await delay(80);
       return fauxAssistantMessage("late output");
     });
+
     const tool = session.getToolDefinition("run_agent") as any;
-    const accepted = await tool.execute(
+    const result = await tool.execute(
       "timeout-call",
       { label: "Slow child", prompt: "Take too long." },
       undefined,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id);
+    const terminal = terminalEnvelope(result);
 
-    expect(terminal.status).toBe("failed");
-    expect(terminal.content).toContain("Subagent timed out after 20ms");
-    expect(terminal.task_id).toBe(accepted.details.task_id);
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.error).toContain("Subagent timed out after 20ms");
+    expect(terminal).toEqual({
+      task_id: result.details.taskId,
+      task_type: "agent",
+      status: "failed",
+      session_key: result.details.sessionKey,
+      label: "Slow child",
+      content: expect.stringContaining("Subagent timed out after 20ms"),
+    });
+    expect(customTaskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
-  it("keeps backend progress and usage available for internal direct spawning", async () => {
+  it("aborts an active Tool call on session shutdown", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const profile = getSubagentProfiles(agentDir).get("general-purpose")!;
-    registration.setResponses([fauxAssistantMessage("direct child done")]);
-    const progressUpdates: unknown[] = [];
-    const result = await spawnSubagent({
-      toolCallId: "internal-progress",
-      label: "Internal child",
-      prompt: "Inspect internals.",
-      profile,
-      model,
-      thinkingLevel: "high",
-      ctx: makeExecutionContext({ hasUI: true, model, modelRegistry, tui: true }) as unknown as ExtensionContext,
-      signal: undefined,
-      timeoutMs: 0,
-      progressEnabled: true,
-      onProgress: (partial) => progressUpdates.push(partial),
-      onUsage: () => {},
-      excludeTools: CHILD_EXCLUDED_TOOLS,
+    let childStarted = false;
+    setContextRoutingResponses(registration, (_context, options) => {
+      childStarted = true;
+      return new Promise((resolve) => {
+        options.signal?.addEventListener(
+          "abort",
+          () => resolve(fauxAssistantMessage("", { stopReason: "aborted", errorMessage: "Subagent aborted" })),
+          { once: true },
+        );
+      });
     });
-
-    expect(result.details.status).toBe("done");
-    expect(result.details.progress).toMatchObject({ id: "internal-progress", status: "done", backend: "pi" });
-    expect(result.usage?.input).toBeGreaterThan(0);
-    expect(result.usage?.output).toBeGreaterThan(0);
-    expect(progressUpdates.length).toBeGreaterThan(0);
-    disposeSession(session);
-  });
-
-  it("maps provider stop errors to internal backend errors", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
-    const profile = getSubagentProfiles(agentDir).get("general-purpose")!;
-    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-    registration.setResponses([
-      fauxAssistantMessage("", { stopReason: "error", errorMessage: "rate limit exceeded (429)" }),
-    ]);
-    const result = await spawnSubagent({
-      toolCallId: "provider-error",
-      label: "Research config",
-      prompt: "Inspect config loading.",
-      profile,
-      model,
-      thinkingLevel: "high",
-      ctx: makeExecutionContext({ hasUI: false, model, modelRegistry }) as unknown as ExtensionContext,
-      signal: undefined,
-      timeoutMs: 0,
-      progressEnabled: true,
-      onProgress: () => {},
-      onUsage: () => {},
-      excludeTools: CHILD_EXCLUDED_TOOLS,
-    });
-
-    expect(result.details.status).toBe("error");
-    expect(result.details.error).toContain("rate limit exceeded");
-    expect(result.details.progress?.status).toBe("error");
-    disposeSession(session);
-  });
-
-  it("shows idle task totals and cumulative usage in the widget", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
-    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
-    const context = makeExecutionContext({
-      hasUI: true,
-      model,
-      modelRegistry,
-      onWidget: (key, lines) => widgets.push({ key, lines }),
-    });
-
-    await executeSubagentTask(
-      session,
-      registration,
-      context,
-      { label: "Usage child", prompt: "Report usage." },
-      async () => fauxAssistantMessage("usage child done"),
+    const tool = session.getToolDefinition("run_agent") as any;
+    const pending = tool.execute(
+      "shutdown-call",
+      { label: "Shutdown child", prompt: "Wait for shutdown." },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
 
-    const line = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(line).toContain("pi-flow idle · 1 agent and 0 workflows done");
-    expect(line).toMatch(/↑\S+ ↓\S+ (?:R\S+ |W\S+ )*CH\d+\.\d%/);
+    await waitUntil(() => childStarted);
+    await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    const result = await pending;
+    const terminal = terminalEnvelope(result);
+
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.error).toBe("Pi session shut down");
+    expect(terminal).toMatchObject({
+      task_id: result.details.taskId,
+      status: "failed",
+      content: "Pi session shut down",
+    });
+    expect(customTaskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 });

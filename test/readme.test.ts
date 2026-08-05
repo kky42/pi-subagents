@@ -21,56 +21,25 @@ afterEach(() => {
 });
 
 describe("README", () => {
-  it("documents the approved package contents and repository screenshot", () => {
+  it("keeps package metadata and local documentation links valid", () => {
     expect(packageJson.files).toContain("assets");
     expect(packageJson.files).not.toContain("docs");
     expect(packageJson.pi).not.toHaveProperty("image");
-    expect(readme).toContain(`pi install npm:${packageJson.name}`);
+    expect(readme).toContain("pi -e .");
     expect(readme).not.toContain("—");
 
     const localTargets = [...readme.matchAll(/\((\.\/[^)#\s]+)(?:#[^)]+)?\)/g)]
       .map((match) => match[1]);
-    expect(localTargets).toEqual([
-      "./LICENSE",
-      "./assets/pi-flow-interactive.png",
-      "./LICENSE",
-    ]);
+    expect(localTargets.length).toBeGreaterThan(0);
     for (const target of localTargets) {
       expect(existsSync(resolve(root, target))).toBe(true);
     }
-
-    const imagePath = join(root, "assets/pi-flow-interactive.png");
-    const image = readFileSync(imagePath);
-    expect(image.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-    expect(image.readUInt32BE(16)).toBe(1200);
-    expect(image.readUInt32BE(20)).toBe(1040);
-    expect(image.toString("latin1")).not.toMatch(/(?:tEXt|zTXt|iTXt)/);
   });
 
-  it("states the asynchronous lifecycle immediately after the sanitized screenshot caption", () => {
-    const screenshot = readme.indexOf("./assets/pi-flow-interactive.png");
-    const caption = readme.indexOf("Captured from a real Pi interactive session", screenshot);
-    const lifecycleHeading = readme.indexOf("## One coordinator, asynchronous specialists", caption);
-    const lifecycle = readme.indexOf("`run_agent` and `run_workflow` run as background tasks", lifecycleHeading);
-    const table = readme.indexOf("| Primitive | Use it for |", lifecycle);
-
-    expect(screenshot).toBeGreaterThan(-1);
-    expect(caption).toBeGreaterThan(screenshot);
-    expect(lifecycleHeading).toBeGreaterThan(caption);
-    expect(lifecycle).toBeGreaterThan(lifecycleHeading);
-    expect(table).toBeGreaterThan(lifecycle);
-    expect(readme.slice(lifecycle, table)).toContain("`accepted` result immediately");
-    expect(readme.slice(lifecycle, table)).toContain("continues independent work");
-    expect(readme.slice(lifecycle, table)).toContain("one correlated `completed` or `failed` notification");
-    expect(readme.slice(lifecycle, table)).toContain("`accepted` means launched, not finished");
-    expect(readme.slice(lifecycle, table)).toContain("nothing to poll");
-    expect(readme).not.toMatch(/^## (?:Headless execution|Define your agent team|Use a focused subagent|Choose run_agent or run_workflow by task shape|Built for real work)$/m);
-  });
-
-  it("keeps installation, two natural-language examples, and valid custom profiles together", () => {
+  it("keeps the branch quick start, natural-language examples, and valid custom profiles together", () => {
     const gettingStarted = readme.slice(
-      readme.indexOf("## Install and try it"),
-      readme.indexOf("## Why pi-flow?"),
+      readme.indexOf("## Try this branch"),
+      readme.indexOf("## Why this synchronous branch?"),
     );
     const naturalLanguageExamples = [...gettingStarted.matchAll(/```text\n([\s\S]*?)\n```/g)];
     const profileExamples = [...gettingStarted.matchAll(/```md\n([\s\S]*?)\n```/g)];

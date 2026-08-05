@@ -20,7 +20,7 @@ export interface WorkflowSubagentRunnerOptions {
 /** Canonical profile-aware runner shared by the interactive tool and headless API. */
 export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOptions): {
   runSubagent: WorkflowSubagentRunner;
-  serializeSubagent: <T>(sessionKey: string | undefined, task: () => Promise<T>) => Promise<T>;
+  serializeSubagent: <T>(sessionKey: string | undefined, task: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
   restoreSessionBinding: (event: WorkflowSubagentResultEvent) => void;
 } {
   const bindings = new Map<string, SessionKeyBinding>();
@@ -107,5 +107,5 @@ export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOpti
     bindings.set(event.sessionKey, binding);
   };
 
-  return { runSubagent, serializeSubagent: (key, task) => locks.run(key, task), restoreSessionBinding };
+  return { runSubagent, serializeSubagent: (key, task, signal) => locks.run(key, task, signal), restoreSessionBinding };
 }

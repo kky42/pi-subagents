@@ -108,8 +108,9 @@ export function assertBindingMatchesProfile(binding: SessionKeyBinding, params: 
 export class SessionKeyLocks {
   private readonly tails = new Map<string, Promise<void>>();
 
-  async run<T>(key: string | undefined, task: () => Promise<T>): Promise<T> {
+  async run<T>(key: string | undefined, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (!key) {
+      signal?.throwIfAborted();
       return task();
     }
     const previous = this.tails.get(key) ?? Promise.resolve();
@@ -119,14 +120,32 @@ export class SessionKeyLocks {
     });
     const tail = previous.catch(() => undefined).then(() => current);
     this.tails.set(key, tail);
-    await previous.catch(() => undefined);
-    try {
-      return await task();
-    } finally {
-      release();
+    void tail.then(() => {
       if (this.tails.get(key) === tail) {
         this.tails.delete(key);
       }
+    });
+    try {
+      await waitForPrevious(previous, signal);
+      return await task();
+    } finally {
+      release();
     }
   }
+}
+
+async function waitForPrevious(previous: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) {
+    await previous.catch(() => undefined);
+    return;
+  }
+  signal.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    previous.catch(() => undefined).then(resolve).finally(() => {
+      signal.removeEventListener("abort", abort);
+    });
+  });
+  signal.throwIfAborted();
 }

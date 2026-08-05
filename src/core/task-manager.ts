@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-export const TASK_NOTIFICATION_CUSTOM_TYPE = "pi-flow-task-notification";
 export const TASK_STATE_EVENT = "pi-flow:task-state";
 
 export type TaskType = "agent" | "workflow";
@@ -13,26 +12,8 @@ export interface TaskStateEvent {
   status: PublicTaskStatus;
 }
 
-interface TaskEnvelopeBase {
+export interface AgentTerminalTaskEnvelope {
   task_id: string;
-  task_type: TaskType;
-  status: PublicTaskStatus;
-}
-
-export interface AgentAcceptedTaskEnvelope extends TaskEnvelopeBase {
-  task_type: "agent";
-  status: "accepted";
-  session_key: string;
-  label: string;
-}
-
-export interface WorkflowAcceptedTaskEnvelope extends TaskEnvelopeBase {
-  task_type: "workflow";
-  status: "accepted";
-  name: string;
-}
-
-export interface AgentTerminalTaskEnvelope extends TaskEnvelopeBase {
   task_type: "agent";
   status: "completed" | "failed";
   session_key: string;
@@ -40,104 +21,77 @@ export interface AgentTerminalTaskEnvelope extends TaskEnvelopeBase {
   content: string;
 }
 
-export interface WorkflowTerminalTaskEnvelope extends TaskEnvelopeBase {
+export interface WorkflowTerminalTaskEnvelope {
+  task_id: string;
   task_type: "workflow";
   status: "completed" | "failed";
   name: string;
   content: string;
 }
 
-export type AcceptedTaskEnvelope = AgentAcceptedTaskEnvelope | WorkflowAcceptedTaskEnvelope;
 export type TerminalTaskEnvelope = AgentTerminalTaskEnvelope | WorkflowTerminalTaskEnvelope;
-export type TaskEnvelope = AcceptedTaskEnvelope | TerminalTaskEnvelope;
 
-export interface TaskCounts {
-  agent: { finished: number; total: number };
-  workflow: { finished: number; total: number };
+export interface SynchronousTaskOutcome<T> {
+  status: "completed" | "failed";
+  value: T;
 }
 
-type AgentTaskOptions = {
-  taskType: "agent";
-  label: string;
-  sessionKey: string;
-  run: (signal: AbortSignal, taskId: string) => Promise<string>;
-};
+export interface SynchronousTaskResult<T> extends SynchronousTaskOutcome<T> {
+  taskId: string;
+  abortReason?: string;
+}
 
-type WorkflowTaskOptions = {
-  taskType: "workflow";
-  name: string;
-  run: (signal: AbortSignal, taskId: string) => Promise<string>;
-};
-
-type StartTaskOptions = AgentTaskOptions | WorkflowTaskOptions;
-
-export interface BackgroundTaskManagerOptions {
-  notify: (envelope: TerminalTaskEnvelope) => void;
-  onCountsChange?: (counts: TaskCounts) => void;
+export interface SynchronousTaskManagerOptions {
   onTaskState?: (event: TaskStateEvent) => void;
 }
 
 interface ActiveTask {
   controller: AbortController;
-  promise: Promise<void>;
+  completed: Promise<void>;
 }
 
-export class BackgroundTaskManager {
+export class SynchronousTaskManager {
   private readonly active = new Map<string, ActiveTask>();
-  private readonly counts: TaskCounts = {
-    agent: { finished: 0, total: 0 },
-    workflow: { finished: 0, total: 0 },
-  };
   private closed = false;
 
-  constructor(private readonly options: BackgroundTaskManagerOptions) {}
+  constructor(private readonly options: SynchronousTaskManagerOptions = {}) {}
 
-  start(options: AgentTaskOptions): AgentAcceptedTaskEnvelope;
-  start(options: WorkflowTaskOptions): WorkflowAcceptedTaskEnvelope;
-  start(options: StartTaskOptions): AcceptedTaskEnvelope {
+  async run<T>(options: {
+    taskType: TaskType;
+    signal?: AbortSignal;
+    execute: (signal: AbortSignal, taskId: string) => Promise<SynchronousTaskOutcome<T>>;
+  }): Promise<SynchronousTaskResult<T>> {
     if (this.closed) {
       throw new Error("Cannot start a pi-flow task after session shutdown");
     }
 
     const taskId = `task_${randomUUID().replace(/-/g, "")}`;
     const controller = new AbortController();
-    const accepted = options.taskType === "agent"
-      ? {
-          task_id: taskId,
-          task_type: "agent" as const,
-          status: "accepted" as const,
-          session_key: options.sessionKey,
-          label: options.label,
-        }
-      : {
-          task_id: taskId,
-          task_type: "workflow" as const,
-          status: "accepted" as const,
-          name: options.name,
-        };
+    const signal = AbortSignal.any(
+      [options.signal, controller.signal].filter((candidate): candidate is AbortSignal => Boolean(candidate)),
+    );
+    let complete!: () => void;
+    const completed = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    this.active.set(taskId, { controller, completed });
+    this.publishTaskState(taskId, options.taskType, "accepted");
 
-    this.counts[options.taskType].total++;
-    const promise = new Promise<void>((resolve) => setImmediate(resolve))
-      .then(() => {
-        controller.signal.throwIfAborted();
-        return options.run(controller.signal, taskId);
-      })
-      .then(
-        (result) => this.finish(options, accepted, controller.signal, "completed", result),
-        (error) => this.finish(options, accepted, controller.signal, "failed", errorMessage(error)),
-      )
-      .finally(() => {
-        this.active.delete(taskId);
-      });
-
-    this.active.set(taskId, { controller, promise });
-    this.publishCounts();
-    this.publishTaskState(accepted);
-    return accepted;
-  }
-
-  getCounts(): TaskCounts {
-    return cloneCounts(this.counts);
+    let terminalStatus: "completed" | "failed" = "failed";
+    try {
+      const outcome = await options.execute(signal, taskId);
+      terminalStatus = signal.aborted ? "failed" : outcome.status;
+      return {
+        taskId,
+        status: terminalStatus,
+        value: outcome.value,
+        ...(signal.aborted ? { abortReason: errorMessage(signal.reason) } : {}),
+      };
+    } finally {
+      this.active.delete(taskId);
+      complete();
+      this.publishTaskState(taskId, options.taskType, terminalStatus);
+    }
   }
 
   hasActiveTasks(): boolean {
@@ -150,7 +104,7 @@ export class BackgroundTaskManager {
 
   async waitForIdle(): Promise<void> {
     while (this.active.size > 0) {
-      await Promise.all([...this.active.values()].map((task) => task.promise));
+      await Promise.all([...this.active.values()].map((task) => task.completed));
     }
   }
 
@@ -170,76 +124,22 @@ export class BackgroundTaskManager {
     await this.abortAll("Pi session shut down");
   }
 
-  private finish(
-    options: StartTaskOptions,
-    accepted: AcceptedTaskEnvelope,
-    signal: AbortSignal,
-    status: "completed" | "failed",
-    value: string,
-  ): void {
-    const terminalStatus = signal.aborted ? "failed" : status;
-    const content = signal.aborted ? errorMessage(signal.reason) : value;
-    const envelope: TerminalTaskEnvelope = options.taskType === "agent"
-      ? {
-          task_id: accepted.task_id,
-          task_type: "agent",
-          status: terminalStatus,
-          session_key: options.sessionKey,
-          label: options.label,
-          content,
-        }
-      : {
-          task_id: accepted.task_id,
-          task_type: "workflow",
-          status: terminalStatus,
-          name: options.name,
-          content,
-        };
-
-    this.counts[options.taskType].finished++;
-    this.publishCounts();
-    this.publishTaskState(envelope);
-    try {
-      this.options.notify(envelope);
-    } catch {
-      return;
-    }
-  }
-
-  private publishTaskState(envelope: TaskEnvelope): void {
+  private publishTaskState(taskId: string, taskType: TaskType, status: PublicTaskStatus): void {
     try {
       this.options.onTaskState?.({
         version: 1,
-        task_id: envelope.task_id,
-        task_type: envelope.task_type,
-        status: envelope.status,
+        task_id: taskId,
+        task_type: taskType,
+        status,
       });
     } catch {
       return;
     }
   }
-
-  private publishCounts(): void {
-    try {
-      this.options.onCountsChange?.(cloneCounts(this.counts));
-    } catch {
-      return;
-    }
-  }
 }
 
-export function taskToolResult<T extends TaskEnvelope>(envelope: T) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
-    details: envelope,
-  };
-}
-
-function cloneCounts(counts: TaskCounts): TaskCounts {
-  return {
-    agent: { ...counts.agent },
-    workflow: { ...counts.workflow },
-  };
+export function taskEnvelopeContent(envelope: TerminalTaskEnvelope) {
+  return [{ type: "text" as const, text: JSON.stringify(envelope) }];
 }
 
 function errorMessage(error: unknown): string {

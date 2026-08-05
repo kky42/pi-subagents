@@ -33,6 +33,8 @@ const MAX_CAPTURE_CHARS = 16 * 1024 * 1024;
 const MAX_STDOUT_LINE_CHARS = 8 * 1024 * 1024;
 const SCENARIO_KEYS = ["direct", "focused", "flat", "continuation", "staged"];
 const RUN_ROOT_MARKER = ".pi-flow-prompt-routing-owned";
+let outputRedactions = [];
+
 const SAFE_ENV_NAMES = [
   "PATH",
   "HOME",
@@ -241,6 +243,16 @@ function redactSecrets(text, secrets) {
   return redacted;
 }
 
+function redactOutputValue(value, secrets) {
+  if (typeof value === "string") return redactSecrets(value, secrets);
+  if (Array.isArray(value)) return value.map((item) => redactOutputValue(item, secrets));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    redactSecrets(key, secrets),
+    redactOutputValue(item, secrets),
+  ]));
+}
+
 function createFixture(root) {
   const fixture = path.join(root, "fixture");
   ensureDir(path.join(fixture, "src"));
@@ -296,7 +308,17 @@ function parseEnvelope(value) {
 }
 
 function messageEnvelope(message) {
-  return parseEnvelope(message.details) ?? parseEnvelope(message.content?.[0]?.text) ?? parseEnvelope(message.content);
+  return parseEnvelope(message.content?.[0]?.text) ?? parseEnvelope(message.content);
+}
+
+function persistedRecordTimestampMs(record) {
+  const value = record?.timestamp;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
 }
 
 function analyzeJsonl(text) {
@@ -305,12 +327,13 @@ function analyzeJsonl(text) {
     toolCounts: {},
     subagentCalls: [],
     workflowCalls: [],
-    acceptedTasks: [],
-    notifications: [],
+    terminalToolResults: [],
+    customTaskNotificationCount: 0,
     rootUsage: {},
     rootModels: [],
     finalStop: false,
   };
+  const delegationCallsById = new Map();
   let group = 0;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -321,8 +344,9 @@ function analyzeJsonl(text) {
       analysis.malformedLines += 1;
       continue;
     }
-    if (event.type !== "message_end") continue;
-    const message = event.message ?? {};
+    if (event.type !== "message" && event.type !== "custom_message") continue;
+    const message = event.message ?? (event.type === "custom_message" ? { role: "custom", ...event } : {});
+    const recordTimestampMs = persistedRecordTimestampMs(event);
     if (message.role === "assistant") {
       addUsage(analysis.rootUsage, message.usage);
       const rootModel = typeof message.provider === "string" && typeof message.model === "string"
@@ -335,11 +359,20 @@ function analyzeJsonl(text) {
         analysis.toolCounts[call.name] = (analysis.toolCounts[call.name] ?? 0) + 1;
         const input = call.arguments ?? {};
         if (call.name === "run_agent") {
-          analysis.subagentCalls.push({ group, sessionKey: typeof input.session_key === "string" ? input.session_key : "" });
+          const observed = {
+            toolCallId: call.id,
+            group,
+            toolCallRecordAtMs: recordTimestampMs,
+            sessionKey: typeof input.session_key === "string" ? input.session_key : "",
+          };
+          analysis.subagentCalls.push(observed);
+          if (typeof call.id === "string") delegationCallsById.set(call.id, observed);
         } else if (call.name === "run_workflow") {
           const script = typeof input.script === "string" ? input.script : "";
-          analysis.workflowCalls.push({
+          const observed = {
+            toolCallId: call.id,
             group,
+            toolCallRecordAtMs: recordTimestampMs,
             source: script
               ? "inline"
               : typeof input.script_path === "string"
@@ -347,12 +380,15 @@ function analyzeJsonl(text) {
                 : typeof input.resume_from_task_id === "string"
                   ? "replay"
                   : "saved",
+            replayFromTaskId: typeof input.resume_from_task_id === "string" ? input.resume_from_task_id : undefined,
             pipeline: script.includes("pipeline("),
             parallel: script.includes("parallel("),
             schema: /\bschema\s*:/.test(script),
             sessionKeyExpressions: (script.match(/\bsession_key\s*:/g) ?? []).length,
             subagentExpressions: (script.match(/\brun_agent\s*\(/g) ?? []).length,
-          });
+          };
+          analysis.workflowCalls.push(observed);
+          if (typeof call.id === "string") delegationCallsById.set(call.id, observed);
         }
       }
       if (message.stopReason === "stop") analysis.finalStop = true;
@@ -360,29 +396,37 @@ function analyzeJsonl(text) {
       if (message.toolName !== "run_agent" && message.toolName !== "run_workflow") continue;
       const envelope = messageEnvelope(message);
       const taskType = message.toolName === "run_agent" ? "agent" : "workflow";
-      if (envelope?.task_type === taskType && envelope.status === "accepted" && typeof envelope.task_id === "string") {
-        analysis.acceptedTasks.push({
-          taskId: envelope.task_id,
-          taskType,
-          sessionKey: taskType === "agent" && typeof envelope.session_key === "string" ? envelope.session_key : undefined,
-        });
-      }
-    } else if (message.role === "custom" && message.customType === "pi-flow-task-notification") {
-      const envelope = messageEnvelope(message);
       if (
-        (envelope?.task_type === "agent" || envelope?.task_type === "workflow")
+        envelope?.task_type === taskType
         && (envelope.status === "completed" || envelope.status === "failed")
         && typeof envelope.task_id === "string"
       ) {
-        analysis.notifications.push({
+        const call = delegationCallsById.get(message.toolCallId);
+        const details = parseEnvelope(message.details);
+        analysis.terminalToolResults.push({
+          toolCallId: message.toolCallId,
           taskId: envelope.task_id,
-          taskType: envelope.task_type,
+          taskType,
           status: envelope.status,
-          sessionKey: envelope.task_type === "agent" && typeof envelope.session_key === "string"
+          sessionKey: taskType === "agent" && typeof envelope.session_key === "string"
             ? envelope.session_key
             : undefined,
+          envelope,
+          detailsStatus: typeof details?.status === "string" ? details.status : undefined,
+          detailsTaskId: typeof details?.taskId === "string" ? details.taskId : undefined,
+          detailsSessionKey: taskType === "agent" && typeof details?.sessionKey === "string"
+            ? details.sessionKey
+            : undefined,
+          toolCallRecordAtMs: call?.toolCallRecordAtMs,
+          toolResultRecordAtMs: recordTimestampMs,
+          toolRecordIntervalMs: typeof call?.toolCallRecordAtMs === "number" && typeof recordTimestampMs === "number"
+            ? Math.max(0, recordTimestampMs - call.toolCallRecordAtMs)
+            : undefined,
+          usage: message.usage,
         });
       }
+    } else if (message.role === "custom" && message.customType === "pi-flow-task-notification") {
+      analysis.customTaskNotificationCount += 1;
     }
   }
   return analysis;
@@ -410,6 +454,16 @@ const SCENARIOS = [
     prompt: "For each of package.json, src/cli.js, and test/report.test.js, first classify it as config, entry, or test using a strict machine-readable result. Then dispatch a classification-specific follow-up that states its role in one sentence. Different files may proceed concurrently, but each file's classify step must precede its follow-up. Return one object containing all classifications and follow-ups. Keep this read-only.",
   },
 ];
+
+function readPersistedSessionJsonl(sessionDir) {
+  const files = readdirSync(sessionDir)
+    .filter((entry) => entry.endsWith(".jsonl"))
+    .map((entry) => path.join(sessionDir, entry));
+  if (files.length !== 1) {
+    throw new Error(`expected one persisted root session JSONL in ${sessionDir}, found ${files.length}`);
+  }
+  return readFileSync(files[0], "utf8");
+}
 
 function infrastructureIssues(run, analysis) {
   const issues = [];
@@ -548,12 +602,14 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
 
 function summarizedAnalysis(analysis) {
   const keyIds = new Map();
-  const subagentTasks = analysis.acceptedTasks.filter((task) => task.taskType === "agent");
-  const sessionKeyPattern = subagentTasks.map((task) => {
-    if (!task.sessionKey) return "missing";
-    if (!keyIds.has(task.sessionKey)) keyIds.set(task.sessionKey, `key-${keyIds.size + 1}`);
-    return keyIds.get(task.sessionKey);
-  });
+  const subagentTasks = analysis.terminalToolResults.filter((task) => task.taskType === "agent");
+  for (const task of subagentTasks) {
+    if (task.sessionKey && !keyIds.has(task.sessionKey)) {
+      keyIds.set(task.sessionKey, `key-${keyIds.size + 1}`);
+    }
+  }
+  const sessionKeyPattern = subagentTasks.map((task) =>
+    task.sessionKey ? keyIds.get(task.sessionKey) : "missing");
   const sessionKeyState = subagentTasks.length === 0
     ? "no-agent-tasks"
     : sessionKeyPattern.includes("missing")
@@ -561,42 +617,50 @@ function summarizedAnalysis(analysis) {
       : keyIds.size === 1
         ? "same"
         : "different";
-  const tasks = analysis.acceptedTasks.map((accepted) => {
-    const terminal = analysis.notifications.find((notification) =>
-      notification.taskId === accepted.taskId && notification.taskType === accepted.taskType);
-    return {
-      taskId: accepted.taskId,
-      taskType: accepted.taskType,
-      acceptedStatus: "accepted",
-      outcome: terminal?.status ?? "pending",
-      ...(accepted.taskType === "agent"
-        ? {
-            sessionKey: accepted.sessionKey ? keyIds.get(accepted.sessionKey) : null,
-            terminalSessionKeyMatches: terminal ? terminal.sessionKey === accepted.sessionKey : null,
-          }
-        : {}),
-    };
-  });
+  const tasks = analysis.terminalToolResults.map((terminal) => ({
+    toolCallId: terminal.toolCallId,
+    taskId: terminal.taskId,
+    taskType: terminal.taskType,
+    status: terminal.status,
+    toolCallRecordAtMs: terminal.toolCallRecordAtMs ?? null,
+    toolResultRecordAtMs: terminal.toolResultRecordAtMs ?? null,
+    toolRecordIntervalMs: terminal.toolRecordIntervalMs ?? null,
+    usage: terminal.usage ?? null,
+    detailsStatus: terminal.detailsStatus ?? null,
+    detailsTaskId: terminal.detailsTaskId ?? null,
+    detailsTaskIdMatches: terminal.detailsTaskId === terminal.taskId,
+    envelope: terminal.envelope,
+    ...(terminal.taskType === "agent"
+      ? {
+          sessionKey: terminal.sessionKey ?? null,
+          sessionKeyAlias: terminal.sessionKey ? keyIds.get(terminal.sessionKey) : null,
+          detailsSessionKey: terminal.detailsSessionKey ?? null,
+          detailsSessionKeyMatches: terminal.detailsSessionKey === terminal.sessionKey,
+        }
+      : {}),
+  }));
+  const delegationCalls = [...analysis.subagentCalls, ...analysis.workflowCalls];
+  const terminalCallIds = new Set(analysis.terminalToolResults.map((task) => task.toolCallId));
   const taskOutcomes = {
-    accepted: tasks.length,
-    completed: tasks.filter((task) => task.outcome === "completed").length,
-    failed: tasks.filter((task) => task.outcome === "failed").length,
-    pending: tasks.filter((task) => task.outcome === "pending").length,
-    unmatchedNotifications: analysis.notifications.filter((notification) =>
-      !analysis.acceptedTasks.some((accepted) =>
-        accepted.taskId === notification.taskId && accepted.taskType === notification.taskType)).length,
+    calls: delegationCalls.length,
+    terminalToolResults: tasks.length,
+    completed: tasks.filter((task) => task.status === "completed").length,
+    failed: tasks.filter((task) => task.status === "failed").length,
+    missingToolResults: delegationCalls.filter((call) => !terminalCallIds.has(call.toolCallId)).length,
+    customTaskNotifications: analysis.customTaskNotificationCount,
   };
   return {
     rootModels: analysis.rootModels,
     toolCounts: analysis.toolCounts,
     subagentCallCount: analysis.subagentCalls.length,
     subagentCallGroups: analysis.subagentCalls.map((call) => call.group),
-    requestedSessionKeys: analysis.subagentCalls.map((call) =>
+    requestedSessionKeys: analysis.subagentCalls.map((call) => call.sessionKey || null),
+    requestedSessionKeyAliases: analysis.subagentCalls.map((call) =>
       call.sessionKey ? keyIds.get(call.sessionKey) ?? "provided-unmatched" : "fresh"),
     sessionKeyState,
     sessionKeyPattern,
     workflowCalls: analysis.workflowCalls,
-    tasks,
+    terminalToolResults: tasks,
     taskOutcomes,
     rootUsage: analysis.rootUsage,
   };
@@ -617,6 +681,15 @@ async function main() {
     printHelp();
     return;
   }
+
+  outputRedactions = [
+    options.runRoot,
+    options.agentDir,
+    options.authAgentDir,
+    options.extension,
+    repoRoot,
+    process.env.HOME,
+  ].filter((value) => typeof value === "string" && value.length > 0);
 
   const credential = resolveDeepseekApiKey(process.env, options.deepseekApiKeyEnv);
   if (!credential) {
@@ -657,12 +730,13 @@ async function main() {
       repoRoot,
       process.env.HOME,
     ].filter((value) => typeof value === "string" && value.length > 0))];
+    outputRedactions = redactions;
     const selected = SCENARIOS.filter((scenario) => !options.only || options.only.includes(scenario.key));
     console.log("pi-flow prompt-routing E2E observations");
     console.log(`  model: ${ROOT_MODEL}`);
     console.log(`  thinking: ${ROOT_THINKING}`);
     console.log(`  repetitions: ${options.repetitions}`);
-    console.log(`  session root: ${options.runRoot}`);
+    console.log(`  session root: ${redactSecrets(options.runRoot, redactions)}`);
     console.log(`  Claude Code provider guard: DeepSeek (${DEEPSEEK_ANTHROPIC_BASE_URL})`);
 
     const results = [];
@@ -676,8 +750,8 @@ async function main() {
           environment,
           redactions,
         });
-        const analysis = analyzeJsonl(run.stdout);
-        const result = {
+        const analysis = analyzeJsonl(readPersistedSessionJsonl(run.sessionDir));
+        const result = redactOutputValue({
           scenario: scenario.key,
           repetition,
           durationMs: run.durationMs,
@@ -691,7 +765,7 @@ async function main() {
           changedFiles: run.changed,
           sessionDir: run.sessionDir,
           analysis: summarizedAnalysis(analysis),
-        };
+        }, redactions);
         results.push(result);
         printRun(result);
       }
@@ -706,7 +780,8 @@ async function main() {
       infrastructureFailureCount,
       results,
     };
-    writeFileSync(path.join(options.runRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    const redactedReport = redactOutputValue(report, redactions);
+    writeFileSync(path.join(options.runRoot, "report.json"), `${JSON.stringify(redactedReport, null, 2)}\n`, "utf8");
     console.log(`\nSummary: ${results.length} observation(s), ${infrastructureFailureCount} infrastructure failure(s).`);
     if (infrastructureFailureCount > 0) throw new Error("prompt-routing E2E infrastructure failed");
     completedSuccessfully = true;
@@ -717,12 +792,15 @@ async function main() {
         rmSync(options.agentDir, { recursive: true, force: true });
       }
       if (completedSuccessfully && !options.keep) removeOwnedRunRoot(options.runRoot);
-      else if (existsSync(options.runRoot)) console.log(`Session artifacts kept at: ${options.runRoot}`);
+      else if (existsSync(options.runRoot)) {
+        console.log(`Session artifacts kept at: ${redactSecrets(options.runRoot, outputRedactions)}`);
+      }
     }
   }
 }
 
 main().catch((error) => {
-  console.error(`prompt-routing E2E error: ${error instanceof Error ? error.message : String(error)}`);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`prompt-routing E2E error: ${redactSecrets(message, outputRedactions)}`);
   process.exitCode = 1;
 });

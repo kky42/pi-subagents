@@ -340,33 +340,74 @@ function parseEnvelope(value) {
   }
 }
 
+function persistedRecordTimestampMs(record) {
+  const value = record?.timestamp;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 function analyzeSession(sessionDir) {
   const file = findNewestJsonl(sessionDir);
   const toolCalls = {};
+  const workflowCallsById = new Map();
   let fileEdits = 0;
-  const accepted = [];
-  const notifications = [];
+  let customTaskNotificationCount = 0;
+  const terminalToolResults = [];
   for (const r of readJsonlRecords(file)) {
     const m = r.message ?? (r.type === "custom_message" ? { role: "custom", ...r } : undefined);
+    const recordTimestampMs = persistedRecordTimestampMs(r);
     const content = Array.isArray(m?.content) ? m.content : [];
     for (const it of content) {
       if (it?.type === "toolCall" && typeof it.name === "string") {
         toolCalls[it.name] = (toolCalls[it.name] ?? 0) + 1;
         if (EDIT_TOOLS.has(it.name)) fileEdits += 1;
+        if (it.name === "run_workflow" && typeof it.id === "string") {
+          workflowCallsById.set(it.id, {
+            toolCallId: it.id,
+            arguments: it.arguments ?? {},
+            toolCallRecordAtMs: recordTimestampMs,
+          });
+        }
       }
     }
     if (m?.role === "toolResult" && m.toolName === "run_workflow") {
-      const envelope = parseEnvelope(m.details) ?? parseEnvelope(m.content?.[0]?.text);
-      if (envelope?.task_type === "workflow" && envelope.status === "accepted") accepted.push(envelope);
+      const envelope = parseEnvelope(m.content?.[0]?.text);
+      if (
+        envelope?.task_type === "workflow"
+        && (envelope.status === "completed" || envelope.status === "failed")
+        && typeof envelope.task_id === "string"
+      ) {
+        const call = workflowCallsById.get(m.toolCallId);
+        terminalToolResults.push({
+          toolCallId: m.toolCallId,
+          call,
+          envelope,
+          details: m.details && typeof m.details === "object" ? m.details : undefined,
+          toolCallRecordAtMs: call?.toolCallRecordAtMs,
+          toolResultRecordAtMs: recordTimestampMs,
+          toolRecordIntervalMs: typeof call?.toolCallRecordAtMs === "number" && typeof recordTimestampMs === "number"
+            ? Math.max(0, recordTimestampMs - call.toolCallRecordAtMs)
+            : undefined,
+          usage: m.usage,
+        });
+      }
     }
     if (m?.role === "custom" && m.customType === "pi-flow-task-notification") {
-      const envelope = parseEnvelope(m.details) ?? parseEnvelope(m.content);
-      if (envelope?.task_type === "workflow") notifications.push(envelope);
+      customTaskNotificationCount += 1;
     }
   }
-  const launch = accepted.at(-1);
-  const terminal = launch && notifications.find((item) => item.task_id === launch.task_id);
-  return { sessionFile: file, toolCalls, fileEdits, workflow: launch ? { accepted: launch, terminal } : undefined };
+  return {
+    sessionFile: file,
+    toolCalls,
+    fileEdits,
+    terminalToolResults,
+    customTaskNotificationCount,
+    workflow: terminalToolResults.at(-1),
+  };
 }
 
 function workflowDirForSessionFile(sessionFile) {
@@ -395,48 +436,101 @@ function readJournal(sessionFile, taskId) {
   return { path: journalPath, taskStart, subagentResults: subagentResults.filter(Boolean), taskComplete, taskError };
 }
 
-function resultFromNotification(notification) {
-  if (!notification || typeof notification.content !== "string") return undefined;
+function resultFromTerminalEnvelope(envelope) {
+  if (!envelope || typeof envelope.content !== "string") return undefined;
   try {
-    return JSON.parse(notification.content);
+    return JSON.parse(envelope.content);
   } catch {
-    return notification.content;
+    return envelope.content;
   }
 }
 
 function observeWorkflow(s, session) {
-  const accepted = session.workflow?.accepted;
-  const terminal = session.workflow?.terminal;
-  if (!accepted) {
-    s.check("workflow accepted result present", false, "no accepted run_workflow toolResult");
+  const toolResult = session.workflow;
+  const terminal = toolResult?.envelope;
+  const details = toolResult?.details;
+  if (!terminal) {
+    s.check("terminal run_workflow Tool result present", false, "no terminal run_workflow toolResult");
     return undefined;
   }
   s.check(
-    "accepted envelope is compact",
-    JSON.stringify(Object.keys(accepted).sort()) === JSON.stringify(["name", "status", "task_id", "task_type"]),
-    JSON.stringify(accepted),
-  );
-  s.check("status === accepted", accepted.status === "accepted", `status=${accepted.status}`);
-  s.check(
-    "terminal notification correlates by task_id",
-    terminal?.task_id === accepted.task_id && terminal?.task_type === "workflow",
-    JSON.stringify(terminal),
-  );
-  s.check(
-    "accepted and terminal names match",
-    terminal?.name === accepted.name,
-    JSON.stringify({ accepted: accepted.name, terminal: terminal?.name }),
-  );
-  s.check(
     "terminal envelope is compact",
-    JSON.stringify(Object.keys(terminal ?? {}).sort()) === JSON.stringify(["content", "name", "status", "task_id", "task_type"]),
+    JSON.stringify(Object.keys(terminal).sort()) === JSON.stringify(["content", "name", "status", "task_id", "task_type"]),
     JSON.stringify(terminal),
   );
+  s.check(
+    "terminal Tool result has workflow task_id",
+    terminal.task_type === "workflow" && typeof terminal.task_id === "string",
+    JSON.stringify(terminal),
+  );
+  s.check(
+    "terminal envelope and rich details correlate",
+    details?.taskId === terminal.task_id && details?.name === terminal.name,
+    JSON.stringify({ envelope: { taskId: terminal.task_id, name: terminal.name }, details: { taskId: details?.taskId, name: details?.name } }),
+  );
+  const expectedDetailsStatuses = terminal.status === "completed" ? ["completed"] : ["error", "aborted"];
+  s.check(
+    "terminal envelope and rich details statuses agree",
+    expectedDetailsStatuses.includes(details?.status),
+    JSON.stringify({ envelope: terminal.status, details: details?.status }),
+  );
+  s.check(
+    "rich details contain workflow UI state",
+    Array.isArray(details?.subagents) && Array.isArray(details?.phases) && Array.isArray(details?.logs),
+    JSON.stringify(details),
+  );
+  s.check("no custom task notification was emitted", session.customTaskNotificationCount === 0, `count=${session.customTaskNotificationCount}`);
+  s.check(
+    "persisted Tool call-to-result record interval was recorded",
+    Number.isFinite(toolResult.toolRecordIntervalMs),
+    `toolRecordIntervalMs=${toolResult.toolRecordIntervalMs}`,
+  );
+
+  const journal = readJournal(session.sessionFile, terminal.task_id);
+  const replayFromTaskId = typeof toolResult.call?.arguments?.resume_from_task_id === "string"
+    ? toolResult.call.arguments.resume_from_task_id
+    : undefined;
+  const sessionKeys = [...new Set([
+    ...(details?.subagents ?? []).map((subagent) => subagent.sessionKey),
+    ...(journal?.subagentResults ?? []).map((subagent) => subagent.sessionKey),
+  ].filter((value) => typeof value === "string"))];
+  s.record({
+    toolCallId: toolResult.toolCallId,
+    terminalToolResult: terminal,
+    details: {
+      taskId: details?.taskId,
+      status: details?.status,
+      subagentCount: details?.subagentCount,
+      cachedSubagentCount: details?.cachedSubagentCount,
+      sessionKeys,
+    },
+    toolCallRecordAtMs: toolResult.toolCallRecordAtMs ?? null,
+    toolResultRecordAtMs: toolResult.toolResultRecordAtMs ?? null,
+    toolRecordIntervalMs: toolResult.toolRecordIntervalMs ?? null,
+    usage: toolResult.usage ?? null,
+    journal: journal
+      ? {
+          path: journal.path,
+          taskId: journal.taskStart?.taskId,
+          source: journal.taskStart?.source,
+          status: journal.taskComplete ? "completed" : journal.taskError ? "failed" : "running",
+          subagentResultCount: journal.subagentResults.length,
+          cachedSubagentCount: journal.subagentResults.filter((result) => result.cached === true).length,
+          resumeFromTaskId: journal.taskStart?.resumeFromTaskId,
+        }
+      : null,
+    replay: {
+      requestedFromTaskId: replayFromTaskId ?? null,
+      journalFromTaskId: journal?.taskStart?.resumeFromTaskId ?? null,
+    },
+  });
   return {
-    accepted,
     terminal,
-    journal: readJournal(session.sessionFile, accepted.task_id),
-    result: resultFromNotification(terminal),
+    details,
+    journal,
+    result: resultFromTerminalEnvelope(terminal),
+    toolRecordIntervalMs: toolResult.toolRecordIntervalMs,
+    usage: toolResult.usage,
   };
 }
 
@@ -471,20 +565,25 @@ function resumePrompt(taskId, args) {
     '- name: "feature_probe"',
     `- resume_from_task_id: "${taskId}"`,
     `- args: ${JSON.stringify(args)}`,
-    "Wait for the matching terminal task notification, then report its result.",
+    "Report the terminal Tool result returned by run_workflow.",
   ].join("\n");
 }
 
 function makeScenario(name) {
   const checks = [];
+  const observations = [];
   return {
     name,
     checks,
+    observations,
     check(label, ok, info = "") {
       checks.push({ label, status: ok ? "PASS" : "FAIL", info });
     },
     soft(label, ok, info = "") {
       checks.push({ label, status: ok ? "PASS" : "INCONCLUSIVE", info });
+    },
+    record(observation) {
+      observations.push(observation);
     },
   };
 }
@@ -512,7 +611,7 @@ async function scenarioKitchenSink(ctx) {
   s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
   s.check("terminal name === feature_probe (script ran verbatim)", wf.terminal?.name === "feature_probe", `name=${wf.terminal?.name}`);
   s.check("task journal exists", Boolean(wf.journal), wf.journal?.path ?? "missing");
-  s.check("journal task_start correlates with accepted task", wf.journal?.taskStart?.taskId === wf.accepted.task_id, JSON.stringify(wf.journal?.taskStart));
+  s.check("journal task_start correlates with terminal task", wf.journal?.taskStart?.taskId === wf.terminal.task_id, JSON.stringify(wf.journal?.taskStart));
   s.check("persisted script exists", isNonEmptyString(wf.journal?.taskStart?.scriptPath) && existsSync(wf.journal.taskStart.scriptPath), wf.journal?.taskStart?.scriptPath ?? "");
   s.check("journal records task_complete", Boolean(wf.journal?.taskComplete) && !wf.journal?.taskError, JSON.stringify(wf.journal?.taskError));
   s.check("journal records 4 subagent results", wf.journal?.subagentResults.length === 4, `subagentResults=${wf.journal?.subagentResults.length}`);
@@ -532,7 +631,7 @@ async function scenarioKitchenSink(ctx) {
   s.check("pipeline produced items with plain-text sentences", items.length >= 1 && items.every((it) => isNonEmptyString(it.sentence)), JSON.stringify(items));
   s.check("return value synthesized (count matches items)", result?.count === items.length && items.length >= 1, JSON.stringify({ count: result?.count, items: items.length }));
 
-  ctx.kitchen = { sessionDir, sessionId: `${ctx.idBase}-kitchen`, taskId: wf.accepted.task_id, result };
+  ctx.kitchen = { sessionDir, sessionId: `${ctx.idBase}-kitchen`, taskId: wf.terminal.task_id, result };
   return { scenario: s };
 }
 
@@ -904,7 +1003,7 @@ async function main() {
   writeFileSync(
     reportPath,
     `${JSON.stringify(
-      { options, scenarios: results.map((r) => ({ name: r.scenario.name, checks: r.scenario.checks })) },
+      { options, scenarios: results.map((r) => ({ name: r.scenario.name, checks: r.scenario.checks, observations: r.scenario.observations })) },
       null,
       2,
     )}\n`,

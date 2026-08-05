@@ -67,12 +67,6 @@ export function buildFlowPrompt(
 ): string {
   return `# PiFlow delegation
 
-\`run_agent\` and \`run_workflow\` calls return an \`accepted\` task immediately and continue in the background; you receive one notification when each task completes or fails.
-
-After calling \`run_agent\` or \`run_workflow\`, do not perform work covered by that task until it completes or fails. Continue only clearly non-overlapping work.
-
-Never sleep or poll while waiting for a background task. If no non-overlapping work remains, take no further action solely to wait. The completion notification will arrive automatically.
-
 ${WORKFLOW_AUTHORING_GUIDE}
 
 Registered subagents:

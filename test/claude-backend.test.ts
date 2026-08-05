@@ -34,7 +34,7 @@ describe("pi-subagent claude backend", () => {
     trackSession,
     disposeSession,
     createSession,
-    waitForTaskNotification,
+    taskNotifications,
     makeMockTheme,
     stripAnsi,
     renderToText,
@@ -204,13 +204,12 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
       fauxAssistantMessage("launch observed"),
-      fauxAssistantMessage("notification observed"),
     ]);
 
     await session.prompt("Delegate to Claude.");
-    const accepted = session.messages.find((message: any) =>
+    const result = session.messages.find((message: any) =>
       message.role === "toolResult" && message.toolName === "run_agent") as any;
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
+    const terminal = JSON.parse(result.content[0].text);
 
     const claudeRun = JSON.parse(readFileSync(argsPath, "utf8"));
     const claudeArgs = claudeRun.args;
@@ -227,9 +226,21 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(claudeArgs).toContain("--append-system-prompt");
     expect(claudeArgs).toContain("Claude reviewer prompt.");
     expect(claudeRun.stdin).toBe("Review the latest diff.");
-    expect(accepted.details).toMatchObject({ status: "accepted", session_key: expect.stringMatching(/^session_/) });
-    expect(terminal).toEqual({ ...accepted.details, status: "completed", content: "claude child done" });
+    expect(result.details).toMatchObject({
+      status: "done",
+      taskId: terminal.task_id,
+      sessionKey: expect.stringMatching(/^session_/),
+    });
+    expect(result.usage).toMatchObject({ input: 150, cacheRead: 250, cacheWrite: 350, output: 25 });
+    expect(terminal).toMatchObject({
+      task_type: "agent",
+      status: "completed",
+      session_key: result.details.sessionKey,
+      label: "Claude review",
+      content: "claude child done",
+    });
     expect(JSON.stringify(terminal)).not.toContain("session_id:");
+    expect(taskNotifications(session)).toEqual([]);
 
     disposeSession(session);
   });

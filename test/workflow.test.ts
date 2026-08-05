@@ -5,7 +5,7 @@ import { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 import { SessionKeyLocks } from "../src/core/session-key.ts";
-import { BackgroundTaskManager } from "../src/core/task-manager.ts";
+import { SynchronousTaskManager } from "../src/core/task-manager.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
 import { createRunWorkflowTool } from "../src/pi-workflow.ts";
 import { INLINE_WORKFLOW_EXAMPLE } from "../src/prompts.ts";
@@ -998,13 +998,12 @@ describe("saved workflow registry", () => {
 });
 
 describe("run_workflow tool rendering", () => {
-  const taskManager = new BackgroundTaskManager({ notify: () => {} });
+  const taskManager = new SynchronousTaskManager();
   const tool = createRunWorkflowTool({
     getTaskManager: () => taskManager,
     getLimiter: () => new ConcurrencyLimiter(4),
     getThinkingLevel: () => "high",
     getSubagentTimeoutMs: () => 0,
-    updateStatus: () => {},
   }) as unknown as {
     renderCall: (args: unknown, theme: Theme, context: { executionStarted: boolean }) => { render: (width: number) => string[] };
     renderResult: (result: unknown, options: unknown, theme: Theme) => { render: (width: number) => string[] };
@@ -1013,35 +1012,145 @@ describe("run_workflow tool rendering", () => {
   it("renders the call label and hides it once execution starts", () => {
     const theme = makeMockTheme();
     const before = renderToText(tool.renderCall({ name: "audit", script: "export const meta = {}" }, theme, { executionStarted: false }));
-    expect(before).toContain("Workflow");
+    expect(before).toContain("Workflow(audit)");
     const after = renderToText(tool.renderCall({ name: "audit", script: "..." }, theme, { executionStarted: true }));
     expect(after.trim()).toBe("");
   });
 
-  it("renders the compact accepted workflow envelope", () => {
+  it("renders live phases and subagents", () => {
     const theme = makeMockTheme();
     const details = {
-      task_id: "task_123",
-      task_type: "workflow",
-      status: "accepted",
+      taskId: "task_123",
       name: "audit",
+      status: "running",
+      subagentCount: 2,
+      phases: ["scan"],
+      plannedPhases: [{ title: "scan" }, { title: "review" }],
+      currentPhase: "scan",
+      logs: [],
+      frame: 1,
+      subagents: [
+        { index: 1, label: "source", profile: "general-purpose", backend: "pi", phase: "scan", status: "running", activity: ["read src"], activityCount: 1 },
+        { index: 2, label: "tests", profile: "general-purpose", backend: "pi", phase: "scan", status: "queued", activity: [], activityCount: 0 },
+      ],
     };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: JSON.stringify(details) }], details }, {}, theme));
-    expect(text).toContain("Workflow(audit) accepted task_123");
-    expect(text).not.toContain("agent");
+    const text = renderToText(tool.renderResult({ content: [], details }, {}, theme));
+
+    expect(text).toContain("Workflow(audit) running · 0/2");
+    expect(text).toContain("▶ scan running · 0/2");
+    expect(text).toContain("Pi Agent(general-purpose: source)");
+    expect(text).toContain("read src");
+    expect(text).toContain("◌ Pi Agent(general-purpose, tests) queued");
+    expect(text).toContain("· review planned · 0/0");
   });
 
-  it("renders accepted envelopes without exposing extra result content", () => {
+  it("renders accurate aggregate totals around a bounded phase and agent window", () => {
     const theme = makeMockTheme();
     const details = {
-      task_id: "task_secret",
-      task_type: "workflow",
-      status: "accepted",
-      name: "review",
+      taskId: "task_large",
+      name: "large-review",
+      status: "running",
+      subagentCount: 50,
+      subagentStatusCounts: { queued: 5, running: 10, done: 30, error: 5, aborted: 0 },
+      phaseCount: 20,
+      phases: ["scan", "review"],
+      phaseSummaries: [
+        {
+          id: 1,
+          title: "scan",
+          planned: true,
+          reached: true,
+          current: false,
+          subagentCount: 35,
+          statusCounts: { queued: 0, running: 0, done: 30, error: 5, aborted: 0 },
+        },
+        {
+          id: 2,
+          title: "review",
+          planned: true,
+          reached: true,
+          current: true,
+          subagentCount: 15,
+          statusCounts: { queued: 5, running: 10, done: 0, error: 0, aborted: 0 },
+        },
+      ],
+      plannedPhases: [{ title: "scan" }, { title: "review" }],
+      currentPhase: "review",
+      subagents: [
+        { index: 31, phaseId: 1, phase: "scan", label: "failed scan", profile: "general-purpose", backend: "pi", status: "error", error: "scan failed" },
+        { index: 41, phaseId: 2, phase: "review", label: "active review", profile: "general-purpose", backend: "pi", status: "running", activity: ["reviewing"], activityCount: 1 },
+      ],
+      logCount: 50,
+      logs: ["log 48", "log 49", "log 50"],
     };
-    const text = renderToText(tool.renderResult({ content: [{ type: "text", text: "hidden workflow result" }], details }, {}, theme));
-    expect(text).toContain("Workflow(review) accepted task_secret");
-    expect(text).not.toContain("hidden workflow result");
+
+    const text = renderToText(tool.renderResult({ content: [], details }, {}, theme));
+
+    expect(text).toContain("Workflow(large-review) running · 30/50");
+    expect(text).toContain("⚠ scan partial · 30/35");
+    expect(text).toContain("▶ review running · 0/15");
+    expect(text).toContain("... 34 more");
+    expect(text).toContain("... 14 more");
+    expect(text).toContain("... 18 more phase(s)");
+    expect(text).toContain("... 47 earlier log(s) not shown");
+    expect(text).toContain("failed scan");
+    expect(text).toContain("active review");
+  });
+
+  it("renders completed and failed workflow snapshots", () => {
+    const theme = makeMockTheme();
+    const completed = {
+      taskId: "task_done",
+      name: "review",
+      status: "completed",
+      subagentCount: 1,
+      phases: [],
+      logs: ["review logged"],
+      subagents: [
+        { index: 1, label: "reviewer", profile: "general-purpose", backend: "pi", status: "done" },
+      ],
+    };
+    const failed = {
+      taskId: "task_failed",
+      name: "broken",
+      status: "error",
+      subagentCount: 0,
+      phases: [],
+      logs: [],
+      subagents: [],
+      error: "invalid workflow",
+    };
+    const aborted = {
+      taskId: "task_aborted",
+      name: "cancelled",
+      status: "aborted",
+      subagentCount: 1,
+      phases: [],
+      logs: [],
+      subagents: [
+        {
+          index: 1,
+          label: "worker",
+          profile: "general-purpose",
+          backend: "pi",
+          status: "aborted",
+          error: "Pi session shut down",
+        },
+      ],
+      error: "Pi session shut down",
+    };
+
+    const completedText = renderToText(tool.renderResult({ content: [], details: completed }, {}, theme));
+    const failedText = renderToText(tool.renderResult({ content: [], details: failed }, {}, theme));
+    const abortedText = renderToText(tool.renderResult({ content: [], details: aborted }, {}, theme));
+
+    expect(completedText).toContain("Workflow(review) completed · 1/1");
+    expect(completedText).toContain("✓ Pi Agent(general-purpose, reviewer)");
+    expect(completedText).toContain("review logged");
+    expect(failedText).toContain("Workflow(broken) error · 0/0");
+    expect(failedText).toContain("invalid workflow");
+    expect(abortedText).toContain("Workflow(cancelled) aborted · 0/1");
+    expect(abortedText).toContain("⊘ Pi Agent(general-purpose, worker) aborted: Pi session shut down");
   });
 });
 

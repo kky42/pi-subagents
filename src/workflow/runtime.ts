@@ -220,7 +220,7 @@ export async function runWorkflow<T = unknown>(
     };
     try {
       result = options.serializeSubagent
-        ? await options.serializeSubagent(opts.sessionKey, runLiveSubagent)
+        ? await options.serializeSubagent(opts.sessionKey, runLiveSubagent, compositeSignal)
         : await runLiveSubagent();
     } catch (error) {
       failed = true;

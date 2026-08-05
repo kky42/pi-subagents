@@ -7,7 +7,7 @@ describe("delegation scenario execution", () => {
     disposeSession,
     createSession,
     setContextRoutingResponses,
-    waitForTaskNotification,
+    taskNotifications,
     makeExecutionContext,
     getToolNames,
   } = setupPiSubagentTestHarness();
@@ -24,25 +24,26 @@ describe("delegation scenario execution", () => {
     disposeSession(session);
   });
 
-  it("runs a flat fan-out as independent accepted background tasks", async () => {
+  it("runs a flat fan-out as independent synchronous tasks", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("root continuation");
       const text = JSON.stringify(providerContext.messages);
       return fauxAssistantMessage(text.includes("source") ? "source result" : "test result");
     });
 
-    const accepted = await Promise.all([
+    const results = await Promise.all([
       tool.execute("source", { label: "Inspect source", prompt: "Inspect source correctness." }, undefined, undefined, context),
       tool.execute("tests", { label: "Inspect tests", prompt: "Inspect test coverage." }, undefined, undefined, context),
     ]);
-    const terminals = await Promise.all(accepted.map((result) => waitForTaskNotification(session, result.details.task_id)));
+    const terminals = results.map((result) => JSON.parse(result.content[0].text));
 
-    expect(accepted.every((result) => result.details.status === "accepted")).toBe(true);
-    expect(accepted[0].details.session_key).not.toBe(accepted[1].details.session_key);
+    expect(results.every((result) => result.details.status === "done")).toBe(true);
+    expect(results[0].details.sessionKey).not.toBe(results[1].details.sessionKey);
     expect(terminals.map((result) => result.content).sort()).toEqual(["source result", "test result"]);
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
@@ -52,7 +53,7 @@ describe("delegation scenario execution", () => {
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     let continuedChildContext: Context | undefined;
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("root continuation");
       if (JSON.stringify(providerContext.messages).includes("Recall and refine")) {
         continuedChildContext = providerContext;
         return fauxAssistantMessage("refined flow");
@@ -67,23 +68,24 @@ describe("delegation scenario execution", () => {
       undefined,
       context,
     );
-    await waitForTaskNotification(session, first.details.task_id);
+    expect(JSON.parse(first.content[0].text).content).toBe("remembered flow");
     const second = await tool.execute(
       "continue",
       {
         label: "Continue investigation",
         prompt: "Recall and refine the flow.",
-        session_key: first.details.session_key,
+        session_key: first.details.sessionKey,
       },
       undefined,
       undefined,
       context,
     );
-    const terminal = await waitForTaskNotification(session, second.details.task_id);
+    const terminal = JSON.parse(second.content[0].text);
 
-    expect(second.details.session_key).toBe(first.details.session_key);
+    expect(second.details.sessionKey).toBe(first.details.sessionKey);
     expect(JSON.stringify(continuedChildContext?.messages)).toContain("remembered flow");
     expect(terminal.content).toBe("refined flow");
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 });

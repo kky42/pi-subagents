@@ -34,7 +34,7 @@ describe("pi-subagent codex backend", () => {
     trackSession,
     disposeSession,
     createSession,
-    waitForTaskNotification,
+    taskNotifications,
     makeMockTheme,
     stripAnsi,
     renderToText,
@@ -208,13 +208,12 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
         prompt: "Review the latest diff.",
       })], { stopReason: "toolUse" }),
       fauxAssistantMessage("launch observed"),
-      fauxAssistantMessage("notification observed"),
     ]);
 
     await session.prompt("Delegate to Codex.");
-    const accepted = session.messages.find((message: any) =>
+    const result = session.messages.find((message: any) =>
       message.role === "toolResult" && message.toolName === "run_agent") as any;
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
+    const terminal = JSON.parse(result.content[0].text);
 
     const codexRun = JSON.parse(readFileSync(argsPath, "utf8"));
     const codexArgs = codexRun.args;
@@ -226,9 +225,21 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
     expect(codexArgs).not.toContain("--ephemeral");
     expect(codexArgs.at(-1)).toBe("-");
     expect(codexRun.stdin).toBe("Review the latest diff.");
-    expect(accepted.details).toMatchObject({ status: "accepted", session_key: expect.stringMatching(/^session_/) });
-    expect(terminal).toEqual({ ...accepted.details, status: "completed", content: "codex child done" });
+    expect(result.details).toMatchObject({
+      status: "done",
+      taskId: terminal.task_id,
+      sessionKey: expect.stringMatching(/^session_/),
+    });
+    expect(result.usage).toMatchObject({ input: 800, cacheRead: 200, output: 50 });
+    expect(terminal).toMatchObject({
+      task_type: "agent",
+      status: "completed",
+      session_key: result.details.sessionKey,
+      label: "Codex review",
+      content: "codex child done",
+    });
     expect(JSON.stringify(terminal)).not.toContain("session_id:");
+    expect(taskNotifications(session)).toEqual([]);
 
     disposeSession(session);
   });
@@ -475,7 +486,7 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
     expect(result.details.error).toContain("without a newline");
   });
 
-  it("renders priced Codex usage above 272K in the subagent widget", async () => {
+  it("returns priced Codex usage above 272K from the synchronous tool", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-tiered-cost");
     mkdirSync(subagentsDir, { recursive: true });
@@ -498,8 +509,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
 
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("run_agent") as any;
-    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
-    const accepted = await tool.execute(
+    const result = await tool.execute(
       "codex-tiered-cost",
       {
         label: "Tiered cost",
@@ -508,25 +518,19 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 2720
       },
       undefined,
       undefined,
-      makeExecutionContext({
-        hasUI: true,
-        model,
-        modelRegistry,
-        onWidget: (key, lines) => widgets.push({ key, lines }),
-      }),
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
 
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
-    expect(accepted).not.toHaveProperty("usage");
+    const terminal = JSON.parse(result.content[0].text);
+    expect(result.usage).toMatchObject({ input: 271801, cacheRead: 200, output: 50 });
+    expect(result.usage.cost.total).toBeCloseTo(2.720, 3);
     expect(terminal).toMatchObject({ status: "completed", content: "tiered model done" });
-    const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(final).toContain("$2.720");
-    expect(final).not.toContain("$?");
+    expect(taskNotifications(session)).toEqual([]);
 
     disposeSession(session);
   });
 
-  it("marks unknown codex model cost in the widget", async () => {
+  it("marks unknown Codex model cost in the synchronous tool details", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-unknown-cost");
     mkdirSync(subagentsDir, { recursive: true });
@@ -550,8 +554,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("run_agent") as any;
-    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
-    const accepted = await tool.execute(
+    const result = await tool.execute(
       "codex-unknown-cost",
       {
         label: "Unknown cost",
@@ -560,25 +563,24 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
       },
       undefined,
       undefined,
-      makeExecutionContext({
-        hasUI: true,
-        model,
-        modelRegistry,
-        onWidget: (key, lines) => widgets.push({ key, lines }),
-      }),
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
 
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id, 5000);
-    expect(accepted).not.toHaveProperty("usage");
+    const terminal = JSON.parse(result.content[0].text);
+    expect(result.usage).toMatchObject({
+      input: 800,
+      cacheRead: 200,
+      output: 50,
+      cost: { total: 0 },
+    });
+    expect(result.details.telemetry).toMatchObject({ tokensKnown: true, costKnown: false });
     expect(terminal).toMatchObject({ status: "completed", content: "unknown model done" });
-    const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(final).toContain("pi-flow idle · 1 agent and 0 workflows done · ↑800 ↓50 R200");
-    expect(final).toContain("$?");
+    expect(taskNotifications(session)).toEqual([]);
 
     disposeSession(session);
   });
 
-  it("computes aggregate cache hit rate from cumulative child usage", async () => {
+  it("returns cache usage for consecutive synchronous child runs", async () => {
     const subagentsDir = join(agentDir, "subagents");
     const binDir = join(tempDir, "bin-aggregate-cache");
     mkdirSync(subagentsDir, { recursive: true });
@@ -603,13 +605,7 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
 
     const { session, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("run_agent") as any;
-    const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
-    const context = makeExecutionContext({
-      hasUI: true,
-      model,
-      modelRegistry,
-      onWidget: (key, lines) => widgets.push({ key, lines }),
-    });
+    const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
 
     const first = await tool.execute(
       "codex-cache-first",
@@ -618,7 +614,8 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
       undefined,
       context,
     );
-    await waitForTaskNotification(session, first.details.task_id, 5000);
+    expect(JSON.parse(first.content[0].text).status).toBe("completed");
+    expect(first.usage).toMatchObject({ input: 100, cacheRead: 900, output: 10 });
     const second = await tool.execute(
       "codex-cache-second",
       { label: "Second cache", profile: "codex-cache", prompt: "Second" },
@@ -626,10 +623,11 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000
       undefined,
       context,
     );
-    await waitForTaskNotification(session, second.details.task_id, 5000);
-
-    const final = widgets.filter((widget) => widget.key === "pi-flow").at(-1)?.lines?.[0] ?? "";
-    expect(final).toContain("pi-flow idle · 2 agents and 0 workflows done · ↑1.0k ↓20 R1.0k CH50.0%");
+    expect(JSON.parse(second.content[0].text).status).toBe("completed");
+    expect(second.usage).toMatchObject({ input: 900, cacheRead: 100, output: 10 });
+    expect(first.usage.cacheRead + second.usage.cacheRead).toBe(1000);
+    expect(first.usage.input + second.usage.input).toBe(1000);
+    expect(taskNotifications(session)).toEqual([]);
 
     disposeSession(session);
   });

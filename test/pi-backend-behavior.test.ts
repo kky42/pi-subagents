@@ -11,7 +11,7 @@ describe("pi-subagent pi backend behavior", () => {
     disposeSession,
     createSession,
     setContextRoutingResponses,
-    waitForTaskNotification,
+    taskNotifications,
     executeSubagentTask,
     makeExecutionContext,
     getToolNames,
@@ -41,7 +41,7 @@ Custom Code Searcher Role`);
     let childOptions: SimpleStreamOptions | undefined;
     let childModel: Model<string> | undefined;
 
-    const { accepted, terminal } = await executeSubagentTask(
+    const { result, terminal } = await executeSubagentTask(
       session,
       registration,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
@@ -54,12 +54,20 @@ Custom Code Searcher Role`);
       },
     );
 
-    expect(accepted.details).toMatchObject({
-      status: "accepted",
-      session_key: expect.stringMatching(/^session_/),
+    expect(result.details).toMatchObject({
+      status: "done",
+      sessionKey: expect.stringMatching(/^session_/),
+      taskId: terminal.task_id,
       label: "Find auth files",
     });
-    expect(terminal).toEqual({ ...accepted.details, status: "completed", content: "found auth.ts" });
+    expect(terminal).toMatchObject({
+      task_type: "agent",
+      status: "completed",
+      session_key: result.details.sessionKey,
+      label: "Find auth files",
+      content: "found auth.ts",
+    });
+    expect(taskNotifications(session)).toEqual([]);
     expect(childModel?.id).toBe("faux-fast");
     expect((childOptions as { reasoning?: string } | undefined)?.reasoning).toBeUndefined();
     expect(childContext?.systemPrompt).toContain("Custom Code Searcher Role");
@@ -99,7 +107,7 @@ Custom Code Searcher Role`);
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, sessionManager });
     let secondContext: Context | undefined;
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("root continuation");
       const serialized = JSON.stringify(providerContext.messages);
       if (serialized.includes("Second prompt.")) {
         secondContext = providerContext;
@@ -109,19 +117,19 @@ Custom Code Searcher Role`);
     });
 
     const first = await tool.execute("first", { label: "Initial draft", prompt: "First prompt." }, undefined, undefined, context);
-    const firstTerminal = await waitForTaskNotification(session, first.details.task_id);
+    const firstTerminal = JSON.parse(first.content[0].text);
     const second = await tool.execute(
       "second",
-      { label: "Revise draft", prompt: "Second prompt.", session_key: first.details.session_key },
+      { label: "Revise draft", prompt: "Second prompt.", session_key: first.details.sessionKey },
       undefined,
       undefined,
       context,
     );
-    const secondTerminal = await waitForTaskNotification(session, second.details.task_id);
+    const secondTerminal = JSON.parse(second.content[0].text);
 
-    expect(first.details.session_key).toMatch(/^session_/);
-    expect(firstTerminal.session_key).toBe(first.details.session_key);
-    expect(second.details.session_key).toBe(first.details.session_key);
+    expect(first.details.sessionKey).toMatch(/^session_/);
+    expect(firstTerminal.session_key).toBe(first.details.sessionKey);
+    expect(second.details.sessionKey).toBe(first.details.sessionKey);
     expect(secondTerminal.content).toBe("draft v2");
     const messages = JSON.stringify(secondContext?.messages);
     expect(messages).toContain("First prompt.");
@@ -129,6 +137,7 @@ Custom Code Searcher Role`);
     expect(messages).toContain("Second prompt.");
     const mappings = sessionManager.getEntries().filter((entry: any) => entry.type === "custom" && entry.customType === "pi-flow-subagent-session-key");
     expect(mappings).toHaveLength(1);
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
@@ -137,7 +146,7 @@ Custom Code Searcher Role`);
     const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) =>
-      fauxAssistantMessage(getToolNames(providerContext).includes("run_agent") ? "notification observed" : "first done"));
+      fauxAssistantMessage(getToolNames(providerContext).includes("run_agent") ? "root continuation" : "first done"));
 
     const first = await tool.execute(
       "first",
@@ -146,7 +155,7 @@ Custom Code Searcher Role`);
       undefined,
       context,
     );
-    await waitForTaskNotification(session, first.details.task_id);
+    expect(JSON.parse(first.content[0].text)).toMatchObject({ status: "completed", content: "first done" });
     rmSync(join(agentDir, "subagent-sessions"), { recursive: true, force: true });
 
     const second = await tool.execute(
@@ -156,17 +165,19 @@ Custom Code Searcher Role`);
       undefined,
       context,
     );
-    const terminal = await waitForTaskNotification(session, second.details.task_id);
+    const terminal = JSON.parse(second.content[0].text);
 
+    expect(second.details.status).toBe("error");
     expect(terminal.status).toBe("failed");
     expect(terminal.content).toContain("Cannot resume subagent: persisted session");
     expect(terminal.content).toContain("was not found");
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
   it("preserves a caller-supplied new session key", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const { accepted, terminal } = await executeSubagentTask(
+    const { result, terminal } = await executeSubagentTask(
       session,
       registration,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
@@ -174,8 +185,9 @@ Custom Code Searcher Role`);
       async () => fauxAssistantMessage("worker done"),
     );
 
-    expect(accepted.details.session_key).toBe("worker");
+    expect(result.details.sessionKey).toBe("worker");
     expect(terminal.session_key).toBe("worker");
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
@@ -186,7 +198,7 @@ Custom Code Searcher Role`);
     const tool = session.getToolDefinition("run_agent") as any;
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     setContextRoutingResponses(registration, (providerContext) =>
-      fauxAssistantMessage(getToolNames(providerContext).includes("run_agent") ? "notification observed" : "first done"));
+      fauxAssistantMessage(getToolNames(providerContext).includes("run_agent") ? "root continuation" : "first done"));
 
     const first = await tool.execute(
       "first",
@@ -195,7 +207,7 @@ Custom Code Searcher Role`);
       undefined,
       context,
     );
-    await waitForTaskNotification(session, first.details.task_id);
+    expect(JSON.parse(first.content[0].text).status).toBe("completed");
     const mismatch = await tool.execute(
       "mismatch",
       { label: "Mismatch", prompt: "Second.", session_key: "shared", profile: "reviewer" },
@@ -203,29 +215,58 @@ Custom Code Searcher Role`);
       undefined,
       context,
     );
-    const terminal = await waitForTaskNotification(session, mismatch.details.task_id);
+    const terminal = JSON.parse(mismatch.content[0].text);
 
+    expect(mismatch.details.status).toBe("error");
     expect(terminal.status).toBe("failed");
     expect(terminal.content).toContain("already belongs to general-purpose (pi)");
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
-  it("reports unknown profiles only in the terminal notification", async () => {
+  it("returns a provider stop error when the child prompt resolves without a completion", async () => {
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
     const { session, registration, model, modelRegistry } = await createSession();
-    setContextRoutingResponses(registration, () => fauxAssistantMessage("notification observed"));
+    const { result, terminal } = await executeSubagentTask(
+      session,
+      registration,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+      { label: "Provider failure", prompt: "Trigger the provider failure." },
+      async () => fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "rate limit exceeded (429)",
+      }),
+    );
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "rate limit exceeded (429)",
+    });
+    expect(terminal).toMatchObject({
+      status: "failed",
+      content: "rate limit exceeded (429)",
+    });
+    expect(taskNotifications(session)).toEqual([]);
+    disposeSession(session);
+  });
+
+  it("reports unknown profiles in the synchronous terminal result", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
     const tool = session.getToolDefinition("run_agent") as any;
-    const accepted = await tool.execute(
+    const result = await tool.execute(
       "unknown",
       { label: "Unknown", prompt: "Search.", profile: "explorer" },
       undefined,
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
-    const terminal = await waitForTaskNotification(session, accepted.details.task_id);
+    const terminal = JSON.parse(result.content[0].text);
 
-    expect(accepted.details.status).toBe("accepted");
+    expect(result.details.status).toBe("error");
+    expect(result.details.taskId).toBe(terminal.task_id);
     expect(terminal.status).toBe("failed");
     expect(terminal.content).toContain("Unknown profile");
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 
@@ -235,7 +276,7 @@ Custom Code Searcher Role`);
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry });
     let secondContext: Context | undefined;
     setContextRoutingResponses(registration, (providerContext) => {
-      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("notification observed");
+      if (getToolNames(providerContext).includes("run_agent")) return fauxAssistantMessage("root continuation");
       if (JSON.stringify(providerContext.messages).includes("Second task.")) {
         secondContext = providerContext;
         return fauxAssistantMessage("second done");
@@ -244,15 +285,16 @@ Custom Code Searcher Role`);
     });
 
     const first = await tool.execute("first", { label: "First", prompt: "First task." }, undefined, undefined, context);
-    await waitForTaskNotification(session, first.details.task_id);
+    expect(JSON.parse(first.content[0].text).status).toBe("completed");
     const second = await tool.execute("second", { label: "Second", prompt: "Second task." }, undefined, undefined, context);
-    await waitForTaskNotification(session, second.details.task_id);
+    expect(JSON.parse(second.content[0].text).status).toBe("completed");
 
-    expect(first.details.session_key).not.toBe(second.details.session_key);
+    expect(first.details.sessionKey).not.toBe(second.details.sessionKey);
     const messages = JSON.stringify(secondContext?.messages);
     expect(messages).toContain("Second task.");
     expect(messages).not.toContain("FIRST_CHILD_SECRET");
     expect(messages).not.toContain("First task.");
+    expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
 });

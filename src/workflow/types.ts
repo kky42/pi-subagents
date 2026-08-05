@@ -91,7 +91,7 @@ export interface RunWorkflowOptions {
   /** Shared global concurrency cap; run_agent() queues on this. */
   limiter: ConcurrencyLimiter;
   /** Optional per-call serializer, used to keep equal session_key calls from consuming global slots while waiting. */
-  serializeSubagent?: <T>(sessionKey: string | undefined, task: () => Promise<T>) => Promise<T>;
+  serializeSubagent?: <T>(sessionKey: string | undefined, task: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
   runSubagent: WorkflowSubagentRunner;
   defaultProfile?: string;
   limits?: Partial<WorkflowLimits>;

@@ -4,21 +4,18 @@
 
 **Give Pi a team.**
 
-Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Claude Code** without leaving your Pi session.
+Run subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Claude Code** without leaving your Pi session.
 
 [![CI](https://github.com/kky42/pi-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/kky42/pi-flow/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/%40kky42%2Fpi-flow?label=npm)](https://www.npmjs.com/package/@kky42/pi-flow)
 [![license](https://img.shields.io/npm/l/%40kky42%2Fpi-flow)](./LICENSE)
 
 </div>
 
-![A real Pi interactive session showing parallel subagents and workflows with live progress](./assets/pi-flow-interactive.png)
+> This branch is the synchronous PiFlow experiment. The published npm package currently uses the background execution contract.
 
-<p align="center"><sub>Captured from a real Pi interactive session running parallel subagents and workflows.</sub></p>
+## One coordinator, focused specialists
 
-## One coordinator, asynchronous specialists
-
-`run_agent` and `run_workflow` run as background tasks. Pi receives an `accepted` result immediately, continues independent work, then receives one correlated `completed` or `failed` notification. `accepted` means launched, not finished, and there is nothing to poll.
+`run_agent` and `run_workflow` behave like normal Pi tools: the tool remains active, shows live progress, and returns its final result when the delegated work finishes. Independent `run_agent` calls issued together still execute concurrently under PiFlow's shared limit.
 
 | Primitive | Use it for |
 | --- | --- |
@@ -27,13 +24,14 @@ Run asynchronous subagents and multi-agent workflows across **Pi**, **Codex CLI*
 
 Every subagent runs through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
 
-## Install and try it
+## Try this branch
 
 ```bash
-pi install npm:@kky42/pi-flow
+git clone --branch experiment/synchronous-execution https://github.com/kky42/pi-flow.git
+cd pi-flow
+npm ci
+pi -e .
 ```
-
-> **Upgrading from v2?** Rename `Agent` to `run_agent`, `workflow` to `run_workflow`, `description` to `label`, and `subagent_type` to `profile`. Workflow scripts now call `run_agent()` and use `script_path` / `resume_from_task_id`.
 
 Ask Pi naturally:
 
@@ -45,7 +43,7 @@ Use three subagents in parallel to review architecture, tests, and documentation
 Use a workflow to classify each changed file by risk, run the matching review, and return structured results.
 ```
 
-Pi shows each task as `accepted` immediately, then posts one correlated `completed` or `failed` notification.
+The active Tool row shows queued and running work. Pi receives the final Tool result after the direct subagent or outer workflow finishes.
 
 ### Add simple specialists
 
@@ -81,18 +79,18 @@ backend: claude
 Inspect the UI and recommend specific improvements.
 ```
 
-## Why pi-flow?
+## Why this synchronous branch?
 
-- **Asynchronous by default.** Delegation runs in the background while Pi remains available.
+- **Direct results.** Delegation completes through the standard Pi Tool result path without a separate completion notification.
 - **Parallel but bounded.** Direct and workflow subagents share one concurrency limit.
 - **Multi-backend.** Mix Pi, Codex CLI, and Claude Code through simple profiles.
 - **Real orchestration.** Workflows support parallel stages, pipelines, branching, schemas, saved scripts, and replay.
 - **Resumable specialists.** Reuse a direct subagent's `session_key` to continue its backend conversation.
-- **Visible progress.** Pi's TUI distinguishes queued from running subagents, folds each workflow's child progress into one row, and reports cumulative tokens, cache usage, and cost when available. The widget stays within five lines while active and collapses to one idle line.
+- **Visible progress.** Tool rows distinguish queued, running, completed, failed, and aborted work and show usage when available.
 
 ## Extension coordination events
 
-PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an agent or workflow task is accepted and immediately before its terminal notification:
+PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an agent or workflow Tool call starts and immediately before it returns:
 
 ```ts
 {
@@ -103,7 +101,7 @@ PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an agent or
 }
 ```
 
-Other extensions can track accepted task IDs until their matching completed or failed events without depending on PiFlow internals.
+These events let other extensions track active PiFlow calls without depending on PiFlow internals. They are extension events, not model-visible intermediate results.
 
 ## Requirements
 

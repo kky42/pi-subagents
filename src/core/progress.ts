@@ -9,8 +9,65 @@ import type {
 } from "../types.ts";
 
 export const MAX_ACTIVITY_LINES = 2;
+export const MAX_ACTIVITY_LINE_CHARS = 240;
+export const MAX_PROGRESS_METADATA_CHARS = 160;
+export const MAX_PROGRESS_RESULT_CHARS = 2_000;
+export const MAX_PROGRESS_ERROR_CHARS = 1_000;
+export const MAX_PROGRESS_UPDATE_JSON_CHARS = 16_384;
 export const PROGRESS_UPDATE_INTERVAL_MS = 250;
 export const PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
+
+const TRUNCATED_PROGRESS_SUFFIX = " ... [truncated]";
+
+function boundedProgressText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const retainedChars = Math.max(0, maxChars - TRUNCATED_PROGRESS_SUFFIX.length);
+  return `${text.slice(0, retainedChars).trimEnd()}${TRUNCATED_PROGRESS_SUFFIX}`;
+}
+
+export function subagentDisplayDetails(
+  source: SubagentToolDetails,
+  includeDisplayText = true,
+): SubagentToolDetails {
+  const progress = source.progress
+    ? {
+        ...source.progress,
+        id: boundedProgressText(source.progress.id, MAX_PROGRESS_METADATA_CHARS),
+        label: boundedProgressText(source.progress.label, MAX_PROGRESS_METADATA_CHARS),
+        profile: boundedProgressText(source.progress.profile, MAX_PROGRESS_METADATA_CHARS),
+        activity: includeDisplayText
+          ? source.progress.activity
+              .slice(-MAX_ACTIVITY_LINES)
+              .map((line) => boundedProgressText(line, MAX_ACTIVITY_LINE_CHARS))
+          : [],
+        result: includeDisplayText && source.progress.result !== undefined
+          ? boundedProgressText(source.progress.result, MAX_PROGRESS_RESULT_CHARS)
+          : undefined,
+        error: includeDisplayText && source.progress.error !== undefined
+          ? boundedProgressText(source.progress.error, MAX_PROGRESS_ERROR_CHARS)
+          : undefined,
+        telemetry: source.progress.telemetry ? { ...source.progress.telemetry } : undefined,
+      }
+    : undefined;
+  return {
+    label: boundedProgressText(source.label, MAX_PROGRESS_METADATA_CHARS),
+    profile: boundedProgressText(source.profile, MAX_PROGRESS_METADATA_CHARS),
+    backend: source.backend,
+    status: source.status,
+    result: includeDisplayText && source.result !== undefined
+      ? boundedProgressText(source.result, MAX_PROGRESS_RESULT_CHARS)
+      : undefined,
+    error: includeDisplayText && source.error !== undefined
+      ? boundedProgressText(source.error, MAX_PROGRESS_ERROR_CHARS)
+      : undefined,
+    telemetry: source.telemetry ? { ...source.telemetry } : undefined,
+    progress,
+    activeCount: source.activeCount,
+    frame: source.frame,
+  };
+}
 
 export function textResult(text: string, details: SubagentToolDetails, usage?: SubagentUsage) {
   const result: {
@@ -35,9 +92,9 @@ export function createProgressNode(
   backend?: SubagentBackend,
 ): SubagentProgressNode {
   return {
-    id,
-    label,
-    profile,
+    id: boundedProgressText(id, MAX_PROGRESS_METADATA_CHARS),
+    label: boundedProgressText(label, MAX_PROGRESS_METADATA_CHARS),
+    profile: boundedProgressText(profile, MAX_PROGRESS_METADATA_CHARS),
     ...(backend ? { backend } : {}),
     status,
     startedAt: Date.now(),
@@ -52,7 +109,7 @@ function addActivity(progress: SubagentProgressNode, line: string): void {
     return;
   }
   progress.activityCount++;
-  progress.activity.push(normalized);
+  progress.activity.push(boundedProgressText(normalized, MAX_ACTIVITY_LINE_CHARS));
   if (progress.activity.length > MAX_ACTIVITY_LINES) {
     progress.activity.splice(0, progress.activity.length - MAX_ACTIVITY_LINES);
   }
@@ -67,7 +124,7 @@ function replaceLatestActivity(progress: SubagentProgressNode, line: string): vo
     addActivity(progress, normalized);
     return;
   }
-  progress.activity[progress.activity.length - 1] = normalized;
+  progress.activity[progress.activity.length - 1] = boundedProgressText(normalized, MAX_ACTIVITY_LINE_CHARS);
 }
 
 function getFirstTextLine(text: string): string {
@@ -174,10 +231,9 @@ export interface ProgressEmitter {
 }
 
 /**
- * Owns the progress node plus the throttled-emit + heartbeat machinery shared by
- * every subagent backend (pi, codex, claude). Extracted so the emit cadence and
- * the queued→running / abort timing live in ONE place instead of three
- * hand-synchronized copies that silently drift.
+ * Keeps backend progress throttling and heartbeat cadence consistent across Pi,
+ * Codex, and Claude. Queue state remains owned by the caller because timeout and
+ * concurrency accounting begin only after a slot is acquired.
  */
 export function createProgressEmitter(options: ProgressEmitterOptions): ProgressEmitter {
   const { toolCallId, label, profile, backend, enabled, onProgress } = options;
@@ -191,6 +247,21 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   let latestUsage: SubagentUsage | undefined;
 
+  const progressUpdate = (source: SubagentProgressNode, includeDisplayText = true): SubagentToolResult => {
+    const details = subagentDisplayDetails({
+      label: source.label,
+      profile: source.profile,
+      ...(backend ? { backend } : {}),
+      status: source.status,
+      result: source.result,
+      error: source.error,
+      telemetry: source.telemetry,
+      progress: source,
+    }, includeDisplayText);
+    const usage = latestUsage ? { ...latestUsage, cost: { ...latestUsage.cost } } : undefined;
+    return textResult(`Subagent "${details.label}" (${details.profile}) is running.`, details, usage);
+  };
+
   const emit = (): void => {
     if (!progress || !onProgress) {
       return;
@@ -200,17 +271,11 @@ export function createProgressEmitter(options: ProgressEmitterOptions): Progress
       pendingProgressTimer = undefined;
     }
     lastProgressEmit = Date.now();
+    const update = progressUpdate(progress);
     onProgress(
-      textResult(`Subagent "${label}" (${profile}) is running.`, {
-        label,
-        profile,
-        ...(backend ? { backend } : {}),
-        status: progress.status,
-        result: progress.result,
-        error: progress.error,
-        telemetry: progress.telemetry,
-        progress,
-      }, latestUsage),
+      JSON.stringify(update).length <= MAX_PROGRESS_UPDATE_JSON_CHARS
+        ? update
+        : progressUpdate(progress, false),
     );
   };
 

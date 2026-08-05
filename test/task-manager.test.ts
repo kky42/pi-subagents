@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  BackgroundTaskManager,
-  taskToolResult,
+  SynchronousTaskManager,
+  taskEnvelopeContent,
   type TaskStateEvent,
-  type TerminalTaskEnvelope,
 } from "../src/core/task-manager.ts";
 
 function deferred<T>() {
@@ -16,257 +15,199 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-describe("BackgroundTaskManager", () => {
-  it("returns a compact agent acceptance before completion and correlates the terminal notification", async () => {
-    const run = deferred<string>();
-    const notifications: TerminalTaskEnvelope[] = [];
-    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
-
-    const accepted = manager.start({
-      taskType: "agent",
-      label: "inspect auth",
-      sessionKey: "worker",
-      run: () => run.promise,
-    });
-
-    expect(accepted).toEqual({
-      task_id: expect.stringMatching(/^task_[a-f0-9]{32}$/),
-      task_type: "agent",
-      status: "accepted",
-      session_key: "worker",
-      label: "inspect auth",
-    });
-    expect(notifications).toEqual([]);
-    expect(manager.getCounts()).toEqual({
-      agent: { finished: 0, total: 1 },
-      workflow: { finished: 0, total: 0 },
-    });
-
-    run.resolve("auth result");
-    await manager.waitForIdle();
-
-    expect(notifications).toEqual([{
-      task_id: accepted.task_id,
-      task_type: "agent",
-      status: "completed",
-      session_key: "worker",
-      label: "inspect auth",
-      content: "auth result",
-    }]);
-    expect(manager.getCounts().agent).toEqual({ finished: 1, total: 1 });
-  });
-
-  it("publishes accepted and terminal task states around notification delivery", async () => {
-    const run = deferred<string>();
+describe("SynchronousTaskManager", () => {
+  it("keeps the call pending until its operation completes", async () => {
+    const gate = deferred<string>();
     const states: TaskStateEvent[] = [];
-    const order: string[] = [];
-    const manager = new BackgroundTaskManager({
-      onTaskState: (event) => {
-        states.push(event);
-        order.push(event.status);
-      },
-      notify: () => {
-        order.push("notification");
-      },
-    });
+    const manager = new SynchronousTaskManager({ onTaskState: (event) => states.push(event) });
+    let taskId = "";
+    let settled = false;
 
-    const accepted = manager.start({
+    const pending = manager.run({
       taskType: "agent",
-      label: "coordinate extensions",
-      sessionKey: "coordination",
-      run: () => run.promise,
+      execute: async (_signal, id) => {
+        taskId = id;
+        return { status: "completed", value: await gate.promise };
+      },
+    }).then((result) => {
+      settled = true;
+      return result;
     });
 
+    expect(taskId).toMatch(/^task_[a-f0-9]{32}$/);
+    expect(settled).toBe(false);
+    expect(manager.isActive(taskId)).toBe(true);
     expect(states).toEqual([{
       version: 1,
-      task_id: accepted.task_id,
+      task_id: taskId,
       task_type: "agent",
       status: "accepted",
     }]);
 
-    run.resolve("done");
-    await manager.waitForIdle();
+    gate.resolve("done");
+    const result = await pending;
 
-    expect(states).toEqual([
-      {
-        version: 1,
-        task_id: accepted.task_id,
-        task_type: "agent",
-        status: "accepted",
-      },
-      {
-        version: 1,
-        task_id: accepted.task_id,
-        task_type: "agent",
-        status: "completed",
-      },
-    ]);
-    expect(order).toEqual(["accepted", "completed", "notification"]);
-  });
-
-  it("uses one compact Workflow envelope without a session key", async () => {
-    const notifications: TerminalTaskEnvelope[] = [];
-    const states: TaskStateEvent[] = [];
-    const manager = new BackgroundTaskManager({
-      notify: (envelope) => notifications.push(envelope),
-      onTaskState: (event) => states.push(event),
-    });
-
-    const accepted = manager.start({
-      taskType: "workflow",
-      name: "review_flow",
-      run: async () => "review passed",
-    });
-    await manager.waitForIdle();
-
-    expect(Object.keys(accepted).sort()).toEqual(["name", "status", "task_id", "task_type"]);
-    expect(states).toEqual([
-      {
-        version: 1,
-        task_id: accepted.task_id,
-        task_type: "workflow",
-        status: "accepted",
-      },
-      {
-        version: 1,
-        task_id: accepted.task_id,
-        task_type: "workflow",
-        status: "completed",
-      },
-    ]);
-    expect(notifications).toEqual([{
-      task_id: accepted.task_id,
-      task_type: "workflow",
-      status: "completed",
-      name: "review_flow",
-      content: "review passed",
-    }]);
-  });
-
-  it("converts task errors into failed terminal content", async () => {
-    const notifications: TerminalTaskEnvelope[] = [];
-    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
-
-    const accepted = manager.start({
-      taskType: "agent",
-      label: "broken task",
-      sessionKey: "broken",
-      run: async () => { throw new Error("backend unavailable"); },
-    });
-    await manager.waitForIdle();
-
-    expect(notifications).toEqual([{
-      task_id: accepted.task_id,
+    expect(result).toEqual({ taskId, status: "completed", value: "done" });
+    expect(manager.isActive(taskId)).toBe(false);
+    expect(states.at(-1)).toEqual({
+      version: 1,
+      task_id: taskId,
       task_type: "agent",
-      status: "failed",
-      session_key: "broken",
-      label: "broken task",
-      content: "backend unavailable",
-    }]);
+      status: "completed",
+    });
   });
 
-  it("queues notifications before waitForIdle resolves", async () => {
+  it("publishes the terminal event before returning the result", async () => {
     const order: string[] = [];
-    const manager = new BackgroundTaskManager({
-      notify: () => { order.push("notification"); },
+    const manager = new SynchronousTaskManager({
+      onTaskState: (event) => order.push(event.status),
     });
 
-    manager.start({
+    await manager.run({
       taskType: "workflow",
-      name: "ordered",
-      run: async () => "done",
+      execute: async () => ({ status: "completed", value: "result" }),
     });
-    await manager.waitForIdle();
-    order.push("idle");
+    order.push("returned");
 
-    expect(order).toEqual(["notification", "idle"]);
+    expect(order).toEqual(["accepted", "completed", "returned"]);
   });
 
-  it("aborts active tasks without closing the manager", async () => {
-    const notifications: TerminalTaskEnvelope[] = [];
-    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
+  it("waits only for active synchronous calls", async () => {
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const manager = new SynchronousTaskManager();
 
-    const aborted = manager.start({
-      taskType: "workflow",
-      name: "old branch",
-      run: (signal) => new Promise<string>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-      }),
+    const firstRun = manager.run({
+      taskType: "agent",
+      execute: async () => {
+        await first.promise;
+        return { status: "completed", value: 1 };
+      },
     });
-    await manager.abortAll("Pi session tree changed");
-    const completed = manager.start({ taskType: "workflow", name: "new branch", run: async () => "done" });
-    await manager.waitForIdle();
+    const secondRun = manager.run({
+      taskType: "workflow",
+      execute: async () => {
+        await second.promise;
+        return { status: "completed", value: 2 };
+      },
+    });
+    let idle = false;
+    const waiting = manager.waitForIdle().then(() => { idle = true; });
 
-    expect(notifications).toEqual([
-      expect.objectContaining({ task_id: aborted.task_id, status: "failed", content: "Pi session tree changed" }),
-      expect.objectContaining({ task_id: completed.task_id, status: "completed", content: "done" }),
-    ]);
+    first.resolve();
+    await firstRun;
+    expect(idle).toBe(false);
+
+    second.resolve();
+    await secondRun;
+    await waiting;
+    expect(idle).toBe(true);
   });
 
-  it("prefers the recorded abort reason when a task resolves during abort", async () => {
-    const notifications: TerminalTaskEnvelope[] = [];
-    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
+  it("aborts active calls without closing the manager", async () => {
+    const states: TaskStateEvent[] = [];
+    const manager = new SynchronousTaskManager({ onTaskState: (event) => states.push(event) });
     const started = deferred<void>();
 
-    const accepted = manager.start({
+    const aborted = manager.run({
       taskType: "workflow",
-      name: "late success",
-      run: (signal) => {
+      execute: async (signal) => {
         started.resolve();
-        return new Promise<string>((resolve) => {
-          signal.addEventListener("abort", () => resolve("ignored success"), { once: true });
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
         });
+        return { status: "failed", value: signal.reason };
       },
     });
     await started.promise;
     await manager.abortAll("Pi session tree changed");
+    const abortedResult = await aborted;
 
-    expect(notifications).toEqual([{
-      task_id: accepted.task_id,
-      task_type: "workflow",
-      status: "failed",
-      name: "late success",
-      content: "Pi session tree changed",
-    }]);
+    expect(abortedResult.status).toBe("failed");
+    expect(abortedResult.abortReason).toBe("Pi session tree changed");
+    expect(states.at(-1)?.status).toBe("failed");
+
+    const next = await manager.run({
+      taskType: "agent",
+      execute: async () => ({ status: "completed", value: "next" }),
+    });
+    expect(next.status).toBe("completed");
   });
 
-  it("aborts tasks and emits failed notifications during session shutdown", async () => {
-    const notifications: TerminalTaskEnvelope[] = [];
-    const manager = new BackgroundTaskManager({ notify: (envelope) => notifications.push(envelope) });
-
-    const accepted = manager.start({
-      taskType: "workflow",
-      name: "long task",
-      run: (signal) => new Promise<string>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-      }),
+  it("does not report a late success after abort", async () => {
+    const manager = new SynchronousTaskManager();
+    const started = deferred<void>();
+    const pending = manager.run({
+      taskType: "agent",
+      execute: async (signal) => {
+        started.resolve();
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { status: "completed", value: "late success" };
+      },
     });
+
+    await started.promise;
+    await manager.abortAll("cancelled");
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      status: "failed",
+      value: "late success",
+      abortReason: "cancelled",
+    });
+  });
+
+  it("closes permanently on shutdown", async () => {
+    const manager = new SynchronousTaskManager();
     await manager.shutdown();
 
-    expect(notifications).toEqual([{
-      task_id: accepted.task_id,
-      task_type: "workflow",
-      status: "failed",
-      name: "long task",
-      content: "Pi session shut down",
-    }]);
-    expect(manager.getCounts().workflow).toEqual({ finished: 1, total: 1 });
-    expect(() => manager.start({ taskType: "workflow", name: "late", run: async () => "late" })).toThrow(
-      "after session shutdown",
-    );
+    await expect(manager.run({
+      taskType: "agent",
+      execute: async () => ({ status: "completed", value: "late" }),
+    })).rejects.toThrow("after session shutdown");
   });
 
-  it("serializes the same minimal envelope into a tool result", () => {
+  it("clears an unexpectedly rejected operation and publishes failure", async () => {
+    const states: TaskStateEvent[] = [];
+    const manager = new SynchronousTaskManager({ onTaskState: (event) => states.push(event) });
+
+    await expect(manager.run({
+      taskType: "workflow",
+      execute: async () => {
+        throw new Error("unexpected failure");
+      },
+    })).rejects.toThrow("unexpected failure");
+
+    expect(manager.hasActiveTasks()).toBe(false);
+    expect(states.map((event) => event.status)).toEqual(["accepted", "failed"]);
+  });
+
+  it("isolates task-state observer failures", async () => {
+    const manager = new SynchronousTaskManager({
+      onTaskState: () => {
+        throw new Error("observer failed");
+      },
+    });
+
+    await expect(manager.run({
+      taskType: "agent",
+      execute: async () => ({ status: "completed", value: "ok" }),
+    })).resolves.toMatchObject({ status: "completed", value: "ok" });
+  });
+
+  it("serializes a terminal envelope as model-visible content", () => {
     const envelope = {
       task_id: "task_1",
       task_type: "workflow" as const,
-      status: "accepted" as const,
+      status: "completed" as const,
       name: "audit",
+      content: "passed",
     };
 
-    expect(taskToolResult(envelope)).toEqual({
-      content: [{ type: "text", text: JSON.stringify(envelope) }],
-      details: envelope,
-    });
+    expect(taskEnvelopeContent(envelope)).toEqual([
+      { type: "text", text: JSON.stringify(envelope) },
+    ]);
   });
 });
