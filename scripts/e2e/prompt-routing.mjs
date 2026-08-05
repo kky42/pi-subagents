@@ -120,7 +120,7 @@ Options:
   --auth-agent-dir <dir>          Pi agent directory supplying openai-codex auth to the isolated default
   --pi-command <path>             Pi executable (default: PI_E2E_COMMAND or pi)
   --extension <path>              extension entry to evaluate (default: current worktree)
-  --keep                          keep sanitized observation artifacts
+  --keep                          keep local artifacts, including raw Pi sessions
 `);
 }
 
@@ -425,13 +425,14 @@ function infrastructureIssues(run, analysis) {
 
 function runPi({ options, fixture, scenario, repetition, environment, redactions }) {
   const runDir = path.join(options.runRoot, "runs", `${scenario.key}-${repetition}`);
-  ensureDir(runDir);
+  const sessionDir = path.join(runDir, "sessions");
+  ensureDir(sessionDir);
   const args = [
     "-p",
     "--mode", "json",
     "--model", ROOT_MODEL,
     "--thinking", ROOT_THINKING,
-    "--no-session",
+    "--session-dir", sessionDir,
     "--no-extensions",
     "--extension", options.extension,
     "--no-skills",
@@ -530,6 +531,7 @@ function runPi({ options, fixture, scenario, repetition, environment, redactions
         resolve({
           code,
           signal,
+          sessionDir,
           timedOut,
           captureError,
           stdout,
@@ -605,6 +607,7 @@ function printRun(result) {
   console.log(`\n[${status}] ${result.scenario} repetition ${result.repetition} (${(result.durationMs / 1000).toFixed(1)}s)`);
   for (const issue of result.infrastructureIssues) console.log(`  infrastructure: ${issue}`);
   console.log(`  process=${JSON.stringify(result.process)} changedFiles=${JSON.stringify(result.changedFiles)}`);
+  console.log(`  sessionDir=${result.sessionDir}`);
   console.log(`  observations=${JSON.stringify(result.analysis)}`);
 }
 
@@ -659,6 +662,7 @@ async function main() {
     console.log(`  model: ${ROOT_MODEL}`);
     console.log(`  thinking: ${ROOT_THINKING}`);
     console.log(`  repetitions: ${options.repetitions}`);
+    console.log(`  session root: ${options.runRoot}`);
     console.log(`  Claude Code provider guard: DeepSeek (${DEEPSEEK_ANTHROPIC_BASE_URL})`);
 
     const results = [];
@@ -685,6 +689,7 @@ async function main() {
             captureError: run.captureError,
           },
           changedFiles: run.changed,
+          sessionDir: run.sessionDir,
           analysis: summarizedAnalysis(analysis),
         };
         results.push(result);
@@ -712,7 +717,7 @@ async function main() {
         rmSync(options.agentDir, { recursive: true, force: true });
       }
       if (completedSuccessfully && !options.keep) removeOwnedRunRoot(options.runRoot);
-      else if (existsSync(options.runRoot)) console.log("Artifacts kept under the requested run root.");
+      else if (existsSync(options.runRoot)) console.log(`Session artifacts kept at: ${options.runRoot}`);
     }
   }
 }

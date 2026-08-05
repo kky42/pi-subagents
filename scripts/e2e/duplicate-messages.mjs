@@ -39,6 +39,7 @@ function parseArgs(argv) {
     authAgentDir: path.resolve(process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent")),
     piCommand: process.env.PI_E2E_COMMAND || "pi",
     extension: extensionPath,
+    keep: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -55,6 +56,7 @@ function parseArgs(argv) {
     else if (arg === "--auth-agent-dir") options.authAgentDir = path.resolve(value());
     else if (arg === "--pi-command") options.piCommand = value();
     else if (arg === "--extension") options.extension = path.resolve(value());
+    else if (arg === "--keep") options.keep = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -85,6 +87,7 @@ Options:
   --auth-agent-dir <dir>          Pi agent directory supplying openai-codex auth
   --pi-command <path>             Pi executable (default: PI_E2E_COMMAND or pi)
   --extension <path>              extension entry to evaluate (default: current worktree)
+  --keep                          keep raw Pi session artifacts after a passing run
 `);
 }
 
@@ -242,6 +245,7 @@ async function runOnce(options, runRoot, repetition) {
       if (!error) {
         summary = {
           repetition,
+          sessionDir,
           accepted,
           notifications,
           reads,
@@ -346,11 +350,13 @@ async function main() {
   }
 
   const runRoot = mkdtempSync(path.join(tmpdir(), "pi-flow-duplicate-messages-e2e-"));
+  let completedSuccessfully = false;
   try {
     console.log("pi-flow duplicate-message E2E observations");
     console.log(`  foreground: ${rootModel} (${rootThinking})`);
     console.log(`  subagents: ${subagentModel} (${subagentThinking})`);
     console.log(`  repetitions: ${options.repetitions}`);
+    console.log(`  session root: ${runRoot}`);
     console.log(`  Claude Code provider guard: DeepSeek (${DEEPSEEK_ANTHROPIC_BASE_URL})`);
 
     const results = [];
@@ -372,9 +378,15 @@ async function main() {
       ).length,
       results,
     };
+    writeFileSync(path.join(runRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
     console.log(`\n${JSON.stringify(report, null, 2)}`);
+    completedSuccessfully = true;
   } finally {
-    rmSync(runRoot, { recursive: true, force: true });
+    for (let repetition = 1; repetition <= options.repetitions; repetition += 1) {
+      rmSync(path.join(runRoot, `run-${repetition}`, "agent", "auth.json"), { force: true });
+    }
+    if (completedSuccessfully && !options.keep) rmSync(runRoot, { recursive: true, force: true });
+    else console.log(`Session artifacts kept at: ${runRoot}`);
   }
 }
 

@@ -915,10 +915,10 @@ async function main() {
     `Summary [${options.model}]: ${results.length} scenarios, ${totalFailed} failed check(s), ${totalInconclusive} inconclusive.`,
   );
   console.log(`report=${reportPath}`);
-  if (!options.keep) {
-    // Keep artifacts only on failure for debugging; clean on green.
-    if (totalFailed === 0) rmSync(options.sessionRoot, { recursive: true, force: true });
-    else console.log(`(artifacts kept for debugging: ${options.sessionRoot})`);
+  if (!options.keep && totalFailed === 0) {
+    rmSync(options.sessionRoot, { recursive: true, force: true });
+  } else {
+    console.log(`Session artifacts kept at: ${options.sessionRoot}`);
   }
   if (totalFailed > 0) process.exitCode = 1;
 }

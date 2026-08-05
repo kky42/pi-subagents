@@ -309,15 +309,18 @@ async function main() {
     options.runRoot = mkdtempSync(path.join(tmpdir(), "pi-flow-session-key-e2e-"));
   }
   ensureDir(options.runRoot);
+  console.log(`Session root: ${options.runRoot}`);
+  let completedSuccessfully = false;
   try {
     for (const backend of backends) {
       await runBackend(options, backend);
     }
+    completedSuccessfully = true;
   } finally {
-    if (!options.keep) {
+    if (completedSuccessfully && !options.keep) {
       rmSync(options.runRoot, { recursive: true, force: true });
     } else {
-      console.log(`Kept run root: ${options.runRoot}`);
+      console.log(`Session artifacts kept at: ${options.runRoot}`);
     }
   }
 }

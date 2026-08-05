@@ -40,6 +40,7 @@ function parseArgs(argv) {
     authAgentDir: path.resolve(process.env.PI_CODING_AGENT_DIR || path.join(homedir(), ".pi", "agent")),
     piCommand: process.env.PI_E2E_COMMAND || "pi",
     extension: extensionPath,
+    keep: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -56,6 +57,7 @@ function parseArgs(argv) {
     else if (arg === "--auth-agent-dir") options.authAgentDir = path.resolve(value());
     else if (arg === "--pi-command") options.piCommand = value();
     else if (arg === "--extension") options.extension = path.resolve(value());
+    else if (arg === "--keep") options.keep = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -86,6 +88,7 @@ Options:
   --auth-agent-dir <dir>          Pi agent directory supplying openai-codex auth
   --pi-command <path>             Pi executable (default: PI_E2E_COMMAND or pi)
   --extension <path>              extension entry to evaluate (default: current worktree)
+  --keep                          keep raw Pi session artifacts after a passing run
 `);
 }
 
@@ -162,7 +165,7 @@ function activeTaskIds(acceptedTasks, notifications) {
   return acceptedTasks.map((task) => task.task_id).filter((taskId) => !completed.has(taskId));
 }
 
-function summarizeRun(repetition, acceptedTasks, notifications, bashCalls, responses, settled) {
+function summarizeRun(repetition, sessionDir, acceptedTasks, notifications, bashCalls, responses, settled) {
   const activeBashCalls = bashCalls.filter((call) => call.activeTaskIds.length > 0);
   const finalText = responses
     .filter((response) => response.notificationCount > 0)
@@ -189,6 +192,7 @@ function summarizeRun(repetition, acceptedTasks, notifications, bashCalls, respo
   }
   return {
     repetition,
+    sessionDir,
     acceptedTasks,
     notifications,
     foregroundBashCalls: bashCalls,
@@ -245,7 +249,7 @@ async function runOnce(options, runRoot, repetition) {
       done = true;
       clearTimeout(timeout);
       if (!error) {
-        summary = summarizeRun(repetition, acceptedTasks, notifications, bashCalls, responses, settled);
+        summary = summarizeRun(repetition, sessionDir, acceptedTasks, notifications, bashCalls, responses, settled);
       }
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 5000).unref();
@@ -333,7 +337,7 @@ async function runOnce(options, runRoot, repetition) {
     child.stdin.write(`${JSON.stringify({
       id: "prompt",
       type: "prompt",
-      message: `Use exactly one idle-reviewer subagent to inspect package.json and report its package name and version. Do not inspect files in the foreground and do not modify anything.`,
+      message: `Use exactly one idle-reviewer subagent to inspect package.json and report its package name and version. Keep the review read-only.`,
     })}\n`);
   });
 }
@@ -346,6 +350,7 @@ async function main() {
   }
 
   const runRoot = mkdtempSync(path.join(tmpdir(), "pi-flow-background-idle-e2e-"));
+  let completedSuccessfully = false;
   try {
     console.log("pi-flow background-idle E2E");
     console.log(`  foreground: ${rootModel} (${rootThinking})`);
@@ -353,6 +358,7 @@ async function main() {
     console.log(`  repetitions: ${options.repetitions}`);
     console.log(`  child delay: ${childDelaySeconds}s`);
     console.log(`  working directory: temporary fixture`);
+    console.log(`  session root: ${runRoot}`);
     console.log(`  Claude Code provider guard: DeepSeek (${DEEPSEEK_ANTHROPIC_BASE_URL})`);
 
     const results = [];
@@ -361,7 +367,7 @@ async function main() {
     }
     const violationCount = results.reduce((total, result) => total + result.violations.length, 0);
     const report = {
-      purpose: "Assert that the foreground makes no Bash calls solely to wait for an accepted background task.",
+      purpose: "Assert that the foreground makes no Bash calls while a delegated task is active.",
       rootModel,
       rootThinking,
       subagentModel,
@@ -371,10 +377,16 @@ async function main() {
       violationCount,
       results,
     };
+    writeFileSync(path.join(runRoot, "report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
     console.log(`\n${JSON.stringify(report, null, 2)}`);
     if (violationCount > 0) throw new Error(`background-idle E2E observed ${violationCount} behavioral violation(s)`);
+    completedSuccessfully = true;
   } finally {
-    rmSync(runRoot, { recursive: true, force: true });
+    for (let repetition = 1; repetition <= options.repetitions; repetition += 1) {
+      rmSync(path.join(runRoot, `run-${repetition}`, "agent", "auth.json"), { force: true });
+    }
+    if (completedSuccessfully && !options.keep) rmSync(runRoot, { recursive: true, force: true });
+    else console.log(`Session artifacts kept at: ${runRoot}`);
   }
 }
 
