@@ -57,7 +57,7 @@ describe("pi-subagent tool contract", () => {
     const schema = tool?.parameters as {
       required?: string[];
       additionalProperties?: boolean;
-      properties: Record<string, { description?: string }>;
+      properties: Record<string, { description?: string; pattern?: string }>;
     } | undefined;
     const properties = schema?.properties ?? {};
 
@@ -65,6 +65,7 @@ describe("pi-subagent tool contract", () => {
     expect(schema?.required).toEqual(["label", "prompt"]);
     expect(schema?.additionalProperties).toBe(false);
     expect(Object.keys(properties).sort()).toEqual(["label", "profile", "prompt", "session_key"]);
+    expect(properties.label?.pattern).toBe(".*\\S.*");
     expectDescribedProperties(properties);
 
     disposeSession(session);

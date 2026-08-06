@@ -72,6 +72,7 @@ const RUN_AGENT_PROMPT_GUIDELINES = [
 const runAgentToolParameters = Type.Object({
   label: Type.String({
     minLength: 1,
+    pattern: ".*\\S.*",
     description: "Short UI task label, ideally 3-5 words; not sent to the child.",
   }),
   prompt: Type.String({
