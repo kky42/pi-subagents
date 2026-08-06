@@ -11,6 +11,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type { ConcurrencyLimiter } from "./core/concurrency.ts";
 import { filterProfilesForModelRegistry } from "./core/model.ts";
+import { MAX_MODEL_VISIBLE_TEXT_CHARS } from "./core/progress.ts";
 import {
   isActiveSubagentStatus,
   isCompletedSubagentStatus,
@@ -872,7 +873,7 @@ export function createRunWorkflowTool(
         task_type: "workflow",
         status: managed.status,
         name,
-        content: execution.terminalContent,
+        content: boundedTextPreview(execution.terminalContent, MAX_MODEL_VISIBLE_TEXT_CHARS),
       };
       const result = workflowSnapshotResult(
         JSON.stringify(envelope),

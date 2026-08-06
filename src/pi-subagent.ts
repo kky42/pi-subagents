@@ -18,7 +18,9 @@ import {
 } from "./core/display.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import {
+  boundedProgressText,
   createProgressNode,
+  MAX_MODEL_VISIBLE_TEXT_CHARS,
   subagentDisplayDetails,
   textResult,
   type SubagentToolResult,
@@ -475,8 +477,8 @@ function createRunAgentTool(
         session_key: sessionKey,
         label: label || "unnamed",
         content: managed.status === "completed"
-          ? details.result ?? ""
-          : details.error ?? managed.abortReason ?? "Subagent failed",
+          ? boundedProgressText(details.result ?? "", MAX_MODEL_VISIBLE_TEXT_CHARS)
+          : boundedProgressText(details.error ?? managed.abortReason ?? "Subagent failed", MAX_MODEL_VISIBLE_TEXT_CHARS),
       };
       return {
         ...result,

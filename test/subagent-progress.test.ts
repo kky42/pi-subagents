@@ -5,6 +5,7 @@ import {
   createProgressEmitter,
   MAX_ACTIVITY_LINE_CHARS,
   MAX_ACTIVITY_LINES,
+  MAX_MODEL_VISIBLE_TEXT_CHARS,
   MAX_PROGRESS_METADATA_CHARS,
   MAX_PROGRESS_RESULT_CHARS,
   MAX_PROGRESS_UPDATE_JSON_CHARS,
@@ -166,7 +167,7 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     disposeSession(session);
   });
 
-  it("keeps the terminal envelope complete while bounding direct UI details and updates", async () => {
+  it("bounds model-visible terminal text while keeping TUI details bounded", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     const fullResult = `${"large direct result ".repeat(4_000)}DIRECT_RESULT_TAIL`;
     setContextRoutingResponses(registration, async () => fauxAssistantMessage(fullResult));
@@ -182,8 +183,9 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     );
     const terminal = terminalEnvelope(result);
 
-    expect(terminal.content).toBe(fullResult);
-    expect(terminal.content).toContain("DIRECT_RESULT_TAIL");
+    expect(terminal.content).toContain("[truncated]");
+    expect(terminal.content.length).toBeLessThanOrEqual(MAX_MODEL_VISIBLE_TEXT_CHARS);
+    expect(terminal.content).not.toContain("DIRECT_RESULT_TAIL");
     expect(result.details.result).toContain("[truncated]");
     expect(result.details.result.length).toBeLessThanOrEqual(MAX_PROGRESS_RESULT_CHARS);
     expect(result.details.progress.result).toContain("[truncated]");

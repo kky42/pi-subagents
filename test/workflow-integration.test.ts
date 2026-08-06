@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { MAX_MODEL_VISIBLE_TEXT_CHARS } from "../src/core/progress.ts";
 import {
   MAX_WORKFLOW_DETAILS_JSON_CHARS,
   MAX_WORKFLOW_UPDATE_JSON_CHARS,
@@ -213,8 +214,9 @@ return await parallel([
     }
 
     const { result, terminal } = await pending;
-    const terminalResult = JSON.parse(terminal.content) as string[];
-    expect(terminalResult).toEqual([largeResult.trim(), "slow child done"]);
+    expect(terminal.content).toContain("[truncated]");
+    expect(terminal.content.length).toBeLessThanOrEqual(MAX_MODEL_VISIBLE_TEXT_CHARS);
+    expect(terminal.content).toContain("large-child-result");
     expect(result.details.subagents.find((subagent) => subagent.label === "large")?.result).toContain("[truncated]");
     expect(result.details.subagents.find((subagent) => subagent.label === "slow")?.status).toBe("done");
     expect(stalledSnapshot?.details.subagents.find((subagent) => subagent.label === "slow")?.status).toBe("running");
@@ -285,10 +287,8 @@ return await parallel(tasks);`;
       (subagent.activity?.every((line) => line.length <= WORKFLOW_ACTIVITY_PREVIEW_CHARS) ?? true))).toBe(true);
     expect(immutableSamples.every(({ update, serialized }) => JSON.stringify(update) === serialized)).toBe(true);
 
-    const terminalResults = JSON.parse(terminal.content) as string[];
-    expect(terminalResults).toHaveLength(childCount);
-    expect([...terminalResults].sort()).toEqual([...fullResults].sort());
-    expect(terminalResults.some((text) => text.includes(`RESULT_TAIL_${childCount - 1}`))).toBe(true);
+    expect(terminal.content).toContain("[truncated]");
+    expect(terminal.content.length).toBeLessThanOrEqual(MAX_MODEL_VISIBLE_TEXT_CHARS);
     expect(typeof result.details.result).toBe("string");
     expect((result.details.result as string).length).toBeLessThanOrEqual(WORKFLOW_RESULT_PREVIEW_CHARS);
 

@@ -14,12 +14,15 @@ export const MAX_PROGRESS_METADATA_CHARS = 160;
 export const MAX_PROGRESS_RESULT_CHARS = 2_000;
 export const MAX_PROGRESS_ERROR_CHARS = 1_000;
 export const MAX_PROGRESS_UPDATE_JSON_CHARS = 16_384;
+
+/** Cap for model-visible terminal envelope text, so a runaway child output cannot bloat the root context. */
+export const MAX_MODEL_VISIBLE_TEXT_CHARS = 32_000;
 export const PROGRESS_UPDATE_INTERVAL_MS = 250;
 export const PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
 
 const TRUNCATED_PROGRESS_SUFFIX = " ... [truncated]";
 
-function boundedProgressText(text: string, maxChars: number): string {
+export function boundedProgressText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
