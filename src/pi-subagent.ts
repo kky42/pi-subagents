@@ -298,7 +298,7 @@ async function executeAgentCall(params: {
     ? {
         taskId,
         sessionKey,
-        progress: createProgressNode(toolCallId, label, profileName, "queued", profile.backend),
+        progress: createProgressNode(label, profileName, "queued", profile.backend),
         onUpdate,
       }
     : undefined;
@@ -325,7 +325,6 @@ async function executeAgentCall(params: {
             broadcastRunUpdates(state);
           }
           const spawned = await spawnSubagent({
-            toolCallId,
             label,
             prompt: params.prompt,
             profile,

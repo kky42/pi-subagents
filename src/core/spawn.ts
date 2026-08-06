@@ -111,7 +111,6 @@ async function resolvePiSubagentSession({
  * before invoking spawnSubagent, so the runtime timeout below excludes queue time.
  */
 export interface SpawnSubagentParams {
-  toolCallId: string;
   label: string;
   prompt: string;
   profile: SubagentProfile;
@@ -170,7 +169,6 @@ export async function spawnSubagent(params: SpawnSubagentParams): Promise<Subage
 async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<SubagentToolResult> {
   if (params.profile.backend === "codex") {
     return spawnCodexSubagent({
-      toolCallId: params.toolCallId,
       label: params.label,
       prompt: params.prompt,
       profile: params.profile,
@@ -188,7 +186,6 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
   }
   if (params.profile.backend === "claude") {
     return spawnClaudeSubagent({
-      toolCallId: params.toolCallId,
       label: params.label,
       prompt: params.prompt,
       profile: params.profile,
@@ -214,7 +211,6 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
     });
   }
   const {
-    toolCallId,
     label,
     prompt,
     profile,
@@ -234,7 +230,6 @@ async function spawnSubagentRuntime(params: SpawnSubagentParams): Promise<Subage
     profile.tools !== undefined ? [...profile.tools, ...customTools.map((tool) => tool.name)] : undefined;
   const taskPrompt = params.appendInstructions ? `${prompt}\n\n${params.appendInstructions}` : prompt;
   const emitter = createProgressEmitter({
-    toolCallId,
     label,
     profile: profileName,
     backend: profile.backend,

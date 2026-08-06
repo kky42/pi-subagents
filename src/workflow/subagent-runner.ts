@@ -14,7 +14,6 @@ export interface WorkflowSubagentRunnerOptions {
   allowedBackends?: readonly SubagentBackend[];
   onUsage?: (index: number, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   onProgress?: (index: number, details: SubagentToolDetails, usage?: SubagentUsage) => void;
-  toolCallId?: string;
 }
 
 /** Canonical profile-aware runner shared by the interactive tool and headless API. */
@@ -53,7 +52,6 @@ export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOpti
     call.backend = profile.backend;
     call.sessionId = binding?.sessionId;
     const result = await spawnSubagent({
-      toolCallId: `${options.toolCallId ?? "headless"}:subagent:${index}`,
       label: call.label,
       prompt: call.prompt,
       profile,

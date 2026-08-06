@@ -11,7 +11,6 @@ describe("subagent timeout helpers", () => {
       status: "done",
       result: "late success after timeout",
       progress: {
-        id: "late-child",
         label: "Late child",
         profile: "general-purpose",
         backend: "pi",

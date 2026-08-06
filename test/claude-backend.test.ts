@@ -272,7 +272,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
       systemPrompt: "Claude resume prompt.",
     };
     const first = await spawnClaudeSubagent({
-      toolCallId: "claude-resume-1",
       label: "Claude first",
       prompt: "First prompt.",
       profile,
@@ -287,7 +286,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(first.details.sessionId).toBe("claude-first-session");
 
     const second = await spawnClaudeSubagent({
-      toolCallId: "claude-resume-2",
       label: "Claude second",
       prompt: "Second prompt.",
       profile,
@@ -322,7 +320,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const result = await spawnClaudeSubagent({
-      toolCallId: "claude-missing-session",
       label: "Claude missing session",
       prompt: "Persist this conversation.",
       profile: {
@@ -360,7 +357,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const updates: Array<{ usage: ReturnType<typeof claudeUsageToSubagentUsage>; telemetry: { tokensKnown: boolean; costKnown: boolean } }> = [];
 
     const result = await spawnClaudeSubagent({
-      toolCallId: "claude-cumulative-usage",
       label: "Claude cumulative usage",
       prompt: "Report multiple usage events.",
       profile: {
@@ -423,7 +419,6 @@ setTimeout(() => {
     } as unknown as AbortSignal;
 
     const result = await spawnClaudeSubagent({
-      toolCallId: "claude-abort-race",
       label: "Claude abort race",
       prompt: "This should be aborted before stdin is sent.",
       profile: {
@@ -463,7 +458,6 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const result = await spawnClaudeSubagent({
-      toolCallId: "claude-oversize",
       label: "Claude oversize",
       prompt: "Trigger oversize stdout.",
       profile: {

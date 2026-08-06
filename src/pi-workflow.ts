@@ -675,7 +675,6 @@ async function executeWorkflowCall(params: {
     ctx,
     thinkingLevel: options.getThinkingLevel(),
     timeoutMs: options.getSubagentTimeoutMs(),
-    toolCallId: taskId,
     onUsage: (index, usage, telemetry) => {
       const subagent = snapshot.subagents.find((candidate) => candidate.index === index);
       if (!subagent) {

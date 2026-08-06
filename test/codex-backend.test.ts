@@ -272,7 +272,6 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
       systemPrompt: "Codex resume prompt.",
     };
     const first = await spawnCodexSubagent({
-      toolCallId: "codex-resume-1",
       label: "Codex first",
       prompt: "First prompt.",
       profile,
@@ -287,7 +286,6 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
     expect(first.details.sessionId).toBe("codex-first-session");
 
     const second = await spawnCodexSubagent({
-      toolCallId: "codex-resume-2",
       label: "Codex second",
       prompt: "Second prompt.",
       profile,
@@ -322,7 +320,6 @@ console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, 
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const result = await spawnCodexSubagent({
-      toolCallId: "codex-missing-session",
       label: "Codex missing session",
       prompt: "Persist this conversation.",
       profile: {
@@ -366,7 +363,6 @@ console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_messag
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const result = await spawnCodexSubagent({
-      toolCallId: "codex-resume-usage",
       label: "Codex resumed usage",
       prompt: "Continue.",
       profile: {
@@ -423,7 +419,6 @@ setTimeout(() => {
     } as unknown as AbortSignal;
 
     const result = await spawnCodexSubagent({
-      toolCallId: "codex-abort-race",
       label: "Codex abort race",
       prompt: "This should be aborted before stdin is sent.",
       profile: {
@@ -463,7 +458,6 @@ process.stdout.write('x'.repeat(${MAX_STDOUT_LINE_CHARS + 1024}), () => {
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
 
     const result = await spawnCodexSubagent({
-      toolCallId: "codex-oversize",
       label: "Codex oversize",
       prompt: "Trigger oversize stdout.",
       profile: {

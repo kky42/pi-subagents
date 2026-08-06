@@ -460,7 +460,6 @@ async function createOutputSchemaFile(schema: unknown): Promise<{ path: string; 
 }
 
 export async function spawnCodexSubagent(params: {
-  toolCallId: string;
   label: string;
   prompt: string;
   profile: SubagentProfile;
@@ -478,7 +477,6 @@ export async function spawnCodexSubagent(params: {
   const profile = params.profile.name;
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
   const emitter = createProgressEmitter({
-    toolCallId: params.toolCallId,
     label: params.label,
     profile,
     backend: params.profile.backend,

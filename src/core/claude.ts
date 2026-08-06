@@ -343,7 +343,6 @@ function abortChild(child: ChildProcess): void {
 }
 
 export async function spawnClaudeSubagent(params: {
-  toolCallId: string;
   label: string;
   prompt: string;
   profile: SubagentProfile;
@@ -361,7 +360,6 @@ export async function spawnClaudeSubagent(params: {
   const profile = params.profile.name;
   const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
   const emitter = createProgressEmitter({
-    toolCallId: params.toolCallId,
     label: params.label,
     profile,
     backend: params.profile.backend,

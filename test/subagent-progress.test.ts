@@ -56,7 +56,6 @@ describe("direct subagent progress payloads", () => {
     try {
       const updates: any[] = [];
       const emitter = createProgressEmitter({
-        toolCallId: `call-${"i".repeat(10_000)}`,
         label: `label-${"l".repeat(10_000)}`,
         profile: `profile-${"p".repeat(10_000)}`,
         backend: "pi",
@@ -224,7 +223,6 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
       taskId: expect.stringMatching(/^task_[a-f0-9]+$/),
       sessionKey: expect.stringMatching(/^session_[a-f0-9]+$/),
       progress: {
-        id: "progress-call",
         status: "running",
       },
     });
@@ -243,7 +241,7 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     });
     expect(result.details).toMatchObject({
       status: "done",
-      progress: { id: "progress-call", status: "done" },
+      progress: { status: "done" },
       taskId: running.details.taskId,
       sessionKey: running.details.sessionKey,
     });

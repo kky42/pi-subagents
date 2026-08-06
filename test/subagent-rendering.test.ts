@@ -125,7 +125,6 @@ describe("pi-subagent synchronous rendering", () => {
           taskId: "task_queued",
           sessionKey: "session_queued",
           progress: {
-            id: "queued-call",
             label: "Wait turn",
             profile: "general-purpose",
             backend: "pi",
@@ -155,7 +154,6 @@ describe("pi-subagent synchronous rendering", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.85 },
           },
           progress: {
-            id: "running-call",
             label: "Research repo",
             profile: "code-searcher" as const,
             backend: "pi" as const,
@@ -200,7 +198,6 @@ describe("pi-subagent synchronous rendering", () => {
         taskId: "task_long",
         sessionKey: "session_long",
         progress: {
-          id: "long-call",
           label: "Long tool call",
           profile: "general-purpose" as const,
           backend: "pi" as const,

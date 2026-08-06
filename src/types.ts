@@ -112,7 +112,6 @@ export interface SubagentTelemetry {
 }
 
 export interface SubagentProgressNode {
-  id: string;
   label: string;
   profile: SubagentProfileName | "unknown";
   backend?: SubagentBackend;
@@ -136,6 +135,7 @@ export interface SubagentToolDetails {
   telemetry?: SubagentTelemetry;
   /** Backend-native session/thread id used internally for session_key continuation. */
   sessionId?: string;
+  /** Optional live-render snapshot; root fields remain canonical when progress updates are unavailable. */
   progress?: SubagentProgressNode;
   activeCount?: number;
   frame?: number;

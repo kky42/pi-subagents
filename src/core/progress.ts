@@ -37,7 +37,6 @@ export function subagentDisplayDetails(
   const progress = source.progress
     ? {
         ...source.progress,
-        id: boundedProgressText(source.progress.id, MAX_PROGRESS_METADATA_CHARS),
         label: boundedProgressText(source.progress.label, MAX_PROGRESS_METADATA_CHARS),
         profile: boundedProgressText(source.progress.profile, MAX_PROGRESS_METADATA_CHARS),
         activity: includeDisplayText
@@ -88,14 +87,12 @@ export function textResult(text: string, details: SubagentToolDetails, usage?: S
 export type SubagentToolResult = ReturnType<typeof textResult>;
 
 export function createProgressNode(
-  id: string,
   label: string,
   profile: SubagentProfileName,
   status: SubagentProgressNode["status"] = "running",
   backend?: SubagentBackend,
 ): SubagentProgressNode {
   return {
-    id: boundedProgressText(id, MAX_PROGRESS_METADATA_CHARS),
     label: boundedProgressText(label, MAX_PROGRESS_METADATA_CHARS),
     profile: boundedProgressText(profile, MAX_PROGRESS_METADATA_CHARS),
     ...(backend ? { backend } : {}),
@@ -214,7 +211,6 @@ export function updateProgressFromEvent(progress: SubagentProgressNode, event: A
 }
 
 export interface ProgressEmitterOptions {
-  toolCallId: string;
   label: string;
   profile: SubagentProfileName;
   backend?: SubagentBackend;
@@ -239,9 +235,9 @@ export interface ProgressEmitter {
  * concurrency accounting begin only after a slot is acquired.
  */
 export function createProgressEmitter(options: ProgressEmitterOptions): ProgressEmitter {
-  const { toolCallId, label, profile, backend, enabled, onProgress } = options;
+  const { label, profile, backend, enabled, onProgress } = options;
   const progress = enabled
-    ? createProgressNode(toolCallId, label, profile, "running", backend)
+    ? createProgressNode(label, profile, "running", backend)
     : undefined;
   const live = Boolean(progress && onProgress);
 
