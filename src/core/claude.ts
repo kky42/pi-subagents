@@ -1,21 +1,11 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { calculateCost, type Model, type Usage } from "@earendil-works/pi-ai";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import {
-  createProgressEmitter,
-  textResult,
-  type SubagentToolResult,
-} from "./progress.ts";
-import {
-  createBoundedBuffer,
-  MAX_STDERR_CHARS,
-  MAX_STDOUT_LINE_CHARS,
-} from "./stream.ts";
+import { type SubagentToolResult } from "./progress.ts";
+import { spawnCliSubagent, type CliSubagentRunState } from "./cli-spawn.ts";
 import type { SubagentProfile, SubagentTelemetry, SubagentUsage, ThinkingLevel } from "../types.ts";
 
 const CLAUDE_COMMAND = "claude";
-const FORCE_KILL_DELAY_MS = 3000;
 
 export interface ClaudeTokenUsage {
   inputTokens: number;
@@ -377,35 +367,6 @@ function addTokenUsage(total: ClaudeTokenUsage, increment: ClaudeTokenUsage): Cl
   };
 }
 
-function hasChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below. This can happen if the process
-      // exited between hasChildExited() and the process-group signal.
-    }
-  }
-  child.kill(signal);
-}
-
-function abortChild(child: ChildProcess): void {
-  if (hasChildExited(child)) {
-    return;
-  }
-  signalChildTree(child, "SIGTERM");
-  setTimeout(() => {
-    if (!hasChildExited(child)) {
-      signalChildTree(child, "SIGKILL");
-    }
-  }, FORCE_KILL_DELAY_MS).unref();
-}
-
 export async function spawnClaudeSubagent(params: {
   label: string;
   prompt: string;
@@ -421,32 +382,12 @@ export async function spawnClaudeSubagent(params: {
   persistSession?: boolean;
   outputSchema?: unknown;
 }): Promise<SubagentToolResult> {
-  const profile = params.profile.name;
-  const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
-  const emitter = createProgressEmitter({
-    label: params.label,
-    profile,
-    backend: params.profile.backend,
-    enabled: params.progressEnabled,
-    onProgress: params.onProgress,
-  });
-  const progress = emitter.progress;
-  let latestRawUsage = emptyTokenUsage();
   let cumulativeAssistantUsage = emptyTokenUsage();
-  let latestCostUsd: number | undefined;
-  let latestUsage: SubagentUsage | undefined;
-  let latestTelemetry: SubagentTelemetry | undefined;
+  let latestRawUsage = emptyTokenUsage();
   let tokensKnown = false;
-  let resultText = "";
-  let sessionId = params.sessionId?.trim() || undefined;
-  const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
-  let sawTerminalEvent = false;
-  let eventError: string | undefined;
-  let oversizeError: string | undefined;
-  let child: ChildProcess | undefined;
-  let abortHandler: (() => void) | undefined;
+  let latestCostUsd: number | undefined;
 
-  const publishUsage = (usage: ClaudeTokenUsage | undefined, costUsd: number | undefined) => {
+  const publishUsage = (state: CliSubagentRunState, usage: ClaudeTokenUsage | undefined, costUsd: number | undefined): void => {
     if (usage) {
       latestRawUsage = usage;
       tokensKnown = true;
@@ -459,210 +400,59 @@ export async function spawnClaudeSubagent(params: {
     if (resolvedCostUsd !== undefined) {
       latestCostUsd = resolvedCostUsd;
     }
-    latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
+    const latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
     const hasBillableTokens = latestUsage.totalTokens > 0;
-    latestTelemetry = {
+    state.publishUsage(latestUsage, {
       tokensKnown,
       costKnown: latestCostUsd !== undefined && (!hasBillableTokens || latestCostUsd > 0),
       costBreakdownKnown: false,
       costEstimated: costUsd === undefined && resolvedCostUsd !== undefined,
-    };
-    emitter.setUsage(latestUsage, latestTelemetry);
-    params.onUsage(latestUsage, latestTelemetry);
-    emitter.emitSoon();
-  };
-  const handleEvent = (event: Record<string, unknown>) => {
-    if (event.type === "result" || event.type === "error") {
-      sawTerminalEvent = true;
-    }
-    const parsedSessionId = extractClaudeSessionId(event);
-    if (params.persistSession === true && parsedSessionId) {
-      sessionId = parsedSessionId;
-    }
-    const activity = claudeActivityFromEvent(event);
-    if (activity) {
-      emitter.addActivity(activity);
-      emitter.emitSoon();
-    }
-    const extractedUsage = extractClaudeUsage(event);
-    const usage = event.type === "assistant" && extractedUsage
-      ? (cumulativeAssistantUsage = addTokenUsage(cumulativeAssistantUsage, extractedUsage))
-      : extractedUsage;
-    const cost = extractClaudeCostUsd(event);
-    if (usage || cost !== undefined) {
-      publishUsage(usage, cost);
-    }
-    const text = extractClaudeFinalText(event);
-    if (text !== undefined) {
-      resultText = text;
-      if (text.trim()) {
-        emitter.addActivity(text.split("\n").find((line) => line.trim()) ?? text);
-        emitter.emitSoon();
-      }
-    }
-    const error = extractClaudeError(event);
-    if (error) {
-      eventError ??= error;
-    }
+    });
   };
 
-  try {
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    const args = buildClaudeArgs({
-      profile: params.profile,
-      thinkingLevel: params.thinkingLevel,
-      sessionId,
-      persistSession: params.persistSession === true,
-      outputSchema: params.outputSchema,
-    });
-
-    const proc = spawn(CLAUDE_COMMAND, args, {
-      cwd: params.ctx.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
-    child = proc;
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("claude stdin/stdout/stderr pipes were not available");
-    }
-
-    abortHandler = () => {
-      abortChild(proc);
-    };
-    params.signal?.addEventListener("abort", abortHandler, { once: true });
-    if (params.signal?.aborted) {
-      abortChild(proc);
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    let stdoutBuffer = "";
-    proc.stdout.setEncoding("utf8");
-    proc.stderr.setEncoding("utf8");
-    proc.stdin.on("error", () => {
-      // If claude exits before reading stdin, the process close/error path below
-      // reports the real failure. Avoid an unhandled EPIPE on the writable side.
-    });
-
-    proc.stdout.on("data", (chunk) => {
-      stdoutBuffer += chunk;
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS) {
-        // A single newline-free line this large means the stream is unparseable.
-        // Fail loudly instead of silently dropping what might be real output.
-        oversizeError ??= `claude emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars without a newline; stream is unparseable`;
-        stdoutBuffer = "";
-        abortChild(proc);
-        return;
-      }
-      for (const line of lines) {
-        const event = parseClaudeJsonLine(line);
-        if (event) {
-          handleEvent(event);
+  return spawnCliSubagent({
+    label: params.label,
+    prompt: params.prompt,
+    profile: params.profile,
+    thinkingLevel: params.thinkingLevel,
+    ctx: params.ctx,
+    signal: params.signal,
+    progressEnabled: params.progressEnabled,
+    onProgress: params.onProgress,
+    onUsage: params.onUsage,
+    appendInstructions: params.appendInstructions,
+    sessionId: params.sessionId,
+    persistSession: params.persistSession,
+    adapter: {
+      command: CLAUDE_COMMAND,
+      buildArgs: async () => ({
+        args: buildClaudeArgs({
+          profile: params.profile,
+          thinkingLevel: params.thinkingLevel,
+          sessionId: params.sessionId?.trim() || undefined,
+          persistSession: params.persistSession === true,
+          outputSchema: params.outputSchema,
+        }),
+      }),
+      isTerminalEvent: (event) => event.type === "result" || event.type === "error",
+      parseLine: parseClaudeJsonLine,
+      extractSessionId: extractClaudeSessionId,
+      extractActivity: claudeActivityFromEvent,
+      extractFinalText: extractClaudeFinalText,
+      handleEvent: (event, state: CliSubagentRunState) => {
+        const extractedUsage = extractClaudeUsage(event);
+        const usage = event.type === "assistant" && extractedUsage
+          ? (cumulativeAssistantUsage = addTokenUsage(cumulativeAssistantUsage, extractedUsage))
+          : extractedUsage;
+        const cost = extractClaudeCostUsd(event);
+        if (usage || cost !== undefined) {
+          publishUsage(state, usage, cost);
         }
-      }
-    });
-
-    proc.stderr.on("data", (chunk) => {
-      stderrBuffer.append(String(chunk));
-    });
-
-    emitter.emit();
-    emitter.startHeartbeat();
-    proc.stdin.end(taskPrompt);
-
-    const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", (code, signal) => {
-        if (stdoutBuffer.trim()) {
-          const event = parseClaudeJsonLine(stdoutBuffer);
-          if (event) {
-            handleEvent(event);
-          }
+        const error = extractClaudeError(event);
+        if (error) {
+          state.setEventError(error);
         }
-        resolve({ code, signal });
-      });
-    });
-
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = undefined;
-    }
-
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted");
-    }
-    if (oversizeError) {
-      throw new Error(oversizeError);
-    }
-    if (eventError) {
-      throw new Error(eventError);
-    }
-    if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
-      throw new Error(`claude exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : ""}`);
-    }
-    if (!sawTerminalEvent && !resultText.trim()) {
-      // Hard-fail only when claude produced nothing usable. If it exited cleanly
-      // (code 0) with final text but no recognized terminal event, for example a CLI
-      // stream-format change renamed the event, accept the output rather than
-      // turning a good run into a failure.
-      throw new Error("claude exited without a terminal JSON event");
-    }
-
-    if (params.persistSession && !sessionId) {
-      throw new Error("claude completed without a resumable session ID");
-    }
-    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
-    const result = resultText.trim() || "(no final text output)";
-    if (progress) {
-      progress.status = "done";
-      progress.result = result;
-      progress.telemetry = latestTelemetry;
-      progress.endedAt = Date.now();
-    }
-    return textResult(`Subagent "${params.label}" (${profile}) completed:\n\n${result}`, {
-      label: params.label,
-      profile,
-      backend: params.profile.backend,
-      status: "done",
-      result,
-      telemetry: latestTelemetry,
-      ...(sessionId ? { sessionId } : {}),
-      ...(progress ? { progress } : {}),
-    }, latestUsage);
-  } catch (error) {
-    if (child && !hasChildExited(child)) {
-      abortChild(child);
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    const status = params.signal?.aborted ? "aborted" : "error";
-    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
-    if (progress) {
-      progress.status = status;
-      progress.error = message;
-      progress.telemetry = latestTelemetry;
-      progress.endedAt = Date.now();
-    }
-    const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${params.label}" (${profile}) ${verb}: ${message}`, {
-      label: params.label,
-      profile,
-      backend: params.profile.backend,
-      status,
-      error: message,
-      telemetry: latestTelemetry,
-      ...(sessionId ? { sessionId } : {}),
-      ...(progress ? { progress } : {}),
-    }, latestUsage);
-  } finally {
-    emitter.stop();
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-    }
-  }
+      },
+    },
+  });
 }

@@ -38,7 +38,6 @@ describe("pi-subagent claude backend", () => {
     makeMockTheme,
     stripAnsi,
     renderToText,
-    formatTestTokens,
     makeExecutionContext,
     getToolNames,
   } = setupPiSubagentTestHarness((state) => {

@@ -38,7 +38,6 @@ describe("pi-subagent codex backend", () => {
     makeMockTheme,
     stripAnsi,
     renderToText,
-    formatTestTokens,
     makeExecutionContext,
     getToolNames,
   } = setupPiSubagentTestHarness((state) => {
@@ -411,7 +410,7 @@ setTimeout(() => {
     const signal = {
       get aborted() {
         abortedChecks += 1;
-        return abortedChecks >= 3;
+        return abortedChecks >= 2;
       },
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),

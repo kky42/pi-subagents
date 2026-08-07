@@ -1,24 +1,14 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { calculateCost, type Model, type Usage } from "@earendil-works/pi-ai";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import {
-  createProgressEmitter,
-  textResult,
-  type SubagentToolResult,
-} from "./progress.ts";
-import {
-  createBoundedBuffer,
-  MAX_STDERR_CHARS,
-  MAX_STDOUT_LINE_CHARS,
-} from "./stream.ts";
+import { type SubagentToolResult } from "./progress.ts";
+import { spawnCliSubagent, type CliSubagentRunState } from "./cli-spawn.ts";
 import type { SubagentProfile, SubagentTelemetry, SubagentUsage, ThinkingLevel } from "../types.ts";
 
 const CODEX_COMMAND = "codex";
-const FORCE_KILL_DELAY_MS = 3000;
 
 export interface CodexTokenUsage {
   inputTokens: number;
@@ -408,35 +398,6 @@ export function codexActivityFromEvent(event: Record<string, unknown>): string |
   return error ? error : undefined;
 }
 
-function hasChildExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below. This can happen if the process
-      // exited between hasChildExited() and the process-group signal.
-    }
-  }
-  child.kill(signal);
-}
-
-function abortChild(child: ChildProcess): void {
-  if (hasChildExited(child)) {
-    return;
-  }
-  signalChildTree(child, "SIGTERM");
-  setTimeout(() => {
-    if (!hasChildExited(child)) {
-      signalChildTree(child, "SIGKILL");
-    }
-  }, FORCE_KILL_DELAY_MS).unref();
-}
-
 async function createOutputSchemaFile(schema: unknown): Promise<{ path: string; cleanup: () => Promise<void> } | undefined> {
   if (schema === undefined || schema === null) {
     return undefined;
@@ -467,230 +428,61 @@ export async function spawnCodexSubagent(params: {
   persistSession?: boolean;
   outputSchema?: unknown;
 }): Promise<SubagentToolResult> {
-  const profile = params.profile.name;
-  const taskPrompt = params.appendInstructions ? `${params.prompt}\n\n${params.appendInstructions}` : params.prompt;
-  const emitter = createProgressEmitter({
-    label: params.label,
-    profile,
-    backend: params.profile.backend,
-    enabled: params.progressEnabled,
-    onProgress: params.onProgress,
-  });
-  const progress = emitter.progress;
-  let latestUsage: SubagentUsage | undefined;
-  let latestTelemetry: SubagentTelemetry | undefined;
   const usageTracker: CodexUsageTrackerState = { terminalUsageSeen: false };
-  let resultText = "";
-  let sessionId = params.sessionId?.trim() || undefined;
-  const stderrBuffer = createBoundedBuffer(MAX_STDERR_CHARS);
-  let sawTerminalEvent = false;
-  let eventError: string | undefined;
-  let diagnosticError: string | undefined;
-  let oversizeError: string | undefined;
-  let child: ChildProcess | undefined;
-  let schemaFile: Awaited<ReturnType<typeof createOutputSchemaFile>> = undefined;
-  let abortHandler: (() => void) | undefined;
-
-  const handleEvent = (event: Record<string, unknown>) => {
-    if (event.type === "turn.completed" || event.type === "turn.failed") {
-      sawTerminalEvent = true;
-    }
-    const parsedSessionId = extractCodexSessionId(event);
-    if (params.persistSession === true && parsedSessionId) {
-      sessionId = parsedSessionId;
-    }
-    const activity = codexActivityFromEvent(event);
-    if (activity) {
-      emitter.addActivity(activity);
-      emitter.emitSoon();
-    }
-    const usage = extractCodexRunUsage(event, usageTracker);
-    if (usage) {
-      latestUsage = codexUsageToSubagentUsage(params.profile.model, usage, params.ctx.modelRegistry);
-      latestTelemetry = codexTelemetry(params.profile.model, usage, params.ctx.modelRegistry);
-      emitter.setUsage(latestUsage, latestTelemetry);
-      params.onUsage(latestUsage, latestTelemetry);
-      emitter.emitSoon();
-    }
-    const text = extractCodexFinalText(event);
-    if (text !== undefined) {
-      resultText = text;
-      if (text.trim()) {
-        emitter.addActivity(text.split("\n").find((line) => line.trim()) ?? text);
-        emitter.emitSoon();
-      }
-    }
-    if (event.type === "turn.failed") {
-      eventError ??= extractCodexError(event);
-    } else if (event.type === "error") {
-      diagnosticError ??= extractCodexError(event);
-    }
-  };
-
-  try {
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    schemaFile = await createOutputSchemaFile(params.outputSchema);
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted before prompt start");
-    }
-    const args = buildCodexArgs({
-      prompt: taskPrompt,
-      profile: params.profile,
-      thinkingLevel: params.thinkingLevel,
-      sessionId,
-      persistSession: params.persistSession === true,
-      outputSchemaPath: schemaFile?.path,
-    });
-
-    const proc = spawn(CODEX_COMMAND, args, {
-      cwd: params.ctx.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      detached: process.platform !== "win32",
-    });
-    child = proc;
-    if (!proc.stdin || !proc.stdout || !proc.stderr) {
-      throw new Error("codex stdin/stdout/stderr pipes were not available");
-    }
-
-    abortHandler = () => {
-      abortChild(proc);
-    };
-    params.signal?.addEventListener("abort", abortHandler, { once: true });
-    if (params.signal?.aborted) {
-      abortChild(proc);
-      throw new Error("Subagent aborted before prompt start");
-    }
-
-    let stdoutBuffer = "";
-    proc.stdout.setEncoding("utf8");
-    proc.stderr.setEncoding("utf8");
-    proc.stdin.on("error", () => {
-      // If codex exits before reading stdin, the process close/error path below
-      // reports the real failure. Avoid an unhandled EPIPE on the writable side.
-    });
-
-    proc.stdout.on("data", (chunk) => {
-      stdoutBuffer += chunk;
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? "";
-      if (stdoutBuffer.length > MAX_STDOUT_LINE_CHARS) {
-        // A single newline-free line this large means the stream is unparseable.
-        // Fail loudly instead of silently dropping what might be real output.
-        oversizeError ??= `codex emitted a stdout line over ${MAX_STDOUT_LINE_CHARS} chars without a newline; stream is unparseable`;
-        stdoutBuffer = "";
-        abortChild(proc);
-        return;
-      }
-      for (const line of lines) {
-        const event = parseCodexJsonLine(line);
-        if (event) {
-          handleEvent(event);
+  return spawnCliSubagent({
+    label: params.label,
+    prompt: params.prompt,
+    profile: params.profile,
+    thinkingLevel: params.thinkingLevel,
+    ctx: params.ctx,
+    signal: params.signal,
+    progressEnabled: params.progressEnabled,
+    onProgress: params.onProgress,
+    onUsage: params.onUsage,
+    appendInstructions: params.appendInstructions,
+    sessionId: params.sessionId,
+    persistSession: params.persistSession,
+    adapter: {
+      command: CODEX_COMMAND,
+      buildArgs: async (taskPrompt) => {
+        const schemaFile = await createOutputSchemaFile(params.outputSchema);
+        return {
+          args: buildCodexArgs({
+            prompt: taskPrompt,
+            profile: params.profile,
+            thinkingLevel: params.thinkingLevel,
+            sessionId: params.sessionId?.trim() || undefined,
+            persistSession: params.persistSession === true,
+            outputSchemaPath: schemaFile?.path,
+          }),
+          cleanup: schemaFile?.cleanup,
+        };
+      },
+      isTerminalEvent: (event) => event.type === "turn.completed" || event.type === "turn.failed",
+      parseLine: parseCodexJsonLine,
+      extractSessionId: extractCodexSessionId,
+      extractActivity: codexActivityFromEvent,
+      extractFinalText: extractCodexFinalText,
+      handleEvent: (event, state: CliSubagentRunState) => {
+        const usage = extractCodexRunUsage(event, usageTracker);
+        if (usage) {
+          state.publishUsage(
+            codexUsageToSubagentUsage(params.profile.model, usage, params.ctx.modelRegistry),
+            codexTelemetry(params.profile.model, usage, params.ctx.modelRegistry),
+          );
         }
-      }
-    });
-
-    proc.stderr.on("data", (chunk) => {
-      stderrBuffer.append(String(chunk));
-    });
-
-    emitter.emit();
-    emitter.startHeartbeat();
-    proc.stdin.end(taskPrompt);
-
-    const closeResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      proc.once("error", reject);
-      proc.once("close", (code, signal) => {
-        if (stdoutBuffer.trim()) {
-          const event = parseCodexJsonLine(stdoutBuffer);
-          if (event) {
-            handleEvent(event);
+        if (event.type === "turn.failed") {
+          const error = extractCodexError(event);
+          if (error) {
+            state.setEventError(error);
+          }
+        } else if (event.type === "error") {
+          const error = extractCodexError(event);
+          if (error) {
+            state.setDiagnosticError(error);
           }
         }
-        resolve({ code, signal });
-      });
-    });
-
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = undefined;
-    }
-
-    if (params.signal?.aborted) {
-      throw new Error("Subagent aborted");
-    }
-    if (oversizeError) {
-      throw new Error(oversizeError);
-    }
-    if (eventError) {
-      throw new Error(eventError);
-    }
-    if (closeResult.code !== 0) {
-      const stderr = stderrBuffer.text().trim();
-      const diagnostic = diagnosticError ? `: ${diagnosticError}` : "";
-      throw new Error(`codex exited with code ${closeResult.code}${closeResult.signal ? ` (signal ${closeResult.signal})` : ""}${stderr ? `: ${stderr}` : diagnostic}`);
-    }
-    if (!sawTerminalEvent && !resultText.trim()) {
-      // Hard-fail only when codex produced nothing usable. If it exited cleanly
-      // (code 0) with final text but no recognized terminal event, for example a CLI
-      // stream-format change renamed the event, accept the output rather than
-      // turning a good run into a failure.
-      throw new Error(diagnosticError ?? "codex exited without a terminal JSON event");
-    }
-
-    if (params.persistSession && !sessionId) {
-      throw new Error("codex completed without a resumable session ID");
-    }
-    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
-    const result = resultText.trim() || "(no final text output)";
-    if (progress) {
-      progress.status = "done";
-      progress.result = result;
-      progress.telemetry = latestTelemetry;
-      progress.endedAt = Date.now();
-    }
-    return textResult(`Subagent "${params.label}" (${profile}) completed:\n\n${result}`, {
-      label: params.label,
-      profile,
-      backend: params.profile.backend,
-      status: "done",
-      result,
-      telemetry: latestTelemetry,
-      ...(sessionId ? { sessionId } : {}),
-      ...(progress ? { progress } : {}),
-    }, latestUsage);
-  } catch (error) {
-    if (child && !hasChildExited(child)) {
-      abortChild(child);
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    const status = params.signal?.aborted ? "aborted" : "error";
-    if (latestUsage && latestTelemetry) params.onUsage(latestUsage, latestTelemetry);
-    if (progress) {
-      progress.status = status;
-      progress.error = message;
-      progress.telemetry = latestTelemetry;
-      progress.endedAt = Date.now();
-    }
-    const verb = status === "aborted" ? "aborted" : "failed";
-    return textResult(`Subagent "${params.label}" (${profile}) ${verb}: ${message}`, {
-      label: params.label,
-      profile,
-      backend: params.profile.backend,
-      status,
-      error: message,
-      telemetry: latestTelemetry,
-      ...(sessionId ? { sessionId } : {}),
-      ...(progress ? { progress } : {}),
-    }, latestUsage);
-  } finally {
-    emitter.stop();
-    if (abortHandler) {
-      params.signal?.removeEventListener("abort", abortHandler);
-    }
-    await schemaFile?.cleanup().catch(() => undefined);
-  }
+      },
+    },
+  });
 }
