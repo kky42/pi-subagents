@@ -913,6 +913,28 @@ describe("run_workflow tool rendering", () => {
     expect(text).toContain("· review planned · 0/0");
   });
 
+  it("hides unreached planned phases once the workflow completes", () => {
+    const theme = makeMockTheme();
+    const details = {
+      name: "audit",
+      status: "completed",
+      subagentCount: 2,
+      phases: ["scan"],
+      plannedPhases: [{ title: "scan" }, { title: "review" }],
+      currentPhase: "scan",
+      logs: [],
+      subagents: [
+        { index: 1, label: "source", profile: "general-purpose", backend: "pi", phase: "scan", status: "done", result: "ok" },
+        { index: 2, label: "tests", profile: "general-purpose", backend: "pi", phase: "scan", status: "done", result: "ok" },
+      ],
+    };
+    const text = renderToText(tool.renderResult({ content: [], details }, {}, theme));
+
+    expect(text).toContain("Workflow(audit) completed · 2/2");
+    expect(text).toContain("✓ scan done · 2/2");
+    expect(text).not.toContain("review planned");
+  });
+
   it("renders accurate aggregate totals around a bounded phase and agent window", () => {
     const theme = makeMockTheme();
     const details = {

@@ -985,9 +985,13 @@ function renderPhaseTree(container: Container, details: WorkflowToolDetails, the
   const runningCount = workflowRunningCount(details);
   const summaries = phaseSummariesForRender(details);
   for (const phase of summaries) {
+    const phaseStatus = phaseRenderStatus(details, phase);
+    // Planned phases are a running-only roadmap; unreached declarations vanish once the workflow ends.
+    if (phaseStatus === "planned" && details.status !== "running") {
+      continue;
+    }
     const subagents = subagentsForPhase(details, phase);
     const failed = phase.statusCounts.error + phase.statusCounts.aborted;
-    const phaseStatus = phaseRenderStatus(details, phase);
     const header = `${phaseRenderMarker(phaseStatus)} ${phase.title ?? "unphased"} ${phaseStatus} · ${phase.statusCounts.done}/${phase.subagentCount}`;
     container.addChild(new Text(`  ${theme.fg(phaseRenderColor(phaseStatus, failed), header)}`, 0, 0));
     const shown = selectSubagentsForRender(subagents);
