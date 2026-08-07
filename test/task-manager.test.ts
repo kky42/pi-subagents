@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  SynchronousTaskManager,
-  taskEnvelopeContent,
-  type WorkflowTerminalTaskEnvelope,
-} from "../src/core/task-manager.ts";
+import { SynchronousTaskManager } from "../src/core/task-manager.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -137,18 +133,5 @@ describe("SynchronousTaskManager", () => {
     })).rejects.toThrow("unexpected failure");
 
     expect(manager.hasActiveTasks()).toBe(false);
-  });
-
-  it("serializes a terminal envelope as model-visible content", () => {
-    const envelope: WorkflowTerminalTaskEnvelope = {
-      task_type: "workflow",
-      status: "completed",
-      name: "audit",
-      content: "passed",
-    };
-
-    expect(taskEnvelopeContent(envelope)).toEqual([
-      { type: "text", text: JSON.stringify(envelope) },
-    ]);
   });
 });

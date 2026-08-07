@@ -26,13 +26,6 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-function terminalEnvelope(result: { content: Array<{ text: string }> }) {
-  return JSON.parse(result.content[0].text) as {
-    status: "completed" | "failed";
-    content: string;
-  };
-}
-
 describe("pi-subagent synchronous concurrency", () => {
   let agentDir = "";
   const {
@@ -40,6 +33,7 @@ describe("pi-subagent synchronous concurrency", () => {
     createSession,
     setContextRoutingResponses,
     makeExecutionContext,
+    terminalEnvelope,
   } = setupPiSubagentTestHarness((state) => {
     agentDir = state.agentDir;
   });

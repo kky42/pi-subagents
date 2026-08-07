@@ -1,6 +1,7 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, type Context } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import type { AgentTerminalTaskEnvelope } from "../src/core/task-manager.ts";
 import {
   createProgressEmitter,
   MAX_ACTIVITY_LINE_CHARS,
@@ -32,16 +33,6 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
     resolve = done;
   });
   return { promise, resolve };
-}
-
-function terminalEnvelope(result: { content: Array<{ text: string }> }) {
-  return JSON.parse(result.content[0].text) as {
-    task_type: "agent";
-    status: "completed" | "failed";
-    session_key: string;
-    label: string;
-    content: string;
-  };
 }
 
 function customTaskNotifications(session: { messages: readonly unknown[] }): unknown[] {
@@ -97,6 +88,7 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     createSession,
     setContextRoutingResponses,
     makeExecutionContext,
+    terminalEnvelope,
   } = setupPiSubagentTestHarness();
 
   it("waits for the child and returns the terminal Tool result without extension lifecycle events", async () => {
@@ -155,11 +147,10 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     disposeSession(session);
   });
 
-  // The 76KB faux result flows through the full spawn path with bounded progress serialization;
-  // CI runners (Node 22 matrix job) exceeded the 5s default timeout, so keep 15s of headroom.
+  // A result just over the model-visible cap flows through the full spawn path with bounded progress serialization.
   it("bounds model-visible terminal text while keeping TUI details bounded", { timeout: 15_000 }, async () => {
     const { session, registration, model, modelRegistry } = await createSession();
-    const fullResult = `${"large direct result ".repeat(4_000)}DIRECT_RESULT_TAIL`;
+    const fullResult = `${"large direct result ".repeat(1_750)}DIRECT_RESULT_TAIL`;
     setContextRoutingResponses(registration, async () => fauxAssistantMessage(fullResult));
     const tool = session.getToolDefinition("run_agent") as any;
     const updates: any[] = [];
@@ -262,7 +253,7 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
       undefined,
       makeExecutionContext({ hasUI: false, model, modelRegistry }),
     );
-    const terminal = terminalEnvelope(result);
+    const terminal = terminalEnvelope(result) as AgentTerminalTaskEnvelope;
 
     expect(result.details.status).toBe("aborted");
     expect(result.details.error).toBeTruthy();

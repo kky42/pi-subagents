@@ -29,20 +29,13 @@ function contextText(context: Context): string {
   return JSON.stringify(context.messages);
 }
 
-function terminalEnvelope(result: { content: Array<{ text: string }> }) {
-  return JSON.parse(result.content[0].text) as {
-    status: "completed" | "failed";
-    content: string;
-  };
-}
-
 function hasTaskNotification(messages: readonly unknown[]): boolean {
   return messages.some((message: any) =>
     message?.role === "custom" && message.customType === "pi-flow-task-notification");
 }
 
 describe("pi-smart-compaction compatibility", () => {
-  const { createSession, setContextRoutingResponses } = setupPiSubagentTestHarness();
+  const { createSession, setContextRoutingResponses, terminalEnvelope } = setupPiSubagentTestHarness();
 
   it("allows threshold auto-compaction while a synchronous Tool call is active", async () => {
     const { session, registration, sessionManager } = await createSession({

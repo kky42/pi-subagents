@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { calculateCost } from "@earendil-works/pi-ai";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import { spawnClaudeSubagent } from "../../src/core/claude.ts";
-import { buildDeepseekClaudeEnv, loadDotEnv } from "./lib/deepseek-claude-env.mjs";
+import { loadDotEnv, prepareDeepseekClaudeE2EEnv } from "./lib/deepseek-claude-env.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 loadDotEnv(path.join(repoRoot, ".env"));
@@ -92,6 +92,14 @@ async function main() {
   const catalogModel = getBuiltinModel("anthropic", options.model);
   if (!catalogModel) throw new Error(`--model ${options.model} is not in Pi's Anthropic catalog; the estimate fallback cannot resolve it.`);
 
+  // Install the standard guard (isolated CLAUDE_CONFIG_DIR, PATH wrapper, DeepSeek
+  // routing, fail-fast without a credential), then overwrite the wrapper with the
+  // cost-stripping Node wrapper below, which keeps --setting-sources "".
+  const preparedEnv = prepareDeepseekClaudeE2EEnv(process.env, {
+    apiKeyEnv: options.deepseekApiKeyEnv,
+    runtimeDir,
+  });
+
   const wrapperPath = path.join(binDir, "claude");
   writeFileSync(wrapperPath, `#!/usr/bin/env node
 import { spawn } from "node:child_process";
@@ -120,8 +128,7 @@ child.on("close", (code) => process.exit(code ?? 1));
 `, "utf8");
   chmodSync(wrapperPath, 0o755);
 
-  Object.assign(process.env, buildDeepseekClaudeEnv(process.env, { apiKeyEnv: options.deepseekApiKeyEnv }), {
-    CLAUDE_CONFIG_DIR: configDir,
+  Object.assign(process.env, preparedEnv, {
     PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
   });
 

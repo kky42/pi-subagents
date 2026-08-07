@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { MAX_MODEL_VISIBLE_TEXT_CHARS } from "../src/core/progress.ts";
+import { MAX_ACTIVITY_LINE_CHARS, MAX_MODEL_VISIBLE_TEXT_CHARS, MAX_PROGRESS_RESULT_CHARS } from "../src/core/progress.ts";
 import {
   MAX_WORKFLOW_DETAILS_JSON_CHARS,
   MAX_WORKFLOW_UPDATE_JSON_CHARS,
@@ -202,8 +202,8 @@ return await parallel([
       stalledSnapshot = snapshot;
       const completedPreview = snapshot.details.subagents.find((subagent) => subagent.label === "large");
       expect(completedPreview?.result).toContain("[truncated]");
-      expect(completedPreview?.result?.length).toBeLessThanOrEqual(2_000);
-      expect(completedPreview?.activity?.every((line) => line.length <= 240)).toBe(true);
+      expect(completedPreview?.result?.length).toBeLessThanOrEqual(MAX_PROGRESS_RESULT_CHARS);
+      expect(completedPreview?.activity?.every((line) => line.length <= MAX_ACTIVITY_LINE_CHARS)).toBe(true);
 
       const immutableSnapshot = JSON.stringify(snapshot.details);
       await delay(250);

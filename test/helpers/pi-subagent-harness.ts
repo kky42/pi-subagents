@@ -12,6 +12,7 @@ import {
   SettingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { TerminalTaskEnvelope } from "../../src/core/task-manager.ts";
 import {
   createModels,
   fauxAssistantMessage,
@@ -303,37 +304,6 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     return { result, terminal };
   }
 
-  async function delegateOnce(
-    session: { prompt: (input: string) => Promise<unknown>; messages: readonly unknown[] },
-    registration: FauxProviderHandle,
-    toolArgs: Record<string, unknown>,
-    opts: { childReply?: string; rootReply?: string; userPrompt?: string } = {},
-  ) {
-    const { childReply = "child done", rootReply = "reported", userPrompt = "Please delegate." } = opts;
-    const captured: {
-      childContext?: Context;
-      childOptions?: SimpleStreamOptions;
-      childModel?: Model<string>;
-      rootContinuationContext?: Context;
-    } = {};
-    setContextRoutingResponses(registration, (context, options, model) => {
-      if (!getToolNames(context).includes("run_agent")) {
-        captured.childContext = context;
-        captured.childOptions = options;
-        captured.childModel = model;
-        return fauxAssistantMessage(childReply);
-      }
-      const serialized = JSON.stringify(context.messages);
-      if (!serialized.includes('"toolName":"run_agent"')) {
-        return fauxAssistantMessage([fauxToolCall("run_agent", toolArgs)], { stopReason: "toolUse" });
-      }
-      captured.rootContinuationContext = context;
-      return fauxAssistantMessage(rootReply);
-    });
-    await session.prompt(userPrompt);
-    return captured;
-  }
-
   function makeMockTheme() {
     const theme = Object.create(Theme.prototype) as Theme;
     theme.fg = (_color, text) => text;
@@ -347,22 +317,6 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
 
   function renderToText(component: { render: (width: number) => string[] }) {
     return stripAnsi(component.render(200).join("\n"));
-  }
-
-  function formatTestTokens(count: number) {
-    if (count < 1000) {
-      return count.toString();
-    }
-    if (count < 10000) {
-      return `${(count / 1000).toFixed(1)}k`;
-    }
-    if (count < 1000000) {
-      return `${Math.round(count / 1000)}k`;
-    }
-    if (count < 10000000) {
-      return `${(count / 1000000).toFixed(1)}M`;
-    }
-    return `${Math.round(count / 1000000)}M`;
   }
 
   function makeExecutionContext({
@@ -412,6 +366,10 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     };
   }
 
+  function terminalEnvelope(result: { content: Array<{ text: string }> }): TerminalTaskEnvelope {
+    return JSON.parse(result.content[0].text) as TerminalTaskEnvelope;
+  }
+
   function getToolNames(context: Context | undefined): string[] {
     return [...new Set((context?.tools ?? [])
       .map((tool: { name?: string } | undefined) => tool?.name)
@@ -425,11 +383,10 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     setContextRoutingResponses,
     taskNotifications,
     executeSubagentTask,
-    delegateOnce,
+    terminalEnvelope,
     makeMockTheme,
     stripAnsi,
     renderToText,
-    formatTestTokens,
     makeExecutionContext,
     getToolNames,
   };

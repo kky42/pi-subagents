@@ -33,11 +33,9 @@ describe("pi-subagent profiles", () => {
     trackSession,
     disposeSession,
     createSession,
-    delegateOnce,
     makeMockTheme,
     stripAnsi,
     renderToText,
-    formatTestTokens,
     makeExecutionContext,
     getToolNames,
   } = setupPiSubagentTestHarness((state) => {
