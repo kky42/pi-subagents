@@ -38,14 +38,8 @@ const results = await pipeline(
 );
 return { results };`;
 
-const MAX_ROSTER_DESCRIPTION_CHARS = 240;
-
 function formatRosterDescription(description: string): string {
-  const singleLine = description.replace(/\s+/g, " ").trim();
-  if (singleLine.length <= MAX_ROSTER_DESCRIPTION_CHARS) {
-    return singleLine;
-  }
-  return `${singleLine.slice(0, MAX_ROSTER_DESCRIPTION_CHARS - 1).trimEnd()}…`;
+  return description.replace(/\s+/g, " ").trim();
 }
 
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
