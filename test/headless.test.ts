@@ -150,6 +150,18 @@ describe("canonical workflow agent runner", () => {
 });
 
 describe("headless workflow", () => {
+  it("rejects invalid runtime bounds before starting work", async () => {
+    const script = `export const meta = { name: "bounds", description: "test" };\nreturn await run_agent("inspect", { profile: "reviewer" });`;
+
+    await expect(executeWorkflow({ cwd: process.cwd(), script, maxConcurrentSubagents: 0 }))
+      .rejects.toThrow("maxConcurrentSubagents must be a positive integer");
+    await expect(executeWorkflow({ cwd: process.cwd(), script, subagentTimeoutMs: -1 }))
+      .rejects.toThrow("subagentTimeoutMs must be a non-negative integer");
+    await expect(executeWorkflow({ cwd: process.cwd(), script, workflowTimeoutMs: 1.5 }))
+      .rejects.toThrow("workflowTimeoutMs must be a non-negative integer");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("resolves separate default provider/model settings", async () => {
     await executeWorkflow({
       cwd: process.cwd(),
@@ -193,7 +205,7 @@ describe("headless workflow", () => {
     expect(result.usage).toMatchObject({ input: 150, cacheRead: 50, totalTokens: 202 });
   });
 
-  it("runs without an ExtensionContext or UI and reports cumulative usage", async () => {
+  it("runs without an ExtensionContext or UI and reports immutable cumulative usage snapshots", async () => {
     const usage: unknown[] = [];
     const result = await executeWorkflow({
       cwd: process.cwd(), allowedBackends: ["codex"], onUsage: (value) => usage.push(value),
@@ -201,6 +213,8 @@ describe("headless workflow", () => {
     });
     expect(result.result).toBe("ok");
     expect(result.usage).toMatchObject({ input: 2, output: 3, totalTokens: 5, childSubagents: 1 });
-    expect(usage.length).toBeGreaterThan(0);
+    expect(usage.length).toBeGreaterThan(1);
+    expect(usage[0]).toMatchObject({ childSubagents: 1, cost: { total: 0 } });
+    expect(usage.at(-1)).toMatchObject({ input: 2, output: 3, cost: { total: 0.1 } });
   });
 });

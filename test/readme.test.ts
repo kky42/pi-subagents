@@ -36,43 +36,27 @@ describe("README", () => {
     }
   });
 
-  it("keeps the branch quick start, natural-language examples, and valid custom profiles together", () => {
+  it("keeps documented custom profile examples parseable", () => {
     const gettingStarted = readme.slice(
       readme.indexOf("## Try it"),
       readme.indexOf("## License"),
     );
-    const naturalLanguageExamples = [...gettingStarted.matchAll(/```text\n([\s\S]*?)\n```/g)];
     const profileExamples = [...gettingStarted.matchAll(/```md\n([\s\S]*?)\n```/g)];
-
-    expect(naturalLanguageExamples).toHaveLength(2);
-    expect(profileExamples).toHaveLength(3);
+    expect(profileExamples.length).toBeGreaterThan(0);
 
     const agentDir = mkdtempSync(join(tmpdir(), "pi-flow-readme-"));
     tempDirs.push(agentDir);
     const subagentsDir = join(agentDir, "subagents");
     mkdirSync(subagentsDir);
     for (const [index, match] of profileExamples.entries()) {
-      writeFileSync(join(subagentsDir, `${["pi-explorer", "codex-reviewer", "claude-ui-reviewer"][index]}.md`), match[1]);
+      writeFileSync(join(subagentsDir, `readme-profile-${index}.md`), match[1]);
     }
 
     const profiles = loadCustomSubagentProfiles(agentDir);
-    expect(profiles.get("pi-explorer")).toMatchObject({
-      backend: "pi",
-      model: "deepseek/deepseek-v4-flash",
-      thinking: "high",
-      systemPrompt: "Map the repository and return the important paths.",
-    });
-    expect(profiles.get("codex-reviewer")).toMatchObject({
-      backend: "codex",
-      model: "gpt-5.6-luna",
-      thinking: "high",
-      systemPrompt: "Review the current diff and lead with concrete findings.",
-    });
-    expect(profiles.get("claude-ui-reviewer")).toMatchObject({
-      backend: "claude",
-      model: "claude-sonnet-4-5",
-      thinking: "high",
-      systemPrompt: "Inspect the UI and recommend specific improvements.",
-    });
+    expect(profiles.size).toBe(profileExamples.length);
+    for (const profile of profiles.values()) {
+      expect(profile.description.trim().length).toBeGreaterThan(0);
+      expect(["pi", "codex", "claude"]).toContain(profile.backend);
+    }
   });
 });

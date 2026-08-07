@@ -38,15 +38,19 @@ const results = await pipeline(
 );
 return { results };`;
 
+function formatRosterDescription(description: string): string {
+  return description.replace(/\s+/g, " ").trim();
+}
+
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
   const lines = [...profiles.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((profile) => `- ${profile.name}: ${profile.description}`);
+    .map((profile) => `- ${profile.name}: ${formatRosterDescription(profile.description)}`);
   return lines.length > 0 ? lines.join("\n") : "- (none)";
 }
 
 function formatSavedWorkflows(workflows: SavedWorkflow[]): string {
-  const lines = workflows.map((workflow) => `- ${workflow.name}: ${workflow.description}`);
+  const lines = workflows.map((workflow) => `- ${workflow.name}: ${formatRosterDescription(workflow.description)}`);
   return lines.length > 0 ? lines.join("\n") : "- (none)";
 }
 

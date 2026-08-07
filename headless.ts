@@ -29,8 +29,31 @@ export class HeadlessWorkflowError extends Error {
   }
 }
 
+function positiveInteger(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 1) {
+    throw new RangeError(`${name} must be a positive integer`);
+  }
+  return resolved;
+}
+
+function nonNegativeInteger(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 0) {
+    throw new RangeError(`${name} must be a non-negative integer`);
+  }
+  return resolved;
+}
+
+function snapshotUsage(usage: HeadlessUsage): HeadlessUsage {
+  return { ...usage, cost: { ...usage.cost } };
+}
+
 /** Execute a trusted pi-flow script without an ExtensionContext or TUI. */
 export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOptions): Promise<HeadlessWorkflowResult<T>> {
+  const maxConcurrentSubagents = positiveInteger(options.maxConcurrentSubagents, 12, "maxConcurrentSubagents");
+  const subagentTimeoutMs = nonNegativeInteger(options.subagentTimeoutMs, 3_600_000, "subagentTimeoutMs");
+  const workflowTimeoutMs = nonNegativeInteger(options.workflowTimeoutMs, 0, "workflowTimeoutMs");
   const agentDir = getAgentDir();
   const modelRuntime = await ModelRuntime.create({
     authPath: join(agentDir, "auth.json"),
@@ -68,35 +91,35 @@ export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOpti
     const reasoning = values.filter((item) => item.reasoning !== undefined);
     if (reasoning.length > 0) usage.reasoning = reasoning.reduce((sum, item) => sum + (item.reasoning ?? 0), 0);
     else delete usage.reasoning;
-    options.onUsage?.({ ...usage, cost: { ...usage.cost } });
+    options.onUsage?.(snapshotUsage(usage));
   };
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   let timeoutTriggered = false;
-  const timer = options.workflowTimeoutMs ? setTimeout(() => {
+  const timer = workflowTimeoutMs > 0 ? setTimeout(() => {
     timeoutTriggered = true;
     controller.abort();
-  }, options.workflowTimeoutMs) : undefined;
+  }, workflowTimeoutMs) : undefined;
   timer?.unref?.();
   const runner = createWorkflowSubagentRunner({
     profiles: getSubagentProfiles(agentDir), ctx,
     thinkingLevel: settings.getDefaultThinkingLevel(),
-    timeoutMs: options.subagentTimeoutMs ?? 3_600_000,
+    timeoutMs: subagentTimeoutMs,
     allowedBackends: options.allowedBackends,
     onUsage: updateUsage,
   });
   try {
     const result = await runWorkflow<T>(options.script, {
       cwd: options.cwd, args: options.args, signal,
-      limiter: new ConcurrencyLimiter(options.maxConcurrentSubagents ?? 12),
+      limiter: new ConcurrencyLimiter(maxConcurrentSubagents),
       runSubagent: runner.runSubagent, serializeSubagent: runner.serializeSubagent,
       limits: options.limits, onLog: options.onLog, onPhase: options.onPhase,
-      onSubagentStart: () => { usage.childSubagents++; options.onUsage?.({ ...usage }); },
+      onSubagentStart: () => { usage.childSubagents++; options.onUsage?.(snapshotUsage(usage)); },
     });
-    return { result: result.result, logs: result.logs, phases: result.phases, subagentCount: result.subagentCount, usage: { ...usage } };
+    return { result: result.result, logs: result.logs, phases: result.phases, subagentCount: result.subagentCount, usage: snapshotUsage(usage) };
   } catch (cause) {
     const timeout = timeoutTriggered;
     const aborted = options.signal?.aborted || isWorkflowAbortError(cause);
-    throw new HeadlessWorkflowError(cause instanceof Error ? cause.message : String(cause), timeout ? "WORKFLOW_TIMEOUT" : aborted ? "ABORTED" : "EXECUTION_FAILED", { ...usage }, { cause });
+    throw new HeadlessWorkflowError(cause instanceof Error ? cause.message : String(cause), timeout ? "WORKFLOW_TIMEOUT" : aborted ? "ABORTED" : "EXECUTION_FAILED", snapshotUsage(usage), { cause });
   } finally { if (timer) clearTimeout(timer); }
 }
