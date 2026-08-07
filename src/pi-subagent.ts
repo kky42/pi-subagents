@@ -21,6 +21,7 @@ import {
   boundedProgressText,
   createProgressNode,
   MAX_MODEL_VISIBLE_TEXT_CHARS,
+  MAX_PROGRESS_METADATA_CHARS,
   subagentDisplayDetails,
   textResult,
   type SubagentToolResult,
@@ -71,6 +72,7 @@ const RUN_AGENT_PROMPT_GUIDELINES = [
 const runAgentToolParameters = Type.Object({
   label: Type.String({
     minLength: 1,
+    maxLength: MAX_PROGRESS_METADATA_CHARS,
     pattern: ".*\\S.*",
     description: "Short UI task label, ideally 3-5 words; not sent to the subagent.",
   }),
@@ -80,11 +82,13 @@ const runAgentToolParameters = Type.Object({
   }),
   profile: Type.Optional(
     Type.String({
+      maxLength: MAX_PROGRESS_METADATA_CHARS,
       description: "Registered profile name; defaults to general-purpose.",
     }),
   ),
   session_key: Type.Optional(
     Type.String({
+      maxLength: MAX_PROGRESS_METADATA_CHARS,
       description:
         "Prior run_agent session_key to continue. Omit to start a new subagent conversation; the effective key is returned once the subagent starts.",
     }),
@@ -486,8 +490,8 @@ function createRunAgentTool(
       const envelope: AgentTerminalTaskEnvelope = {
         task_type: "agent",
         status: managed.status,
-        ...(sessionStarted ? { session_key: sessionKey } : {}),
-        label: label || "unnamed",
+        ...(sessionStarted ? { session_key: boundedProgressText(sessionKey, MAX_PROGRESS_METADATA_CHARS) } : {}),
+        label: boundedProgressText(label || "unnamed", MAX_PROGRESS_METADATA_CHARS),
         content: managed.status === "completed"
           ? boundedProgressText(details.result ?? "", MAX_MODEL_VISIBLE_TEXT_CHARS)
           : boundedProgressText(details.error ?? managed.abortReason ?? "Subagent failed", MAX_MODEL_VISIBLE_TEXT_CHARS),
@@ -577,7 +581,11 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
     let taskManager = createTaskManager();
     let taskManagerNeedsReset = false;
     const getTaskManager = () => taskManager;
-    const syncRuntimeOptions = () => {
+    // The concurrency limiter is a live shared resource: replacing it while
+    // calls are queued or running would orphan waiters on the old limiter and
+    // transiently exceed the operator cap. Apply flag changes only at session
+    // boundaries, when no pi-flow task can be active.
+    const syncLimiter = () => {
       const current = normalizeMaxConcurrentSubagents(
         pi.getFlag(MAX_CONCURRENT_SUBAGENTS_FLAG),
         defaultMaxConcurrentSubagents,
@@ -587,6 +595,10 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         rootState.limiter = new ConcurrencyLimiter(current);
         rootState.maxConcurrentSubagents = current;
       }
+    };
+    // Timeout is per-call, so it is read fresh from the flag on every access; the
+    // limiter is session-bound and only swapped in syncLimiter() above.
+    const getState = () => {
       rootState.subagentTimeoutMs = normalizeSubagentTimeoutMs(
         pi.getFlag(SUBAGENT_TIMEOUT_MS_FLAG),
         defaultSubagentTimeoutMs,
@@ -595,17 +607,17 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       return rootState;
     };
 
-    pi.registerTool(createRunAgentTool(syncRuntimeOptions, {
+    pi.registerTool(createRunAgentTool(getState, {
       getTaskManager,
       getThinkingLevel: () => pi.getThinkingLevel(),
-      getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
+      getSubagentTimeoutMs: () => getState().subagentTimeoutMs,
     }));
     if (workflowEnabled) {
       pi.registerTool(createRunWorkflowTool({
         getTaskManager,
-        getLimiter: () => syncRuntimeOptions().limiter,
+        getLimiter: () => rootState.limiter,
         getThinkingLevel: () => pi.getThinkingLevel(),
-        getSubagentTimeoutMs: () => syncRuntimeOptions().subagentTimeoutMs,
+        getSubagentTimeoutMs: () => getState().subagentTimeoutMs,
       }));
     }
 
@@ -614,7 +626,8 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         taskManager = createTaskManager();
         taskManagerNeedsReset = false;
       }
-      syncRuntimeOptions();
+      syncLimiter();
+      getState();
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       rootState.activeRuns.clear();
@@ -647,6 +660,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
 
     pi.on("session_tree", () => {
       taskManager = createTaskManager();
+      syncLimiter();
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       rootState.activeRuns.clear();

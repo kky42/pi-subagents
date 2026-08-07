@@ -62,10 +62,6 @@ export function getSavedWorkflowRoots(options: LoadSavedWorkflowOptions): Workfl
   return roots;
 }
 
-function getWorkflowPathRoots(options: LoadSavedWorkflowOptions): WorkflowRoot[] {
-  return getSavedWorkflowRoots(options);
-}
-
 export function loadSavedWorkflowRegistry(options: LoadSavedWorkflowOptions): SavedWorkflowRegistry {
   const workflows = new Map<string, SavedWorkflow>();
   const warnings: string[] = [];
@@ -124,7 +120,7 @@ export function loadWorkflowScriptPath(
     return { ok: false, message: `Workflow script_path must resolve to a ${WORKFLOW_FILE_EXTENSION} file.`, warnings };
   }
 
-  const roots = getWorkflowPathRoots(options)
+  const roots = getSavedWorkflowRoots(options)
     .map((root) => ({ ...root, realPath: safeRealDirectory(root.path) }))
     .filter((root): root is WorkflowRoot & { realPath: string } => Boolean(root.realPath));
   const root = roots.find((candidate) => isInsideRoot(realPath, candidate.realPath));

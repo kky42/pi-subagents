@@ -2,11 +2,13 @@ import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-ag
 import type { WorkflowToolParams } from "../pi-workflow.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "./registry.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
+import type { WorkflowMeta } from "./types.ts";
 
 export type PreparedWorkflowToolSource = {
   script: string;
+  meta: WorkflowMeta;
+  body: string;
 };
-
 interface PrepareErrorDetails {
   error: string;
 }
@@ -103,16 +105,17 @@ export function prepareWorkflowToolSource(
   }
 
   const script = normalizeWorkflowScript(source.script);
-  let scriptName: string;
+  let parsed: { meta: WorkflowMeta; body: string };
   try {
-    scriptName = parseWorkflowScript(script).meta.name.trim();
+    parsed = parseWorkflowScript(script);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return sourceError(`Workflow script is invalid; no subagents were started: ${message}`);
   }
+  const scriptName = parsed.meta.name.trim();
   if (scriptName !== workflowName) {
     return sourceError(`Workflow name "${workflowName}" does not match script meta.name "${scriptName}".`);
   }
 
-  return { ok: true, value: { script } };
+  return { ok: true, value: { script, meta: parsed.meta, body: parsed.body } };
 }

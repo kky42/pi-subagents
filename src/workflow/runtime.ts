@@ -70,7 +70,7 @@ export async function runWorkflow<T = unknown>(
   script: string,
   options: RunWorkflowOptions,
 ): Promise<WorkflowRunResult<T>> {
-  const { meta, body } = parseWorkflowScript(script);
+  const { meta, body } = options.parsedWorkflow ?? parseWorkflowScript(script);
   const limits = normalizeWorkflowLimits(options.limits);
   const state: RuntimeState = {
     logs: [],

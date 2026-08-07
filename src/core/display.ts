@@ -21,7 +21,3 @@ export function getBackendAgentLabel(backend: SubagentBackend | undefined): stri
 export function getAgentDisplayDescriptor(profile: string, label: string): string {
   return label ? `${profile}: ${label}` : profile;
 }
-
-export function formatAgentDisplayLabel(metadata: AgentDisplayMetadata, label: string): string {
-  return `${getBackendAgentLabel(metadata.backend)}(${getAgentDisplayDescriptor(metadata.profile, label)})`;
-}

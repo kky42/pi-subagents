@@ -31,7 +31,7 @@ import type {
   WorkflowSubagentStatusCounts,
   WorkflowToolDetails,
 } from "./types.ts";
-import { isWorkflowAbortError, parseWorkflowScript, runWorkflow } from "./workflow/runtime.ts";
+import { isWorkflowAbortError, runWorkflow } from "./workflow/runtime.ts";
 import { prepareWorkflowToolSource } from "./workflow/source.ts";
 import { createWorkflowSubagentRunner } from "./workflow/subagent-runner.ts";
 
@@ -107,6 +107,7 @@ const WORKFLOW_TOOL_DESCRIPTION = [
 export const workflowToolParameters = Type.Object({
   name: Type.String({
     minLength: 1,
+    maxLength: WORKFLOW_METADATA_PREVIEW_CHARS,
     pattern: ".*\\S.*",
     description: "Workflow meta.name; required and must match the selected script or path.",
   }),
@@ -650,8 +651,8 @@ async function executeWorkflowCall(params: {
     return workflowErrorDetails(name, prepared.details.error);
   }
 
-  const { script } = prepared.value;
-  snapshot.plannedPhases = parseWorkflowScript(script).meta.phases?.map((phase) => ({ ...phase }));
+  const { script, meta } = prepared.value;
+  snapshot.plannedPhases = meta.phases?.map((phase) => ({ ...phase }));
   const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
   const runner = createWorkflowSubagentRunner({
     profiles,
@@ -704,6 +705,7 @@ async function executeWorkflowCall(params: {
       cwd: ctx.cwd,
       signal,
       limiter: options.getLimiter(),
+      parsedWorkflow: prepared.value,
       serializeSubagent: runner.serializeSubagent,
       runSubagent: runner.runSubagent,
       onLog: (message) => {
@@ -829,7 +831,7 @@ export function createRunWorkflowTool(
       const envelope: WorkflowTerminalTaskEnvelope = {
         task_type: "workflow",
         status: managed.status,
-        name,
+        name: boundedTextPreview(name, WORKFLOW_METADATA_PREVIEW_CHARS),
         content: boundedTextPreview(execution.terminalContent, MAX_MODEL_VISIBLE_TEXT_CHARS),
       };
       const result = workflowSnapshotResult(

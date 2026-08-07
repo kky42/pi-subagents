@@ -74,6 +74,8 @@ export interface RunWorkflowOptions {
   args?: unknown;
   cwd: string;
   signal?: AbortSignal;
+  /** Pre-parsed script so acorn + determinism lint + schema preflight run once per call. */
+  parsedWorkflow?: { meta: WorkflowMeta; body: string };
   /** Shared global concurrency cap; run_agent() queues on this. */
   limiter: ConcurrencyLimiter;
   /** Optional per-call serializer, used to keep equal session_key calls from consuming global slots while waiting. */
