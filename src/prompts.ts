@@ -38,15 +38,25 @@ const results = await pipeline(
 );
 return { results };`;
 
+const MAX_ROSTER_DESCRIPTION_CHARS = 240;
+
+function formatRosterDescription(description: string): string {
+  const singleLine = description.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= MAX_ROSTER_DESCRIPTION_CHARS) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, MAX_ROSTER_DESCRIPTION_CHARS - 1).trimEnd()}…`;
+}
+
 function formatAvailableAgents(profiles: Map<string, SubagentProfile>): string {
   const lines = [...profiles.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((profile) => `- ${profile.name}: ${profile.description}`);
+    .map((profile) => `- ${profile.name}: ${formatRosterDescription(profile.description)}`);
   return lines.length > 0 ? lines.join("\n") : "- (none)";
 }
 
 function formatSavedWorkflows(workflows: SavedWorkflow[]): string {
-  const lines = workflows.map((workflow) => `- ${workflow.name}: ${workflow.description}`);
+  const lines = workflows.map((workflow) => `- ${workflow.name}: ${formatRosterDescription(workflow.description)}`);
   return lines.length > 0 ? lines.join("\n") : "- (none)";
 }
 
