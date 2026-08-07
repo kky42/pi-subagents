@@ -297,6 +297,27 @@ async function main() {
     log(`widget: ${lines[widgetIndex]}`);
     log(`footer: ${footer}`);
 
+    const paneWithColors = tmux(["capture-pane", "-t", sessionName, "-p", "-J", "-e"]);
+    const coloredLines = paneWithColors.split("\n").filter((line) => line.trim().length > 0);
+    const ansi = /\x1b\[[0-9;]*m/g;
+    const stripAnsi = (text) => text.replace(ansi, "");
+    const widgetColored = coloredLines.find((line) => WIDGET_LINE.test(stripAnsi(line)));
+    const footerColored = coloredLines[coloredLines.length - 1];
+    if (!widgetColored) {
+      throw new Error("pi-flow widget line missing from the color capture");
+    }
+    if (stripAnsi(widgetColored).startsWith(" ")) {
+      throw new Error(`pi-flow widget must not be indented: ${JSON.stringify(stripAnsi(widgetColored))}`);
+    }
+    const widgetColor = widgetColored.match(ansi)?.[0];
+    const footerColor = footerColored.match(ansi)?.[0];
+    if (!widgetColor || widgetColor !== footerColor) {
+      throw new Error(
+        `pi-flow widget color (${widgetColor ?? "none"}) must match the dim footer (${footerColor ?? "none"}): ${JSON.stringify(widgetColored)}`,
+      );
+    }
+    log(`widget color: ${widgetColor} (matches footer dim)`);
+
     log("PASS: live rows animated, workflow phase tree rendered, bottom usage widget visible");
   } catch (error) {
     failed = true;

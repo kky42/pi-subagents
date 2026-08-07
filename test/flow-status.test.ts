@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   buildFlowStatusLines,
@@ -8,6 +8,7 @@ import {
   recordFlowUsage,
 } from "../src/core/flow-status.ts";
 import type { SubagentTelemetry, SubagentUsage } from "../src/types.ts";
+import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 const telemetry: SubagentTelemetry = {
   tokensKnown: true,
@@ -71,37 +72,53 @@ describe("flow status display", () => {
 });
 
 describe("flow status publish", () => {
-  function widgetContext(widgets: Array<{ key: string; lines: string[] | undefined; placement: string | undefined }>): ExtensionContext {
+  type WidgetContent =
+    | ((tui: unknown, theme: Theme) => { render: (width: number) => string[] })
+    | string[]
+    | undefined;
+
+  function widgetContext(widgets: Array<{ key: string; content: WidgetContent; placement: string | undefined }>): ExtensionContext {
     return {
       hasUI: true,
       mode: "rpc",
       ui: {
-        setWidget: (key: string, lines: string[] | undefined, options?: { placement?: string }) => {
-          widgets.push({ key, lines, placement: options?.placement });
+        setWidget: (key: string, content: WidgetContent, options?: { placement?: string }) => {
+          widgets.push({ key, content, placement: options?.placement });
         },
       },
     } as unknown as ExtensionContext;
   }
 
-  it("publishes the summary line below the editor and clears it when empty", () => {
-    const widgets: Array<{ key: string; lines: string[] | undefined; placement: string | undefined }> = [];
+  it("publishes a dim summary line without leading indent below the editor and clears it when empty", () => {
+    const { makeMockTheme, renderToText } = setupPiSubagentTestHarness();
+    const widgets: Array<{ key: string; content: WidgetContent; placement: string | undefined }> = [];
     const ctx = widgetContext(widgets);
     const state = createFlowStatusState();
     recordFlowUsage(state, "agent-1", usage(100, 10), telemetry);
 
     publishFlowStatus(ctx, state);
 
-    expect(widgets).toEqual([
-      { key: "pi-flow", lines: ["pi-flow ↑100 ↓10 CH0.0%"], placement: "belowEditor" },
-    ]);
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0].key).toBe("pi-flow");
+    expect(widgets[0].placement).toBe("belowEditor");
+    const colors: string[] = [];
+    const theme = makeMockTheme();
+    const originalFg = theme.fg;
+    theme.fg = (color, text) => {
+      colors.push(color);
+      return originalFg(color, text);
+    };
+    const component = (widgets[0].content as (tui: unknown, theme: Theme) => { render: (width: number) => string[] })(null, theme);
+    expect(renderToText(component).trimEnd()).toBe("pi-flow ↑100 ↓10 CH0.0%");
+    expect(colors).toEqual(["dim"]);
 
     clearFlowUsage(state);
     publishFlowStatus(ctx, state);
-    expect(widgets.at(-1)).toEqual({ key: "pi-flow", lines: undefined, placement: undefined });
+    expect(widgets.at(-1)).toEqual({ key: "pi-flow", content: undefined, placement: undefined });
   });
 
   it("skips headless contexts", () => {
-    const widgets: Array<{ key: string; lines: string[] | undefined; placement: string | undefined }> = [];
+    const widgets: Array<{ key: string; content: WidgetContent; placement: string | undefined }> = [];
     const ctx = widgetContext(widgets);
     const state = createFlowStatusState();
     recordFlowUsage(state, "agent-1", usage(100, 10), telemetry);

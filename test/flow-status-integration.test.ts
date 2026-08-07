@@ -1,9 +1,10 @@
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Context } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
-type Widget = { key: string; lines: string[] | undefined; placement: string | undefined };
+type Widget = { key: string; content: unknown; placement: string | undefined };
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,17 +28,26 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-function widgetTexts(widgets: Widget[]): string[] {
-  return widgets.map((widget) => widget.lines?.join("\n") ?? "");
-}
-
 describe("pi-flow bottom status widget", () => {
   const {
     disposeSession,
     createSession,
     setContextRoutingResponses,
     makeExecutionContext,
+    makeMockTheme,
+    renderToText,
   } = setupPiSubagentTestHarness();
+
+  function widgetTexts(widgets: Widget[]): string[] {
+    return widgets.map((widget) => {
+      if (typeof widget.content === "function") {
+        return renderToText(
+          (widget.content as (tui: unknown, theme: Theme) => { render: (width: number) => string[] })(null, makeMockTheme()),
+        ).trimEnd();
+      }
+      return (widget.content as string[] | undefined)?.join("\n") ?? "";
+    });
+  }
 
   it("publishes only the cumulative usage line after a direct subagent completes", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
@@ -47,7 +57,7 @@ describe("pi-flow bottom status widget", () => {
       model,
       modelRegistry,
       tui: true,
-      onWidget: (key, lines, placement) => widgets.push({ key, lines, placement }),
+      onWidget: (key, lines, placement) => widgets.push({ key, content: lines, placement }),
     });
     const childGate = deferred();
     setContextRoutingResponses(registration, async () => {
@@ -81,7 +91,7 @@ describe("pi-flow bottom status widget", () => {
       model,
       modelRegistry,
       tui: true,
-      onWidget: (key, lines, placement) => widgets.push({ key, lines, placement }),
+      onWidget: (key, lines, placement) => widgets.push({ key, content: lines, placement }),
     });
     const childGate = deferred();
     setContextRoutingResponses(registration, async () => {

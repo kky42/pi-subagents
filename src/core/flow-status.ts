@@ -1,3 +1,4 @@
+import { Container, Text } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SubagentTelemetry, SubagentUsage } from "../types.ts";
 import { formatUsage } from "./subagent-render.ts";
@@ -86,5 +87,14 @@ export function publishFlowStatus(ctx: ExtensionContext, state: FlowStatusState)
     ctx.ui.setWidget(FLOW_STATUS_KEY, undefined);
     return;
   }
-  ctx.ui.setWidget(FLOW_STATUS_KEY, lines, { placement: "belowEditor" });
+  // Component form instead of string lines: pi renders string widgets with a
+  // forced one-space indent and default color, while the built-in footer uses
+  // no indent and dim text. Match the footer exactly.
+  ctx.ui.setWidget(FLOW_STATUS_KEY, (_tui, theme) => {
+    const container = new Container();
+    for (const line of lines) {
+      container.addChild(new Text(theme.fg("dim", line), 0, 0));
+    }
+    return container;
+  }, { placement: "belowEditor" });
 }
