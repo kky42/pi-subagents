@@ -54,7 +54,7 @@ const WORKFLOW_AUTHORING_GUIDE = `## Workflow authoring
 
 For ad-hoc workflow scripts:
 
-- Start with the plain literal \`export const meta = { name: 'short_name', description: 'non-empty' }\`; its name must match the \`run_workflow\` tool's \`name\` parameter. Optional \`phases\` entries may contain \`title\`, \`detail\`, and \`model\`.
+- Start with the plain literal \`export const meta = { name: 'short_name', description: 'non-empty' }\`; its name must match the \`run_workflow\` tool's \`name\` parameter. Optional \`phases\` entries are display-only metadata (\`title\`, \`detail\`, \`model\`); they label the phase tree and never change execution.
 - Workflow-specific globals are \`run_agent(prompt, opts)\`, \`parallel(thunks)\`, \`pipeline(items, ...stages)\`, \`phase(title)\`, \`log(message)\`, \`args\`, and \`cwd\`.
 - Call \`run_agent()\` at least once, await or return every call, and return a JSON-serializable value.
 - \`run_agent()\` options are \`label\`, \`phase\`, \`profile\`, \`session_key\`, and \`schema\`. The profile defaults to \`general-purpose\`; a reused workflow-local session key continues the same child conversation. Nonfatal failures resolve to \`null\`.
