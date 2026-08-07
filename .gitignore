@@ -143,3 +143,6 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Real-model E2E failure artifacts
+scripts/e2e/artifacts/

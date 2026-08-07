@@ -22,7 +22,7 @@ import {
   isCompletedSubagentStatus,
   renderSubagentNode,
 } from "./core/subagent-render.ts";
-import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
+import { createSpinnerHeartbeat } from "./core/spinner.ts";
 import {
   SynchronousTaskManager,
   taskEnvelopeContent,
@@ -701,15 +701,16 @@ async function executeWorkflowCall(params: {
     },
   });
 
-  const heartbeat = ctx.mode === "tui" && onUpdate
-    ? setInterval(() => {
-        if (snapshot.status === "running" && snapshot.subagents.some((subagent) => isActiveSubagentStatus(subagent.status))) {
+  const spinnerHeartbeat = ctx.mode === "tui" && onUpdate
+    ? createSpinnerHeartbeat(
+        () => snapshot.status === "running" && snapshot.subagents.some((subagent) => isActiveSubagentStatus(subagent.status)),
+        () => {
           snapshot.frame = (snapshot.frame ?? 0) + 1;
           emit();
-        }
-      }, SPINNER_INTERVAL_MS)
+        },
+      )
     : undefined;
-  heartbeat?.unref?.();
+  spinnerHeartbeat?.start();
 
   try {
     const result = await runWorkflow(script, {
@@ -778,9 +779,7 @@ async function executeWorkflowCall(params: {
     }
     return workflowExecutionSnapshot(snapshot, message);
   } finally {
-    if (heartbeat) {
-      clearInterval(heartbeat);
-    }
+    spinnerHeartbeat?.stop();
     const flowStatus = options.getFlowStatus();
     const aggregate = aggregateWorkflowUsage(snapshot.subagents);
     if (aggregate.usage) {

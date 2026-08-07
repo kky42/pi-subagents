@@ -43,6 +43,7 @@ import {
   type SessionKeyBinding,
 } from "./core/session-key.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { createSpinnerHeartbeat } from "./core/spinner.ts";
 import { renderSubagentNode } from "./core/subagent-render.ts";
 import { normalizeProfileName, normalizeSubagentLabel } from "./core/subagent-values.ts";
 import {
@@ -325,6 +326,18 @@ async function executeAgentCall(params: {
     state.activeRuns.set(toolCallId, run);
     broadcastRunUpdates(state);
   }
+  // Animate the direct tool row at pi's own spinner cadence while it runs,
+  // independent of throttled child progress events.
+  const spinnerHeartbeat = run && ctx.mode === "tui"
+    ? createSpinnerHeartbeat(
+        () => state.activeRuns.has(toolCallId) && run.progress.status === "running",
+        () => {
+          state.frame++;
+          emitRunUpdate(state, run);
+        },
+      )
+    : undefined;
+  spinnerHeartbeat?.start();
 
   try {
     let outcome: AgentCallOutcome;
@@ -425,6 +438,7 @@ async function executeAgentCall(params: {
     return { result: { ...outcome.result, details }, sessionStarted: outcome.sessionStarted };
   } finally {
     if (run) {
+      spinnerHeartbeat?.stop();
       state.activeRuns.delete(toolCallId);
       if (run.usage) {
         recordFlowUsage(state.flowStatus, toolCallId, run.usage, run.progress.telemetry);

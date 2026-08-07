@@ -48,6 +48,7 @@
     "e2e:workflow-features": "node scripts/e2e/workflow-features.mjs",
     "e2e:prompt-routing": "node scripts/e2e/prompt-routing.mjs",
     "e2e:session-key-resume": "node scripts/e2e/session-key-resume.mjs",
+    "e2e:sync-tui": "node scripts/e2e/sync-tui.mjs",
     "test": "vitest run",
     "prepack": "npm run build:dist"
   },
