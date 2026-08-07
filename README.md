@@ -4,25 +4,25 @@
 
 **Give Pi a team.**
 
-Run subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Claude Code** without leaving your Pi session.
+Orchestrate subagents and multi-step workflows across **Pi**, **Codex CLI**, and **Claude Code** without leaving your Pi session.
 
 [![CI](https://github.com/kky42/pi-flow/actions/workflows/ci.yml/badge.svg)](https://github.com/kky42/pi-flow/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/%40kky42%2Fpi-flow)](./LICENSE)
 
 </div>
 
-## One coordinator, focused specialists
+## One coordinator, focused subagents
 
-Define specialists for **Pi**, **Codex CLI**, and **Claude Code**, then orchestrate them from one Pi session - a few parallel `run_agent` calls or a staged `run_workflow` with live progress.
+Define subagents for **Pi**, **Codex CLI**, and **Claude Code**, then orchestrate them from one Pi session - a few parallel `run_agent` calls or a staged `run_workflow` with live progress.
 
 | Primitive | Use it for |
 | --- | --- |
-| **`run_agent`** | One focused, resumable specialist or several independent specialists in parallel. |
+| **`run_agent`** | One focused, resumable subagent or several independent subagents in parallel. |
 | **`run_workflow`** | Parallel or staged subagents, branching, structured results, and saved orchestration. |
 
 <p align="center">
   <img src="./assets/pi-flow-subagents.png" alt="Three Pi subagents greet the user in parallel" width="49%">
-  <img src="./assets/pi-flow-workflow.png" alt="A two-phase demo workflow runs four specialists" width="49%">
+  <img src="./assets/pi-flow-workflow.png" alt="A two-phase demo workflow runs four subagents" width="49%">
 </p>
 
 ## Try it
@@ -43,7 +43,7 @@ Use a workflow to classify each changed file by risk, run the matching review, a
 
 The active Tool row shows queued and running work. Pi receives the final Tool result after the direct subagent or outer workflow finishes.
 
-### Add simple specialists
+### Add simple subagents
 
 Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the profile name. Codex and Claude profiles bypass their native permission prompts, so use them only in trusted repositories.
 

@@ -35,7 +35,7 @@ import { isWorkflowAbortError, parseWorkflowScript, runWorkflow } from "./workfl
 import { prepareWorkflowToolSource } from "./workflow/source.ts";
 import { createWorkflowSubagentRunner } from "./workflow/subagent-runner.ts";
 
-const WORKFLOW_PROMPT_SNIPPET = "Orchestrate dependent or larger multi-agent work";
+const WORKFLOW_PROMPT_SNIPPET = "Orchestrate dependent or larger multi-subagent work";
 
 export const WORKFLOW_DISPLAY_SUBAGENT_LIMIT = 12;
 export const WORKFLOW_DISPLAY_PHASE_LIMIT = 8;
@@ -100,7 +100,7 @@ const WORKFLOW_PROMPT_GUIDELINES = [
 ];
 
 const WORKFLOW_TOOL_DESCRIPTION = [
-  "Use run_workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, or larger fan-out.",
+  "Use run_workflow for multi-subagent orchestration that requires dependent stages, branching, structured outputs, or larger fan-out.",
   "Run a matching saved workflow when available; otherwise provide a trusted ad-hoc script.",
 ].join(" ");
 

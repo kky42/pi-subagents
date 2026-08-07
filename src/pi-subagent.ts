@@ -61,7 +61,7 @@ const DEFAULT_SUBAGENT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const MAX_CONCURRENT_SUBAGENTS_FLAG = "max-concurrent-subagents";
 const SUBAGENT_TIMEOUT_MS_FLAG = "subagent-timeout-ms";
 const FLOW_UI_KEY = "pi-flow";
-const RUN_AGENT_PROMPT_SNIPPET = "Delegate one focused task to a specialist";
+const RUN_AGENT_PROMPT_SNIPPET = "Delegate one focused task to a subagent";
 const RUN_AGENT_PROMPT_GUIDELINES = [
   "Use run_agent only when delegation adds value; keep narrow local work in the foreground.",
   "Launch independent run_agent tasks in parallel when they do not depend on each other.",
@@ -72,11 +72,11 @@ const runAgentToolParameters = Type.Object({
   label: Type.String({
     minLength: 1,
     pattern: ".*\\S.*",
-    description: "Short UI task label, ideally 3-5 words; not sent to the child.",
+    description: "Short UI task label, ideally 3-5 words; not sent to the subagent.",
   }),
   prompt: Type.String({
     description:
-      "Complete task briefing sent to the child. Include needed paths, constraints, and expected result because fresh calls do not inherit parent context.",
+      "Complete task briefing sent to the subagent. Include needed paths, constraints, and expected result because fresh calls do not inherit parent context.",
   }),
   profile: Type.Optional(
     Type.String({
@@ -86,7 +86,7 @@ const runAgentToolParameters = Type.Object({
   session_key: Type.Optional(
     Type.String({
       description:
-        "Prior run_agent session_key to continue. Omit to start a new child conversation; the effective key is returned once the child starts.",
+        "Prior run_agent session_key to continue. Omit to start a new subagent conversation; the effective key is returned once the subagent starts.",
     }),
   ),
 }, { additionalProperties: false });
@@ -424,7 +424,7 @@ function createRunAgentTool(
     name: "run_agent",
     label: "Run Agent",
     description:
-      "Use run_agent to delegate one focused, self-contained task to a specialist. It is best for independent parallel work or context-heavy exploration whose intermediate context the foreground does not need. Subagents cannot invoke PiFlow delegation tools.",
+      "Use run_agent to delegate one focused, self-contained task to a subagent. It is best for independent parallel work or context-heavy exploration whose intermediate context the foreground does not need. Subagents cannot invoke PiFlow delegation tools.",
     promptSnippet: RUN_AGENT_PROMPT_SNIPPET,
     promptGuidelines: RUN_AGENT_PROMPT_GUIDELINES,
     parameters: runAgentToolParameters,
@@ -452,7 +452,7 @@ function createRunAgentTool(
               })
             : {
                 sessionStarted: false,
-                result: failedSubagentResult("unnamed", profileName, undefined, "Agent label must contain non-whitespace characters", taskSignal),
+                result: failedSubagentResult("unnamed", profileName, undefined, "Subagent label must contain non-whitespace characters", taskSignal),
               };
           const details = outcome.result.details as SubagentToolDetails;
           return {
