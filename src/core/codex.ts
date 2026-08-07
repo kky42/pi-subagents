@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { calculateCost, type Model, type Usage } from "@earendil-works/pi-ai";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   createProgressEmitter,
@@ -26,23 +27,16 @@ export interface CodexTokenUsage {
   reasoningOutputTokens: number;
 }
 
-export interface CodexModelPrice {
-  /** USD per one million non-cached input tokens. */
-  input: number;
-  /** USD per one million cached input tokens. */
-  cachedInput: number;
-  /** USD per one million output tokens. */
-  output: number;
+function parseModelReference(model: string | undefined): { provider?: string; modelId?: string } {
+  const normalized = model?.trim();
+  if (!normalized) {
+    return { provider: undefined, modelId: undefined };
+  }
+  const separator = normalized.indexOf("/");
+  return separator === -1
+    ? { provider: undefined, modelId: normalized }
+    : { provider: normalized.slice(0, separator), modelId: normalized.slice(separator + 1) };
 }
-
-export const CODEX_MODEL_PRICES_USD_PER_MILLION: Record<string, CodexModelPrice> = {
-  "gpt-5.6-sol": { input: 5, cachedInput: 0.5, output: 30 },
-  "gpt-5.6-terra": { input: 2.5, cachedInput: 0.25, output: 15 },
-  "gpt-5.6-luna": { input: 1, cachedInput: 0.1, output: 6 },
-  "gpt-5.5": { input: 1.25, cachedInput: 0.125, output: 10 },
-  "gpt-5.4": { input: 1.25, cachedInput: 0.125, output: 10 },
-  "gpt-5.4-mini": { input: 0.25, cachedInput: 0.025, output: 2 },
-};
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -55,15 +49,6 @@ function asFiniteNumber(value: unknown): number | undefined {
 
 function buildConfigOverrideArg(key: string, rawValue: string): string {
   return `${key}=${JSON.stringify(rawValue)}`;
-}
-
-export function normalizeCodexPriceModel(model: string | undefined): string | undefined {
-  const normalized = model?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  const slash = normalized.lastIndexOf("/");
-  return slash === -1 ? normalized : normalized.slice(slash + 1);
 }
 
 function calculateModelCostUsd(pricingModel: Model<string>, usage: CodexTokenUsage): number {
@@ -81,20 +66,26 @@ function calculateModelCostUsd(pricingModel: Model<string>, usage: CodexTokenUsa
   return calculateCost(pricingModel, piUsage).total;
 }
 
+const builtinCodexModelLookup = getBuiltinModel as unknown as (
+  provider: string,
+  modelId: string,
+) => Model<string> | undefined;
+
+// Codex CLI models live in the openai-codex catalog, so a user-written
+// "openai/<model>" or bare "<model>" reference resolves there too.
 export function estimateCodexCostUsd(model: string | undefined, usage: CodexTokenUsage): number | undefined {
-  const modelId = normalizeCodexPriceModel(model);
-  const price = modelId ? CODEX_MODEL_PRICES_USD_PER_MILLION[modelId] : undefined;
-  if (!price) {
+  const { provider, modelId } = parseModelReference(model);
+  if (!modelId) {
     return undefined;
   }
-  const totalInputTokens = Math.max(0, usage.inputTokens);
-  const cachedInputTokens = Math.min(totalInputTokens, Math.max(0, usage.cachedInputTokens));
-  const uncachedInputTokens = totalInputTokens - cachedInputTokens;
-  return (
-    (uncachedInputTokens * price.input) +
-    (cachedInputTokens * price.cachedInput) +
-    (Math.max(0, usage.outputTokens) * price.output)
-  ) / 1_000_000;
+  const providers = provider && provider !== "openai-codex" ? [provider, "openai-codex"] : ["openai-codex"];
+  for (const candidate of providers) {
+    const pricingModel = builtinCodexModelLookup(candidate, modelId);
+    if (pricingModel) {
+      return calculateModelCostUsd(pricingModel, usage);
+    }
+  }
+  return undefined;
 }
 
 function calculateRegistryCodexCostUsd(
@@ -102,19 +93,21 @@ function calculateRegistryCodexCostUsd(
   usage: CodexTokenUsage,
   modelRegistry: ModelRegistry | undefined,
 ): number | undefined {
-  const normalized = model?.trim();
-  if (!normalized || !modelRegistry) {
+  if (!modelRegistry) {
     return undefined;
   }
-  const separator = normalized.indexOf("/");
-  const provider = separator === -1 ? "openai-codex" : normalized.slice(0, separator);
-  const modelId = separator === -1 ? normalized : normalized.slice(separator + 1);
-  const pricingModel = modelRegistry.find(provider, modelId);
-  if (!pricingModel) {
+  const { provider, modelId } = parseModelReference(model);
+  if (!modelId) {
     return undefined;
   }
-
-  return calculateModelCostUsd(pricingModel, usage);
+  const providers = provider && provider !== "openai-codex" ? [provider, "openai-codex"] : ["openai-codex"];
+  for (const candidate of providers) {
+    const pricingModel = modelRegistry.find(candidate, modelId);
+    if (pricingModel) {
+      return calculateModelCostUsd(pricingModel, usage);
+    }
+  }
+  return undefined;
 }
 
 function resolveCodexCostUsd(

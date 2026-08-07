@@ -163,10 +163,10 @@ describe("basic metrics semi-E2E reporting", () => {
       cacheRead: 400,
       cacheWrite: 0,
       cacheHitRate: 40,
-      costUsd: 0.0013,
+      costUsd: 0.0047,
       costStatus: "estimated",
     });
-    expect(summary.usageDisplay).toBe("↑600 ↓50 R400 CH40.0% $0.001");
+    expect(summary.usageDisplay).toBe("↑600 ↓50 R400 CH40.0% $0.005");
   });
 
   it("aggregates Pi assistant usage and verifies the observed model", () => {

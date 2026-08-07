@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { calculateCost, type Model, type Usage } from "@earendil-works/pi-ai";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   createProgressEmitter,
   textResult,
@@ -29,6 +31,67 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 function asFiniteNumber(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function parseModelReference(model: string | undefined): { provider?: string; modelId?: string } {
+  const normalized = model?.trim();
+  if (!normalized) {
+    return { provider: undefined, modelId: undefined };
+  }
+  const separator = normalized.indexOf("/");
+  return separator === -1
+    ? { provider: undefined, modelId: normalized }
+    : { provider: normalized.slice(0, separator), modelId: normalized.slice(separator + 1) };
+}
+
+function calculateClaudeCostUsd(pricingModel: Model<string>, usage: ClaudeTokenUsage): number {
+  const totalInputTokens = Math.max(0, usage.inputTokens);
+  const cacheRead = Math.min(totalInputTokens, Math.max(0, usage.cacheReadInputTokens));
+  const cacheWrite = Math.min(totalInputTokens - cacheRead, Math.max(0, usage.cacheCreationInputTokens));
+  const output = Math.max(0, usage.outputTokens);
+  const piUsage: Usage = {
+    input: totalInputTokens - cacheRead - cacheWrite,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: totalInputTokens + output,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  return calculateCost(pricingModel, piUsage).total;
+}
+
+const builtinClaudeModelLookup = getBuiltinModel as unknown as (
+  provider: string,
+  modelId: string,
+) => Model<string> | undefined;
+
+// Claude Code aliases ("haiku", "sonnet", ...) and third-party providers are not
+// in Pi's model catalog, so the lookup just misses for those.
+function resolveClaudeCostUsd(
+  model: string | undefined,
+  usage: ClaudeTokenUsage,
+  modelRegistry: ModelRegistry | undefined,
+): number | undefined {
+  const { provider, modelId } = parseModelReference(model);
+  if (!modelId) {
+    return undefined;
+  }
+  const providers = provider && provider !== "anthropic" ? [provider, "anthropic"] : ["anthropic"];
+  if (modelRegistry) {
+    for (const candidate of providers) {
+      const pricingModel = modelRegistry.find(candidate, modelId);
+      if (pricingModel) {
+        return calculateClaudeCostUsd(pricingModel, usage);
+      }
+    }
+  }
+  for (const candidate of providers) {
+    const pricingModel = builtinClaudeModelLookup(candidate, modelId);
+    if (pricingModel) {
+      return calculateClaudeCostUsd(pricingModel, usage);
+    }
+  }
+  return undefined;
 }
 
 export function buildClaudeArgs({
@@ -387,8 +450,13 @@ export async function spawnClaudeSubagent(params: {
       latestRawUsage = usage;
       tokensKnown = true;
     }
-    if (costUsd !== undefined) {
-      latestCostUsd = costUsd;
+    const resolvedCostUsd = costUsd !== undefined
+      ? costUsd
+      : usage
+        ? resolveClaudeCostUsd(params.profile.model, usage, params.ctx.modelRegistry)
+        : undefined;
+    if (resolvedCostUsd !== undefined) {
+      latestCostUsd = resolvedCostUsd;
     }
     latestUsage = claudeUsageToSubagentUsage(latestRawUsage, latestCostUsd);
     const hasBillableTokens = latestUsage.totalTokens > 0;
@@ -396,7 +464,7 @@ export async function spawnClaudeSubagent(params: {
       tokensKnown,
       costKnown: latestCostUsd !== undefined && (!hasBillableTokens || latestCostUsd > 0),
       costBreakdownKnown: false,
-      costEstimated: false,
+      costEstimated: costUsd === undefined && resolvedCostUsd !== undefined,
     };
     emitter.setUsage(latestUsage, latestTelemetry);
     params.onUsage(latestUsage, latestTelemetry);

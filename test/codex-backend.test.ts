@@ -48,7 +48,7 @@ describe("pi-subagent codex backend", () => {
     originalPathEnv = state.originalPathEnv;
     registrations = state.registrations;
   });
-  it("builds codex args and estimates listed-model costs", () => {
+  it("builds codex args and estimates costs from the Pi model catalog", () => {
     const args = buildCodexArgs({
       prompt: "Do the task.",
       thinkingLevel: "xhigh",
@@ -101,14 +101,14 @@ describe("pi-subagent codex backend", () => {
     ]);
 
     const usage = { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 50, reasoningOutputTokens: 0 };
-    expect(estimateCodexCostUsd("openai/gpt-5.4-mini", usage)).toBeCloseTo(0.000305);
+    expect(estimateCodexCostUsd("openai/gpt-5.4-mini", usage)).toBeCloseTo(0.00084);
     expect(estimateCodexCostUsd("gpt-5.6-sol", usage)).toBeCloseTo(0.0056);
-    expect(estimateCodexCostUsd("openai-codex/gpt-5.6-terra", usage)).toBeCloseTo(0.0028);
-    expect(estimateCodexCostUsd("gpt-5.6-luna", usage)).toBeCloseTo(0.00112);
+    expect(estimateCodexCostUsd("openai-codex/gpt-5.6-terra", usage)).toBeCloseTo(0.00224);
+    expect(estimateCodexCostUsd("gpt-5.6-luna", usage)).toBeCloseTo(0.000224);
     expect(estimateCodexCostUsd("gpt-5.6-sol", {
       ...usage,
       inputTokens: 272_001,
-    })).toBeCloseTo(1.3606);
+    })).toBeCloseTo(2.72046);
     expect(estimateCodexCostUsd("unknown-model", usage)).toBeUndefined();
     expect(codexUsageToSubagentUsage("unknown-model", usage)).toMatchObject({
       input: 800,

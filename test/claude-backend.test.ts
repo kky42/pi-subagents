@@ -390,6 +390,106 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     ]);
   });
 
+  it("falls back to Pi model pricing when Claude Code reports no cost", async () => {
+    const binDir = join(tempDir, "bin-claude-catalog-cost");
+    mkdirSync(binDir, { recursive: true });
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 100, cache_read_input_tokens: 10, cache_creation_input_tokens: 5, output_tokens: 20 } } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', usage: { input_tokens: 160, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 30 } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+    const updates: Array<{ usage: ReturnType<typeof claudeUsageToSubagentUsage>; telemetry: { tokensKnown: boolean; costKnown: boolean; costEstimated?: boolean } }> = [];
+
+    const result = await spawnClaudeSubagent({
+      label: "Claude catalog cost",
+      prompt: "Report usage without a cost.",
+      profile: {
+        name: "claude-catalog-cost",
+        description: "Claude profile without upstream cost reporting.",
+        backend: "claude",
+        model: "claude-sonnet-4-5",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: (usage, telemetry) => updates.push({ usage, telemetry }),
+    });
+
+    expect(result.details.status).toBe("done");
+    expect(updates.map(({ usage }) => usage.totalTokens)).toEqual([135, 215, 215]);
+    // claude-sonnet-4-5: 3/0.3/3.75/15 per million; uncached 135 input, 20 cache
+    // read, 5 cache write, 30 output = (135*3 + 20*0.3 + 5*3.75 + 30*15) / 1e6.
+    expect(updates.at(-1)?.usage.cost.total).toBeCloseTo(0.00087975, 9);
+    expect(updates.map(({ telemetry }) => telemetry)).toEqual([
+      expect.objectContaining({ tokensKnown: true, costKnown: true, costEstimated: true }),
+      expect.objectContaining({ tokensKnown: true, costKnown: true, costEstimated: true }),
+      expect.objectContaining({ tokensKnown: true, costKnown: true, costEstimated: true }),
+    ]);
+  });
+
+  it("keeps upstream cost for alias models and leaves catalog pricing unknown", async () => {
+    const binDir = join(tempDir, "bin-claude-alias-cost");
+    mkdirSync(binDir, { recursive: true });
+    const fakeClaudePath = join(binDir, "claude");
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', total_cost_usd: 0.42, usage: { input_tokens: 160, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 30 } }));
+`);
+    chmodSync(fakeClaudePath, 0o755);
+    process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
+    const updates: Array<{ usage: ReturnType<typeof claudeUsageToSubagentUsage>; telemetry: { tokensKnown: boolean; costKnown: boolean; costEstimated?: boolean } }> = [];
+
+    const withCost = await spawnClaudeSubagent({
+      label: "Claude alias cost",
+      prompt: "Report usage with a cost.",
+      profile: {
+        name: "claude-alias-cost",
+        description: "Claude profile using an alias model.",
+        backend: "claude",
+        model: "haiku",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: (usage, telemetry) => updates.push({ usage, telemetry }),
+    });
+    expect(withCost.details.status).toBe("done");
+    expect(withCost.usage).toMatchObject({ cost: { total: 0.42 } });
+    expect(withCost.details.telemetry).toMatchObject({ costKnown: true, costEstimated: false });
+    expect(updates.at(-1)?.usage.cost.total).toBe(0.42);
+
+    writeFileSync(fakeClaudePath, `#!/usr/bin/env node
+for await (const _chunk of process.stdin) {}
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', usage: { input_tokens: 160, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 30 } }));
+`);
+    const withoutCost = await spawnClaudeSubagent({
+      label: "Claude alias no cost",
+      prompt: "Report usage without a cost.",
+      profile: {
+        name: "claude-alias-no-cost",
+        description: "Claude profile using an alias model without upstream cost.",
+        backend: "claude",
+        model: "haiku",
+      },
+      thinkingLevel: "medium",
+      ctx: { cwd } as ExtensionContext,
+      signal: undefined,
+      progressEnabled: false,
+      onProgress: undefined,
+      onUsage: () => {},
+    });
+    expect(withoutCost.details.status).toBe("done");
+    expect(withoutCost.usage).toMatchObject({ cost: { total: 0 } });
+    expect(withoutCost.details.telemetry).toMatchObject({ tokensKnown: true, costKnown: false, costEstimated: false });
+  });
+
   it("kills a claude child if abort lands after process spawn", async () => {
     const binDir = join(tempDir, "bin-claude-abort-race");
     const markerPath = join(tempDir, "claude-child-completed");
