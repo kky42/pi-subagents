@@ -152,19 +152,22 @@ function workflowSpinnerFrames(pane) {
 }
 
 function teardown(failed) {
-  try {
-    tmux(["kill-session", "-t", sessionName]);
-  } catch {
-    // Session already gone.
-  }
   const retain = failed || options.keep;
+  if (retain && options.keep) {
+    log(`tmux session kept as ${sessionName} (run 'tmux attach -t ${sessionName}')`);
+  } else {
+    try {
+      tmux(["kill-session", "-t", sessionName]);
+    } catch {
+      // Session already gone.
+    }
+  }
   if (retain) {
     mkdirSync(artifactDir, { recursive: true });
     writeFileSync(path.join(artifactDir, "captures.txt"), captures.join("\n--- frame ---\n"));
     writeFileSync(path.join(artifactDir, "project-dir.txt"), projectDir);
     log(`artifacts retained: ${artifactDir}`);
     if (options.keep) {
-      log(`tmux session kept as ${sessionName} (run 'tmux attach -t ${sessionName}')`);
       return;
     }
   }
