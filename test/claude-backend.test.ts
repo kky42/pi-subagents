@@ -396,8 +396,9 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     const fakeClaudePath = join(binDir, "claude");
     writeFileSync(fakeClaudePath, `#!/usr/bin/env node
 for await (const _chunk of process.stdin) {}
-console.log(JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 100, cache_read_input_tokens: 10, cache_creation_input_tokens: 5, output_tokens: 20 } } }));
-console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', usage: { input_tokens: 160, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 30 } }));
+console.log(JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 100, cache_read_input_tokens: 10000, cache_creation_input_tokens: 5, output_tokens: 20 } } }));
+console.log(JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 41, cache_read_input_tokens: 401, cache_creation_input_tokens: 0, output_tokens: 10 } } }));
+console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done', usage: { input_tokens: 141, cache_read_input_tokens: 10401, cache_creation_input_tokens: 5, output_tokens: 30 } }));
 `);
     chmodSync(fakeClaudePath, 0o755);
     process.env.PATH = `${binDir}:${originalPathEnv ?? ""}`;
@@ -421,11 +422,11 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     });
 
     expect(result.details.status).toBe("done");
-    expect(updates.map(({ usage }) => usage.totalTokens)).toEqual([135, 215, 215]);
-    // claude-sonnet-4-5: 3/0.3/3.75/15 per million; uncached 135 input, 20 cache
-    // read, 5 cache write, 30 output = (135*3 + 20*0.3 + 5*3.75 + 30*15) / 1e6.
-    expect(updates.at(-1)?.usage.cost.total).toBeCloseTo(0.00087975, 9);
+    expect(updates.map(({ usage }) => usage.totalTokens)).toEqual([10125, 10577, 10577, 10577]);
+    // claude-sonnet-4-5 (3/0.3/3.75/15 per million): 141 input + 10401 cache read + 5 cache write + 30 output.
+    expect(updates.at(-1)?.usage.cost.total).toBeCloseTo(0.00401205, 9);
     expect(updates.map(({ telemetry }) => telemetry)).toEqual([
+      expect.objectContaining({ tokensKnown: true, costKnown: true, costEstimated: true }),
       expect.objectContaining({ tokensKnown: true, costKnown: true, costEstimated: true }),
       expect.objectContaining({ tokensKnown: true, costKnown: true, costEstimated: true }),
       expect.objectContaining({ tokensKnown: true, costKnown: true, costEstimated: true }),

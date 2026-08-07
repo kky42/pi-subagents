@@ -44,17 +44,18 @@ function parseModelReference(model: string | undefined): { provider?: string; mo
     : { provider: normalized.slice(0, separator), modelId: normalized.slice(separator + 1) };
 }
 
+// Anthropic usage buckets are disjoint; each is priced at its own rate.
 function calculateClaudeCostUsd(pricingModel: Model<string>, usage: ClaudeTokenUsage): number {
-  const totalInputTokens = Math.max(0, usage.inputTokens);
-  const cacheRead = Math.min(totalInputTokens, Math.max(0, usage.cacheReadInputTokens));
-  const cacheWrite = Math.min(totalInputTokens - cacheRead, Math.max(0, usage.cacheCreationInputTokens));
+  const input = Math.max(0, usage.inputTokens);
+  const cacheRead = Math.max(0, usage.cacheReadInputTokens);
+  const cacheWrite = Math.max(0, usage.cacheCreationInputTokens);
   const output = Math.max(0, usage.outputTokens);
   const piUsage: Usage = {
-    input: totalInputTokens - cacheRead - cacheWrite,
+    input,
     output,
     cacheRead,
     cacheWrite,
-    totalTokens: totalInputTokens + output,
+    totalTokens: input + cacheRead + cacheWrite + output,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   return calculateCost(pricingModel, piUsage).total;
