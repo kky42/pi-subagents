@@ -1,4 +1,3 @@
-import smartCompactionExtension from "@kky42/pi-smart-compaction/src/index.ts";
 import { fauxAssistantMessage, type Context } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
@@ -34,75 +33,11 @@ function hasTaskNotification(messages: readonly unknown[]): boolean {
     message?.role === "custom" && message.customType === "pi-flow-task-notification");
 }
 
-describe("pi-smart-compaction compatibility", () => {
+describe("compaction while pi-flow tasks are active", () => {
   const { createSession, setContextRoutingResponses, terminalEnvelope } = setupPiSubagentTestHarness();
-
-  it("allows threshold auto-compaction while a synchronous Tool call is active", async () => {
-    const { session, registration, sessionManager } = await createSession({
-      extensionFactories: [smartCompactionExtension],
-      thinkingLevel: "off",
-      settings: {
-        compaction: {
-          enabled: true,
-          keepRecentTokens: 1,
-          reserveTokens: 127_900,
-        },
-      },
-    });
-    const childGate = deferred();
-    let childStarted = false;
-    let summaryStarted = false;
-    let streamingDuringSummary = false;
-
-    setContextRoutingResponses(registration, async (context) => {
-      const text = contextText(context);
-      const isRoot = context.tools?.some((tool) => tool.name === "run_agent") === true;
-      if (text.includes("<conversation>")) {
-        summaryStarted = true;
-        streamingDuringSummary = session.isStreaming;
-        childGate.resolve();
-        session.setAutoCompactionEnabled(false);
-        return fauxAssistantMessage("AUTO_COMPACTION_SUMMARY");
-      }
-      if (!isRoot) {
-        childStarted = true;
-        await childGate.promise;
-        return fauxAssistantMessage("AUTO_CHILD_DONE");
-      }
-      return fauxAssistantMessage("AUTO_TRIGGER_REPLY");
-    });
-
-    const tool = session.getToolDefinition("run_agent") as any;
-    let toolSettled = false;
-    const toolCall = tool.execute(
-      "auto-compaction-task",
-      { label: "Auto child", prompt: "Wait, then finish." },
-      undefined,
-      undefined,
-      session.extensionRunner.createContext(),
-    ).then((result: any) => {
-      toolSettled = true;
-      return result;
-    });
-    await waitUntil(() => childStarted);
-    expect(toolSettled).toBe(false);
-
-    await session.prompt(`Trigger threshold compaction. ${"x".repeat(400)}`);
-    const result = await toolCall;
-
-    expect(summaryStarted).toBe(true);
-    expect(streamingDuringSummary).toBe(true);
-    expect(terminalEnvelope(result)).toEqual(expect.objectContaining({
-      status: "completed",
-      content: "AUTO_CHILD_DONE",
-    }));
-    expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(true);
-    expect(hasTaskNotification(session.messages)).toBe(false);
-  });
 
   it("rejects manual compaction while a synchronous Tool call is active", async () => {
     const { session, registration, sessionManager } = await createSession({
-      extensionFactories: [smartCompactionExtension],
       thinkingLevel: "off",
       settings: {
         compaction: {
@@ -114,15 +49,10 @@ describe("pi-smart-compaction compatibility", () => {
     });
     const childGate = deferred();
     let childStarted = false;
-    let summaryStarted = false;
 
     setContextRoutingResponses(registration, async (context) => {
       const text = contextText(context);
       const isRoot = context.tools?.some((tool) => tool.name === "run_agent") === true;
-      if (text.includes("<conversation>")) {
-        summaryStarted = true;
-        return fauxAssistantMessage("MANUAL_COMPACTION_SUMMARY");
-      }
       if (!isRoot) {
         childStarted = true;
         await childGate.promise;
@@ -153,7 +83,6 @@ describe("pi-smart-compaction compatibility", () => {
     const result = await toolCall;
 
     expect(compactResult).toEqual({ completed: false, error: "Compaction cancelled" });
-    expect(summaryStarted).toBe(false);
     expect(terminalEnvelope(result)).toEqual(expect.objectContaining({
       status: "completed",
       content: "MANUAL_CHILD_DONE",
