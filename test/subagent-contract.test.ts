@@ -168,7 +168,7 @@ describe("pi-subagent tool contract", () => {
     expect(prompt.endsWith(expectedFlowPrompt)).toBe(true);
   });
 
-  it("lists every workflow while bounding long descriptions", async () => {
+  it("lists every workflow without dropping descriptions", async () => {
     const workflowsDir = join(agentDir, "workflows");
     const longDescription = `Complete description ${"x".repeat(220)}`;
     mkdirSync(workflowsDir, { recursive: true });
@@ -187,10 +187,7 @@ describe("pi-subagent tool contract", () => {
       const name = `workflow_${String(index).padStart(2, "0")}`;
       expect(occurrenceCount(prompt, `- ${name}:`)).toBe(1);
     }
-    const longLine = prompt.split("\n").find((line) => line.startsWith("- workflow_25:"));
-    expect(longLine).toBeDefined();
-    expect(longLine).not.toContain(longDescription);
-    expect(longLine?.length).toBeLessThanOrEqual(260);
+    expect(prompt).toContain(longDescription);
   });
 
   it("registers run_agent when loaded through additionalExtensionPaths", async () => {
