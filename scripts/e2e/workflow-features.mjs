@@ -31,7 +31,7 @@ loadDotEnv(path.join(repoRoot, ".env"));
 
 function parseArgs(argv) {
   const options = {
-    model: "deepseek/deepseek-v4-flash",
+    model: "opencode-go/deepseek-v4-flash",
     thinking: "high",
     deepseekApiKeyEnv: "DEEPSEEK_API_KEY",
     sessionRoot: path.join(tmpdir(), `pi-wf-features-${Date.now()}`),
@@ -212,8 +212,8 @@ return { kind: c && c.kind, follow: String(follow).trim() };`;
 
 // Discoverability: a natural-language task that REQUIRES branching on a typed
 // per-file boolean, with NO mention of schema/structured_output. If the model
-// reaches for run_agent({ schema }) on its own, the per-file scan subagents return
-// objects in the journal; if it hand-parses text, they return strings.
+// reaches for run_agent({ schema }) on its own, the per-file result previews are
+// JSON objects; hand-parsed prose normally remains plain text.
 const DISCOVERABILITY_PROMPT = [
   "Use the run_workflow tool to orchestrate this. For each source file in src/ (src/cli.js, src/report.js, src/store.js),",
   "determine whether the file imports the \"kleur\" package. Then, ONLY for the files that DO import kleur, fan out a",
@@ -379,7 +379,6 @@ function analyzeSession(sessionDir) {
       if (
         envelope?.task_type === "workflow"
         && (envelope.status === "completed" || envelope.status === "failed")
-        && typeof envelope.task_id === "string"
       ) {
         const call = workflowCallsById.get(m.toolCallId);
         terminalToolResults.push({
@@ -410,30 +409,9 @@ function analyzeSession(sessionDir) {
   };
 }
 
-function workflowDirForSessionFile(sessionFile) {
+function workflowStateDirForSessionFile(sessionFile) {
   if (!sessionFile) return undefined;
   return path.join(path.dirname(sessionFile), `${path.basename(sessionFile, path.extname(sessionFile))}.workflows`);
-}
-
-function journalPathFor(sessionFile, taskId) {
-  const dir = workflowDirForSessionFile(sessionFile);
-  return dir && taskId ? path.join(dir, `task-${taskId}.jsonl`) : undefined;
-}
-
-function readJournal(sessionFile, taskId) {
-  const journalPath = journalPathFor(sessionFile, taskId);
-  if (!journalPath || !existsSync(journalPath)) return undefined;
-  const subagentResults = [];
-  let taskComplete;
-  let taskError;
-  let taskStart;
-  for (const entry of readJsonlRecords(journalPath)) {
-    if (entry.type === "task_start") taskStart = entry;
-    else if (entry.type === "subagent_result") subagentResults[entry.index - 1] = entry;
-    else if (entry.type === "task_complete") taskComplete = entry;
-    else if (entry.type === "task_error") taskError = entry;
-  }
-  return { path: journalPath, taskStart, subagentResults: subagentResults.filter(Boolean), taskComplete, taskError };
 }
 
 function resultFromTerminalEnvelope(envelope) {
@@ -455,18 +433,18 @@ function observeWorkflow(s, session) {
   }
   s.check(
     "terminal envelope is compact",
-    JSON.stringify(Object.keys(terminal).sort()) === JSON.stringify(["content", "name", "status", "task_id", "task_type"]),
+    JSON.stringify(Object.keys(terminal).sort()) === JSON.stringify(["content", "name", "status", "task_type"]),
     JSON.stringify(terminal),
   );
   s.check(
-    "terminal Tool result has workflow task_id",
-    terminal.task_type === "workflow" && typeof terminal.task_id === "string",
+    "terminal Tool result identifies the workflow",
+    terminal.task_type === "workflow" && typeof terminal.name === "string",
     JSON.stringify(terminal),
   );
   s.check(
     "terminal envelope and rich details correlate",
-    details?.taskId === terminal.task_id && details?.name === terminal.name,
-    JSON.stringify({ envelope: { taskId: terminal.task_id, name: terminal.name }, details: { taskId: details?.taskId, name: details?.name } }),
+    details?.name === terminal.name,
+    JSON.stringify({ envelope: { name: terminal.name }, details: { name: details?.name } }),
   );
   const expectedDetailsStatuses = terminal.status === "completed" ? ["completed"] : ["error", "aborted"];
   s.check(
@@ -479,6 +457,19 @@ function observeWorkflow(s, session) {
     Array.isArray(details?.subagents) && Array.isArray(details?.phases) && Array.isArray(details?.logs),
     JSON.stringify(details),
   );
+  s.check(
+    "rich details omit removed replay metadata",
+    !Object.hasOwn(details ?? {}, "taskId")
+      && !Object.hasOwn(details ?? {}, "cachedSubagentCount")
+      && (details?.subagents ?? []).every((subagent) => !Object.hasOwn(subagent, "cached")),
+    JSON.stringify(details),
+  );
+  const workflowStateDir = workflowStateDirForSessionFile(session.sessionFile);
+  s.check(
+    "no workflow execution state was persisted",
+    workflowStateDir === undefined || !existsSync(workflowStateDir),
+    workflowStateDir ?? "no session file",
+  );
   s.check("no custom task notification was emitted", session.customTaskNotificationCount === 0, `count=${session.customTaskNotificationCount}`);
   s.check(
     "persisted Tool call-to-result record interval was recorded",
@@ -486,48 +477,25 @@ function observeWorkflow(s, session) {
     `toolRecordIntervalMs=${toolResult.toolRecordIntervalMs}`,
   );
 
-  const journal = readJournal(session.sessionFile, terminal.task_id);
-  const replayFromTaskId = typeof toolResult.call?.arguments?.resume_from_task_id === "string"
-    ? toolResult.call.arguments.resume_from_task_id
-    : undefined;
-  const sessionKeys = [...new Set([
-    ...(details?.subagents ?? []).map((subagent) => subagent.sessionKey),
-    ...(journal?.subagentResults ?? []).map((subagent) => subagent.sessionKey),
-  ].filter((value) => typeof value === "string"))];
+  const sessionKeys = [...new Set(
+    (details?.subagents ?? []).map((subagent) => subagent.sessionKey).filter((value) => typeof value === "string"),
+  )];
   s.record({
     toolCallId: toolResult.toolCallId,
     terminalToolResult: terminal,
     details: {
-      taskId: details?.taskId,
       status: details?.status,
       subagentCount: details?.subagentCount,
-      cachedSubagentCount: details?.cachedSubagentCount,
       sessionKeys,
     },
     toolCallRecordAtMs: toolResult.toolCallRecordAtMs ?? null,
     toolResultRecordAtMs: toolResult.toolResultRecordAtMs ?? null,
     toolRecordIntervalMs: toolResult.toolRecordIntervalMs ?? null,
     usage: toolResult.usage ?? null,
-    journal: journal
-      ? {
-          path: journal.path,
-          taskId: journal.taskStart?.taskId,
-          source: journal.taskStart?.source,
-          status: journal.taskComplete ? "completed" : journal.taskError ? "failed" : "running",
-          subagentResultCount: journal.subagentResults.length,
-          cachedSubagentCount: journal.subagentResults.filter((result) => result.cached === true).length,
-          resumeFromTaskId: journal.taskStart?.resumeFromTaskId,
-        }
-      : null,
-    replay: {
-      requestedFromTaskId: replayFromTaskId ?? null,
-      journalFromTaskId: journal?.taskStart?.resumeFromTaskId ?? null,
-    },
   });
   return {
     terminal,
     details,
-    journal,
     result: resultFromTerminalEnvelope(terminal),
     toolRecordIntervalMs: toolResult.toolRecordIntervalMs,
     usage: toolResult.usage,
@@ -558,17 +526,6 @@ function savedNamePrompt(name) {
   ].join("\n");
 }
 
-function resumePrompt(taskId, args) {
-  return [
-    "Replay the feature_probe workflow from its persisted task journal and reuse its cached results.",
-    "Call the run_workflow tool with these exact parameters and no script_path:",
-    '- name: "feature_probe"',
-    `- resume_from_task_id: "${taskId}"`,
-    `- args: ${JSON.stringify(args)}`,
-    "Report the terminal Tool result returned by run_workflow.",
-  ].join("\n");
-}
-
 function makeScenario(name) {
   const checks = [];
   const observations = [];
@@ -593,7 +550,7 @@ function isNonEmptyString(v) {
 }
 
 async function scenarioKitchenSink(ctx) {
-  const s = makeScenario("kitchen-sink (parallel + pipeline + schema + plain-text + globals + persistence)");
+  const s = makeScenario("kitchen-sink (parallel + pipeline + schema + plain-text + globals)");
   const sessionDir = path.join(ctx.sessionRoot, "kitchen-sink");
   await runPi({
     ...ctx.run,
@@ -610,17 +567,12 @@ async function scenarioKitchenSink(ctx) {
   if (!wf) return { scenario: s };
   s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
   s.check("terminal name === feature_probe (script ran verbatim)", wf.terminal?.name === "feature_probe", `name=${wf.terminal?.name}`);
-  s.check("task journal exists", Boolean(wf.journal), wf.journal?.path ?? "missing");
-  s.check("journal task_start correlates with terminal task", wf.journal?.taskStart?.taskId === wf.terminal.task_id, JSON.stringify(wf.journal?.taskStart));
-  s.check("persisted script exists", isNonEmptyString(wf.journal?.taskStart?.scriptPath) && existsSync(wf.journal.taskStart.scriptPath), wf.journal?.taskStart?.scriptPath ?? "");
-  s.check("journal records task_complete", Boolean(wf.journal?.taskComplete) && !wf.journal?.taskError, JSON.stringify(wf.journal?.taskError));
-  s.check("journal records 4 subagent results", wf.journal?.subagentResults.length === 4, `subagentResults=${wf.journal?.subagentResults.length}`);
+  const subagents = wf.details?.subagents ?? [];
+  s.check("rich details contain all 4 subagents", subagents.length === 4, `subagents=${subagents.length}`);
 
-  const collect = (wf.journal?.subagentResults ?? []).filter((r) => r.phase === "collect");
-  const structuredOk = collect.some(
-    (r) => r.result && typeof r.result === "object" && typeof r.result.exportCount === "number",
-  );
-  s.check("structured output validated + captured (numeric exportCount)", structuredOk, JSON.stringify(collect.map((r) => r.result)));
+  const collect = subagents.filter((subagent) => subagent.phase === "collect").map((subagent) => parseEnvelope(subagent.result));
+  const structuredOk = collect.some((result) => result && typeof result.exportCount === "number");
+  s.check("structured output validated + captured (numeric exportCount)", structuredOk, JSON.stringify(collect));
   const result = wf.result;
   const items = Array.isArray(result?.items) ? result.items : [];
   s.check(
@@ -631,7 +583,6 @@ async function scenarioKitchenSink(ctx) {
   s.check("pipeline produced items with plain-text sentences", items.length >= 1 && items.every((it) => isNonEmptyString(it.sentence)), JSON.stringify(items));
   s.check("return value synthesized (count matches items)", result?.count === items.length && items.length >= 1, JSON.stringify({ count: result?.count, items: items.length }));
 
-  ctx.kitchen = { sessionDir, sessionId: `${ctx.idBase}-kitchen`, taskId: wf.terminal.task_id, result };
   return { scenario: s };
 }
 
@@ -657,8 +608,7 @@ async function scenarioConcurrency(ctx) {
   const wf = observeWorkflow(s, a);
   if (!wf) return { scenario: s };
   s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
-  s.check("journal records all 4 queued subagents", wf.journal?.subagentResults.length === 4, `subagentResults=${wf.journal?.subagentResults.length}`);
-  s.check("journal records task_complete", Boolean(wf.journal?.taskComplete), JSON.stringify(wf.journal?.taskError));
+  s.check("rich details contain all 4 subagents", wf.details?.subagents?.length === 4, `subagents=${wf.details?.subagents?.length}`);
   s.check("terminal result.count === 4", wf.result?.count === 4, JSON.stringify(wf.result));
   return { scenario: s };
 }
@@ -687,7 +637,7 @@ async function scenarioDeterminism(ctx) {
   }
   s.check("status === failed", wf.terminal?.status === "failed", `status=${wf.terminal?.status}`);
   s.check("failure content names determinism", /deterministic|Date\.now|Math\.random/i.test(wf.terminal?.content ?? ""), wf.terminal?.content ?? "");
-  s.check("no task journal was started before parse rejection", wf.journal === undefined, wf.journal?.path ?? "unexpected journal");
+  s.check("no subagents started before parse rejection", wf.details?.subagentCount === 0, `subagentCount=${wf.details?.subagentCount}`);
   return { scenario: s };
 }
 
@@ -718,46 +668,14 @@ async function scenarioSavedName(ctx) {
     const wf = observeWorkflow(s, a);
     if (!wf) return { scenario: s };
     s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
-    s.check("journal source === saved (loaded from registry)", wf.journal?.taskStart?.source === "saved", `source=${wf.journal?.taskStart?.source}`);
     s.check("name === zz_e2e_saved_probe", wf.terminal?.name === SAVED_WORKFLOW_NAME, `name=${wf.terminal?.name}`);
-    s.check("journal records one subagent result", wf.journal?.subagentResults.length === 1, `subagentResults=${wf.journal?.subagentResults.length}`);
+    s.check("rich details contain one subagent", wf.details?.subagents?.length === 1, `subagents=${wf.details?.subagents?.length}`);
     s.check("result.reply echoes saved-workflow-ok", isNonEmptyString(wf.result?.reply) && wf.result.reply.includes("saved-workflow-ok"), JSON.stringify(wf.result));
     return { scenario: s };
   } finally {
     rmSync(savedFile, { force: true });
     if (!dirPreexisted) rmSync(workflowsDir, { recursive: true, force: true });
   }
-}
-
-async function scenarioResume(ctx) {
-  const s = makeScenario("resume-by-replay via { name, resume_from_task_id }");
-  if (!ctx.kitchen) {
-    s.check("kitchen-sink task available to resume", false, "kitchen-sink scenario did not persist a task");
-    return { scenario: s };
-  }
-  const sessionDir = ctx.kitchen.sessionDir;
-  await runPi({
-    ...ctx.run,
-    sessionDir,
-    sessionId: ctx.kitchen.sessionId,
-    cwd: ctx.fixture,
-    prompt: resumePrompt(ctx.kitchen.taskId, KITCHEN_SINK_ARGS),
-    extension: extensionPath,
-  });
-  const a = analyzeSession(sessionDir);
-  s.check("model invoked the run_workflow tool for resume", (a.toolCalls.run_workflow ?? 0) >= 1, JSON.stringify(a.toolCalls));
-  const wf = observeWorkflow(s, a);
-  if (!wf) return { scenario: s };
-  s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
-  s.check("journal links resumeFromTaskId", wf.journal?.taskStart?.resumeFromTaskId === ctx.kitchen.taskId, JSON.stringify(wf.journal?.taskStart));
-  const cachedAll = (wf.journal?.subagentResults ?? []).length === 4 && wf.journal.subagentResults.every((r) => r.cached === true);
-  s.check("journal marks every subagent result cached", cachedAll, JSON.stringify((wf.journal?.subagentResults ?? []).map((r) => r.cached)));
-  s.check(
-    "replayed terminal result equals original run",
-    JSON.stringify(wf.result) === JSON.stringify(ctx.kitchen.result),
-    `replayed=${JSON.stringify(wf.result)?.slice(0, 160)}`,
-  );
-  return { scenario: s };
 }
 
 // Conditional branch: a structured boolean per file gates a deep-dive subagent.
@@ -780,7 +698,7 @@ async function scenarioBranch(ctx) {
   const wf = observeWorkflow(s, a);
   if (!wf) return { scenario: s };
   s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
-  const labels = (wf.journal?.subagentResults ?? []).map((r) => r.label);
+  const labels = (wf.details?.subagents ?? []).map((subagent) => subagent.label);
   const result = wf.result;
   const flags = Array.isArray(result?.flags) ? result.flags : [];
   s.check("per-file subagent results are schema objects with boolean importsKleur", flags.length === 2 && flags.every((f) => f && typeof f.importsKleur === "boolean"), JSON.stringify(flags));
@@ -792,9 +710,9 @@ async function scenarioBranch(ctx) {
     JSON.stringify({ deepDived, expectedDeep }),
   );
   s.check(
-    "journal count === 2 scans + 1-per-true-flag deep-dive",
-    wf.journal?.subagentResults.length === 2 + expectedDeep.length,
-    `subagentResults=${wf.journal?.subagentResults.length} expected=${2 + expectedDeep.length}`,
+    "subagent count === 2 scans + 1-per-true-flag deep-dive",
+    wf.details?.subagents?.length === 2 + expectedDeep.length,
+    `subagents=${wf.details?.subagents?.length} expected=${2 + expectedDeep.length}`,
   );
   s.check(
     "deep-dive labels exist only for flagged files",
@@ -832,9 +750,9 @@ async function scenarioGate(ctx) {
       JSON.stringify(resA),
     );
     s.check(
-      "[survivors] journal count === 3 scans + 1 per survivor",
-      wfA.journal?.subagentResults.length === 3 + survivors.length,
-      `subagentResults=${wfA.journal?.subagentResults.length} survivors=${survivors.length}`,
+      "[survivors] subagent count === 3 scans + 1 per survivor",
+      wfA.details?.subagents?.length === 3 + survivors.length,
+      `subagents=${wfA.details?.subagents?.length} survivors=${survivors.length}`,
     );
     s.soft("[survivors] survivor set includes report.js", survivors.some((f) => String(f).includes("report.js")), JSON.stringify(survivors));
   }
@@ -854,7 +772,7 @@ async function scenarioGate(ctx) {
     s.check("[empty] status === completed", wfB.terminal?.status === "completed", `status=${wfB.terminal?.status}`);
     const resB = wfB.result;
     if (resB?.earlyExit === true) {
-      s.check("[empty] early-exit path: 0 summarized, only the scan subagent ran", resB.summarized === 0 && wfB.journal?.subagentResults.length === 1, JSON.stringify({ res: resB, subagentResults: wfB.journal?.subagentResults.length }));
+      s.check("[empty] early-exit path: 0 summarized, only the scan subagent ran", resB.summarized === 0 && wfB.details?.subagents?.length === 1, JSON.stringify({ res: resB, subagents: wfB.details?.subagents?.length }));
     } else {
       s.soft("[empty] expected zero survivors but model flagged store.js as importing kleur", false, JSON.stringify(resB));
     }
@@ -878,7 +796,7 @@ async function scenarioRoute(ctx) {
   const wf = observeWorkflow(s, a);
   if (!wf) return { scenario: s };
   s.check("status === completed", wf.terminal?.status === "completed", `status=${wf.terminal?.status}`);
-  const labels = (wf.journal?.subagentResults ?? []).map((r) => r.label);
+  const labels = (wf.details?.subagents ?? []).map((subagent) => subagent.label);
   const result = wf.result;
   s.check("classified kind is in the enum", ["entry", "lib", "test"].includes(result?.kind), `kind=${result?.kind}`);
   const ranRoutes = labels.filter((l) => l.startsWith("route:"));
@@ -887,14 +805,13 @@ async function scenarioRoute(ctx) {
     ranRoutes.length === 1 && ranRoutes[0] === `route:${result?.kind}`,
     JSON.stringify({ kind: result?.kind, ranRoutes }),
   );
-  s.check("journal records classify + one follow-up", wf.journal?.subagentResults.length === 2, `subagentResults=${wf.journal?.subagentResults.length}`);
+  s.check("rich details contain classify + one follow-up", wf.details?.subagents?.length === 2, `subagents=${wf.details?.subagents?.length}`);
   s.soft("classified src/cli.js as entry", result?.kind === "entry", `kind=${result?.kind}`);
   return { scenario: s };
 }
 
-// Discoverability: natural language, NO schema hint. Detects whether the model
-// reached for run_agent({ schema }) by checking if per-file decisions came back as
-// structured objects (vs hand-parsed text) in the journal. Soft by design.
+// Discoverability: natural language, NO schema hint. Detects whether per-file
+// results look like structured objects in the bounded workflow details. Soft by design.
 async function scenarioDiscoverability(ctx) {
   const s = makeScenario("schema discoverability from natural language (no hint)");
   const sessionDir = path.join(ctx.sessionRoot, "discoverability");
@@ -913,12 +830,15 @@ async function scenarioDiscoverability(ctx) {
     s.soft("workflow completed", false, `status=${wf?.terminal?.status ?? "none"} content=${wf?.terminal?.content ?? ""}`);
     return { scenario: s };
   }
-  const subagentResults = wf.journal?.subagentResults ?? [];
-  const usedSchema = subagentResults.some((r) => r.result && typeof r.result === "object" && !Array.isArray(r.result));
+  const subagents = wf.details?.subagents ?? [];
+  const usedSchema = subagents.some((subagent) => {
+    const result = parseEnvelope(subagent.result);
+    return result && typeof result === "object" && !Array.isArray(result);
+  });
   s.soft(
-    "model reached for run_agent({ schema }) on its own (structured result objects in journal)",
+    "model reached for run_agent({ schema }) on its own (structured result previews)",
     usedSchema,
-    JSON.stringify(subagentResults.map((r) => ({ label: r.label, resultType: Array.isArray(r.result) ? "array" : typeof r.result }))),
+    JSON.stringify(subagents.map((subagent) => ({ label: subagent.label, result: subagent.result }))),
   );
   return { scenario: s };
 }
@@ -966,10 +886,8 @@ async function main() {
   console.log(`  sessionRoot: ${options.sessionRoot}`);
   console.log(`  agentDir:    ${options.agentDir}`);
 
-  // kitchen-sink first (resume depends on its persisted run); rest are independent.
   const registry = [
     ["kitchen", scenarioKitchenSink],
-    ["resume", scenarioResume],
     ["branch", scenarioBranch],
     ["gate", scenarioGate],
     ["route", scenarioRoute],
@@ -978,13 +896,11 @@ async function main() {
     ["saved", scenarioSavedName],
     ["discoverability", scenarioDiscoverability],
   ];
-  // --only resume implies --only kitchen (resume reuses kitchen's persisted run).
   const want = options.only ? options.only.toLowerCase() : undefined;
-  const selected = registry.filter(([key]) => {
-    if (!want) return true;
-    if (key.includes(want)) return true;
-    return want.includes("resume") && key === "kitchen";
-  });
+  const selected = registry.filter(([key]) => !want || key.includes(want));
+  if (selected.length === 0) {
+    throw new Error(`--only did not match a workflow scenario: ${options.only}`);
+  }
 
   const results = [];
   for (const [, fn] of selected) {

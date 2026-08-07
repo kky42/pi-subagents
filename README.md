@@ -20,7 +20,7 @@ Run subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Clau
 | Primitive | Use it for |
 | --- | --- |
 | **`run_agent`** | One focused, resumable specialist or several independent specialists in parallel. |
-| **`run_workflow`** | Parallel or staged subagents, branching, structured results, saved orchestration, and replay. |
+| **`run_workflow`** | Parallel or staged subagents, branching, structured results, and saved orchestration. |
 
 Every subagent runs through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
 
@@ -84,24 +84,9 @@ Inspect the UI and recommend specific improvements.
 - **Direct results.** Delegation completes through the standard Pi Tool result path without a separate completion notification.
 - **Parallel but bounded.** Direct and workflow subagents share one concurrency limit.
 - **Multi-backend.** Mix Pi, Codex CLI, and Claude Code through simple profiles.
-- **Real orchestration.** Workflows support parallel stages, pipelines, branching, schemas, saved scripts, and replay.
-- **Resumable specialists.** Reuse a direct subagent's `session_key` to continue its backend conversation.
+- **Real orchestration.** Workflows support parallel stages, pipelines, branching, schemas, and saved scripts.
+- **Resumable specialists.** Pass a direct `session_key` up front or omit it and reuse the generated key returned with the result. Workflow scripts can reuse a key across internal `run_agent()` calls.
 - **Visible progress.** Tool rows distinguish queued, running, completed, failed, and aborted work and show usage when available.
-
-## Extension coordination events
-
-PiFlow emits `pi-flow:task-state` on Pi's synchronous event bus when an agent or workflow Tool call starts and immediately before it returns:
-
-```ts
-{
-  version: 1,
-  task_id: string,
-  task_type: "agent" | "workflow",
-  status: "accepted" | "completed" | "failed"
-}
-```
-
-These events let other extensions track active PiFlow calls without depending on PiFlow internals. They are extension events, not model-visible intermediate results.
 
 ## Requirements
 

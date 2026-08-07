@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Theme } from "@earendil-works/pi-coding-agent";
@@ -12,11 +12,9 @@ import { INLINE_WORKFLOW_EXAMPLE } from "../src/prompts.ts";
 import {
   parseWorkflowScript,
   runWorkflow,
-  type WorkflowSubagentResultEvent,
   type WorkflowSubagentRunner,
 } from "../src/workflow/runtime.ts";
 import { loadSavedWorkflowRegistry, loadWorkflowScriptPath } from "../src/workflow/registry.ts";
-import { loadWorkflowJournal, persistWorkflowScript } from "../src/workflow/journal.ts";
 import { createStructuredOutputTool, type StructuredOutputCapture } from "../src/workflow/structured-output.ts";
 
 const META = "export const meta = { name: 'wf', description: 'a workflow' };\n";
@@ -383,9 +381,9 @@ return await run_agent('second', { schema: { type: 'object', required: ['answer'
     expect(result.result).toEqual(["A-A", "B-B"]);
   });
 
-  it("returns null and logs when an agent fails", async () => {
+  it("returns null and reports the terminal result when an agent fails", async () => {
     const logs: string[] = [];
-    const subagentResults: WorkflowSubagentResultEvent[] = [];
+    const observed: unknown[] = [];
     const result = await runWorkflow(`${META}return await run_agent('x', { label: 'boom' });`, {
       cwd: "/tmp",
       limiter: new ConcurrencyLimiter(4),
@@ -393,11 +391,13 @@ return await run_agent('second', { schema: { type: 'object', required: ['answer'
         throw new Error("kaboom");
       },
       onLog: (message) => logs.push(message),
-      onSubagentResult: (event) => { subagentResults.push(event); },
+      onSubagentResult: (event) => {
+        observed.push(event);
+      },
     });
     expect(result.result).toBeNull();
     expect(logs.some((line) => line.includes("boom") && line.includes("kaboom"))).toBe(true);
-    expect(subagentResults).toEqual([
+    expect(observed).toEqual([
       expect.objectContaining({ label: "boom", result: null, failed: true, error: "kaboom" }),
     ]);
   });
@@ -692,7 +692,7 @@ return await run_agent('second', { schema: { type: 'object', required: ['answer'
     ).rejects.toThrow(/awaited or returned/);
   });
 
-  it("logs agent-result hook failures without aborting sibling work", async () => {
+  it("logs terminal-result observer failures without aborting sibling work", async () => {
     let completed = 0;
     const logs: string[] = [];
     const result = await runWorkflow(`${META}return await parallel([\n() => run_agent('fast', { label: 'fast' }),\n() => run_agent('slow', { label: 'slow' })\n]);`, {
@@ -704,97 +704,14 @@ return await run_agent('second', { schema: { type: 'object', required: ['answer'
         return call.label;
       },
       onSubagentResult: (event) => {
-        if (event.label === "fast") {
-          throw new Error("journal full");
-        }
+        if (event.label === "fast") throw new Error("observer failed");
       },
       onLog: (message) => logs.push(message),
     });
+
     expect(result.result).toEqual(["fast", "slow"]);
     expect(completed).toBe(2);
-    expect(logs.some((line) => line.includes("journal full"))).toBe(true);
-  });
-
-  it("reuses cached subagent results for the longest unchanged prefix on resume", async () => {
-    const firstRunEvents: any[] = [];
-    const firstRun = await runWorkflow(
-      `${META}const a = await run_agent('first', { label: 'one' });\nconst b = await run_agent('second', { label: 'two' });\nreturn [a, b];`,
-      {
-        cwd: "/tmp",
-        limiter: new ConcurrencyLimiter(4),
-        runSubagent: async (call) => `${call.prompt}:live1`,
-        onSubagentResult: (event) => {
-          firstRunEvents.push(event);
-        },
-      },
-    );
-    expect(firstRun.result).toEqual(["first:live1", "second:live1"]);
-
-    const secondRunEvents: any[] = [];
-    const livePrompts: string[] = [];
-    const queued: number[] = [];
-    const ended: Array<{ index: number; cached?: boolean }> = [];
-    const secondRun = await runWorkflow(
-      `${META}const a = await run_agent('first', { label: 'one' });\nconst b = await run_agent('second changed', { label: 'two' });\nreturn [a, b];`,
-      {
-        cwd: "/tmp",
-        limiter: new ConcurrencyLimiter(4),
-        runSubagent: async (call) => {
-          livePrompts.push(call.prompt);
-          return `${call.prompt}:live2`;
-        },
-        resumeSubagentResults: firstRunEvents.map(({ index, fingerprint, result }) => ({ index, fingerprint, result })),
-        onSubagentResult: (event) => {
-          secondRunEvents.push(event);
-        },
-        onSubagentQueued: (event) => queued.push(event.index),
-        onSubagentEnd: (event) => ended.push({ index: event.index, cached: event.cached }),
-      },
-    );
-
-    expect(secondRun.result).toEqual(["first:live1", "second changed:live2"]);
-    expect(livePrompts).toEqual(["second changed"]);
-    expect(secondRunEvents.map((event) => event.cached)).toEqual([true, false]);
-    expect(queued).toEqual([1, 2]);
-    expect(ended).toEqual([
-      { index: 1, cached: true },
-      { index: 2, cached: false },
-    ]);
-  });
-
-  it("does not replay cached failed subagent results on resume", async () => {
-    const firstRunEvents: any[] = [];
-    const script = `${META}const a = await run_agent('first', { label: 'one' });\nconst b = await run_agent('second', { label: 'two' });\nreturn [a, b];`;
-    await runWorkflow(script, {
-      cwd: "/tmp",
-      limiter: new ConcurrencyLimiter(4),
-      runSubagent: async (call) => {
-        if (call.label === "two") throw new Error("transient");
-        return `${call.prompt}:live1`;
-      },
-      onSubagentResult: (event) => {
-        firstRunEvents.push(event);
-      },
-    });
-
-    const liveLabels: string[] = [];
-    const secondRunEvents: any[] = [];
-    const second = await runWorkflow(script, {
-      cwd: "/tmp",
-      limiter: new ConcurrencyLimiter(4),
-      runSubagent: async (call) => {
-        liveLabels.push(call.label);
-        return `${call.prompt}:live2`;
-      },
-      resumeSubagentResults: firstRunEvents.map(({ index, fingerprint, result, failed }) => ({ index, fingerprint, result, failed })),
-      onSubagentResult: (event) => {
-        secondRunEvents.push(event);
-      },
-    });
-
-    expect(second.result).toEqual(["first:live1", "second:live2"]);
-    expect(liveLabels).toEqual(["two"]);
-    expect(secondRunEvents.map((event) => event.cached)).toEqual([true, false]);
+    expect(logs.some((line) => line.includes("observer failed"))).toBe(true);
   });
 
   it("emits phase, agent start/end, and failure-log progress events in order", async () => {
@@ -948,53 +865,6 @@ describe("saved workflow registry", () => {
     });
   });
 
-  it("does not overwrite an existing persisted script snapshot", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-workflows-"));
-    try {
-      const path = await persistWorkflowScript({
-        dir,
-        metaName: "immutable",
-        scriptHash: "abcdef1234567890",
-        script: "original",
-      });
-      writeFileSync(path, "mutated");
-
-      await expect(persistWorkflowScript({
-        dir,
-        metaName: "immutable",
-        scriptHash: "abcdef1234567890",
-        script: "original",
-      })).rejects.toThrow("does not match");
-      expect(readFileSync(path, "utf8")).toBe("mutated");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("loads a resume journal up to a malformed trailing line", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pi-subagent-workflows-"));
-    try {
-      const taskId = "task_resume_test";
-      writeFileSync(
-        join(dir, `task-${taskId}.jsonl`),
-        [
-          JSON.stringify({ type: "task_start", version: 3, taskId }),
-          JSON.stringify({ type: "task_log", message: "first diagnostic" }),
-          JSON.stringify({ type: "subagent_result", index: 1, fingerprint: "a", result: "one" }),
-          "{ truncated",
-          JSON.stringify({ type: "subagent_result", index: 2, fingerprint: "b", result: "two" }),
-        ].join("\n"),
-      );
-
-      const journal = await loadWorkflowJournal(dir, taskId);
-
-      expect(journal?.status).toBe("running");
-      expect(journal?.logs).toEqual(["first diagnostic"]);
-      expect(journal?.subagentResults).toEqual([{ index: 1, fingerprint: "a", result: "one", failed: false }]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("run_workflow tool rendering", () => {
@@ -1020,7 +890,6 @@ describe("run_workflow tool rendering", () => {
   it("renders live phases and subagents", () => {
     const theme = makeMockTheme();
     const details = {
-      taskId: "task_123",
       name: "audit",
       status: "running",
       subagentCount: 2,
@@ -1047,7 +916,6 @@ describe("run_workflow tool rendering", () => {
   it("renders accurate aggregate totals around a bounded phase and agent window", () => {
     const theme = makeMockTheme();
     const details = {
-      taskId: "task_large",
       name: "large-review",
       status: "running",
       subagentCount: 50,
@@ -1100,7 +968,6 @@ describe("run_workflow tool rendering", () => {
   it("renders completed and failed workflow snapshots", () => {
     const theme = makeMockTheme();
     const completed = {
-      taskId: "task_done",
       name: "review",
       status: "completed",
       subagentCount: 1,
@@ -1111,7 +978,6 @@ describe("run_workflow tool rendering", () => {
       ],
     };
     const failed = {
-      taskId: "task_failed",
       name: "broken",
       status: "error",
       subagentCount: 0,
@@ -1121,7 +987,6 @@ describe("run_workflow tool rendering", () => {
       error: "invalid workflow",
     };
     const aborted = {
-      taskId: "task_aborted",
       name: "cancelled",
       status: "aborted",
       subagentCount: 1,

@@ -16,7 +16,6 @@ export type {
   WorkflowSubagentCall,
   WorkflowSubagentResultEvent,
   WorkflowSubagentRunner,
-  WorkflowCachedSubagentResult,
   WorkflowLimits,
   WorkflowMeta,
   WorkflowMetaPhase,

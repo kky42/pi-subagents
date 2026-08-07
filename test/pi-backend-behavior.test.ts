@@ -57,7 +57,6 @@ Custom Code Searcher Role`);
     expect(result.details).toMatchObject({
       status: "done",
       sessionKey: expect.stringMatching(/^session_/),
-      taskId: terminal.task_id,
       label: "Find auth files",
     });
     expect(terminal).toMatchObject({
@@ -263,7 +262,6 @@ Custom Code Searcher Role`);
     const terminal = JSON.parse(result.content[0].text);
 
     expect(result.details.status).toBe("error");
-    expect(result.details.taskId).toBe(terminal.task_id);
     expect(terminal.status).toBe("failed");
     expect(terminal.content).toContain("Unknown profile");
     expect(taskNotifications(session)).toEqual([]);

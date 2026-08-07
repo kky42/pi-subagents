@@ -76,11 +76,9 @@ export interface WorkflowSubagentSnapshot {
   error?: string;
   usage?: SubagentUsage;
   telemetry?: SubagentTelemetry;
-  cached?: boolean;
 }
 
 export interface WorkflowToolDetails {
-  taskId: string;
   name: string;
   status: "running" | "completed" | "error" | "aborted";
   subagentCount: number;
@@ -93,7 +91,6 @@ export interface WorkflowToolDetails {
   subagents: WorkflowSubagentSnapshot[];
   logCount: number;
   logs: string[];
-  cachedSubagentCount?: number;
   result?: unknown;
   error?: string;
   telemetry?: SubagentTelemetry & { missingUsageSubagentCount?: number };

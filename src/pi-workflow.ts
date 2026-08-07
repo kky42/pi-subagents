@@ -95,12 +95,12 @@ const COMPACT_WORKFLOW_DISPLAY_LIMITS: WorkflowDisplayLimits = {
 };
 
 const WORKFLOW_PROMPT_GUIDELINES = [
-  "Always provide name. Omit script and script_path to run that saved workflow; replay with the same name and resume_from_task_id.",
+  "Omit script and script_path to run a saved workflow by name.",
   "Only run trusted workflow scripts; worker VM isolation detects stalls but is not a security boundary.",
 ];
 
 const WORKFLOW_TOOL_DESCRIPTION = [
-  "Use run_workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, replay, or larger fan-out.",
+  "Use run_workflow for multi-agent orchestration that requires dependent stages, branching, structured outputs, or larger fan-out.",
   "Run a matching saved workflow when available; otherwise provide a trusted ad-hoc script.",
 ].join(" ");
 
@@ -108,7 +108,7 @@ export const workflowToolParameters = Type.Object({
   name: Type.String({
     minLength: 1,
     pattern: ".*\\S.*",
-    description: "Workflow meta.name; required and must match the selected script, path, or replay journal.",
+    description: "Workflow meta.name; required and must match the selected script or path.",
   }),
   script: Type.Optional(
     Type.String({
@@ -117,17 +117,11 @@ export const workflowToolParameters = Type.Object({
   ),
   script_path: Type.Optional(
     Type.String({
-      description: "Path to a trusted saved or session-persisted workflow script whose meta.name matches name.",
+      description: "Path to a trusted saved workflow script whose meta.name matches name.",
     }),
   ),
   args: Type.Optional(
     Type.Any({ description: "Optional JSON value exposed unchanged to the workflow as the global `args`." }),
-  ),
-  resume_from_task_id: Type.Optional(
-    Type.String({
-      description:
-        "Prior workflow task ID to replay with the same name. Add script_path for an edited replay; the longest unchanged successful prefix is reused.",
-    }),
   ),
 }, { additionalProperties: false });
 
@@ -161,16 +155,15 @@ function aggregateWorkflowUsage(subagents: readonly WorkflowSubagentSnapshot[]):
   usage?: SubagentUsage;
   telemetry: WorkflowToolDetails["telemetry"];
 } {
-  const liveSubagents = subagents.filter((subagent) => !subagent.cached);
-  const withUsage = liveSubagents.filter(
+  const withUsage = subagents.filter(
     (subagent): subagent is WorkflowSubagentSnapshot & { usage: SubagentUsage } => Boolean(subagent.usage),
   );
-  const missingUsageSubagentCount = liveSubagents.length - withUsage.length;
+  const missingUsageSubagentCount = subagents.length - withUsage.length;
   if (withUsage.length === 0) {
     return {
       telemetry: {
-        tokensKnown: liveSubagents.length === 0,
-        costKnown: liveSubagents.length === 0,
+        tokensKnown: subagents.length === 0,
+        costKnown: subagents.length === 0,
         costBreakdownKnown: false,
         partial: missingUsageSubagentCount > 0,
         missingUsageSubagentCount,
@@ -436,12 +429,10 @@ function buildWorkflowDisplaySnapshot(
         : boundedTextPreview(subagent.error, limits.errorChars),
       usage: cloneUsage(subagent.usage),
       telemetry: subagent.telemetry ? { ...subagent.telemetry } : undefined,
-      cached: subagent.cached,
     };
   });
   const currentPhaseRecord = selectedPhases.find((phase) => phase.current);
   return {
-    taskId: snapshot.taskId,
     name: boundedTextPreview(snapshot.name, limits.metadataChars),
     status: snapshot.status,
     subagentCount: Math.max(snapshot.subagentCount, snapshot.subagents.length),
@@ -468,7 +459,6 @@ function buildWorkflowDisplaySnapshot(
     logs: snapshot.logs
       .slice(-limits.logs)
       .map((line) => boundedTextPreview(line, limits.logChars)),
-    cachedSubagentCount: snapshot.cachedSubagentCount,
     result: resultPreview(snapshot.result, limits.resultChars),
     error: snapshot.error === undefined
       ? undefined
@@ -480,7 +470,6 @@ function buildWorkflowDisplaySnapshot(
 
 function summaryOnlyWorkflowSnapshot(snapshot: WorkflowToolDetails): WorkflowToolDetails {
   return {
-    taskId: snapshot.taskId,
     name: boundedTextPreview(snapshot.name, 64),
     status: snapshot.status,
     subagentCount: snapshot.subagentCount,
@@ -492,7 +481,6 @@ function summaryOnlyWorkflowSnapshot(snapshot: WorkflowToolDetails): WorkflowToo
     subagents: [],
     logCount: snapshot.logCount,
     logs: [],
-    cachedSubagentCount: snapshot.cachedSubagentCount,
     result: resultPreview(snapshot.result, 128),
     error: snapshot.error === undefined ? undefined : boundedTextPreview(snapshot.error, 128),
     telemetry: snapshot.telemetry ? { ...snapshot.telemetry } : undefined,
@@ -585,10 +573,9 @@ function abortReason(signal: AbortSignal, fallback: unknown): string {
   return signal.reason === undefined ? errorMessage(fallback) : errorMessage(signal.reason);
 }
 
-function workflowErrorDetails(taskId: string, name: string, error: unknown, aborted = false): WorkflowExecutionResult {
+function workflowErrorDetails(name: string, error: unknown, aborted = false): WorkflowExecutionResult {
   const message = errorMessage(error);
   return workflowExecutionSnapshot({
-    taskId,
     name,
     status: aborted ? "aborted" : "error",
     subagentCount: 0,
@@ -630,16 +617,14 @@ function ensureSubagent(
 
 async function executeWorkflowCall(params: {
   options: CreateRunWorkflowToolOptions;
-  taskId: string;
   name: string;
   toolParams: WorkflowToolParams;
   signal: AbortSignal;
   onUpdate: ((result: ReturnType<typeof workflowSnapshotResult>) => void) | undefined;
   ctx: ExtensionContext;
 }): Promise<WorkflowExecutionResult> {
-  const { options, taskId, name, toolParams, signal, onUpdate, ctx } = params;
+  const { options, name, toolParams, signal, onUpdate, ctx } = params;
   const snapshot: WorkflowToolDetails = {
-    taskId,
     name,
     status: "running",
     subagentCount: 0,
@@ -650,7 +635,6 @@ async function executeWorkflowCall(params: {
     subagents: [],
     logCount: 0,
     logs: [],
-    cachedSubagentCount: 0,
   };
   const emit = () => {
     if (!onUpdate) return;
@@ -661,13 +645,12 @@ async function executeWorkflowCall(params: {
   };
 
   signal.throwIfAborted();
-  const prepared = await prepareWorkflowToolSource(toolParams, ctx, taskId, (resumeTaskId) =>
-    options.getTaskManager().isActive(resumeTaskId));
+  const prepared = prepareWorkflowToolSource(toolParams, ctx);
   if (!prepared.ok) {
-    return workflowErrorDetails(taskId, name, prepared.details.error);
+    return workflowErrorDetails(name, prepared.details.error);
   }
 
-  const { script, journalWriter, resumeSubagentResults } = prepared.value;
+  const { script } = prepared.value;
   snapshot.plannedPhases = parseWorkflowScript(script).meta.phases?.map((phase) => ({ ...phase }));
   const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
   const runner = createWorkflowSubagentRunner({
@@ -723,13 +706,9 @@ async function executeWorkflowCall(params: {
       limiter: options.getLimiter(),
       serializeSubagent: runner.serializeSubagent,
       runSubagent: runner.runSubagent,
-      resumeSubagentResults,
       onLog: (message) => {
         snapshot.logs.push(message);
         emit();
-        if (journalWriter) {
-          void journalWriter.appendLog(message).catch(() => {});
-        }
       },
       onPhase: (title) => {
         if (!snapshot.phases.includes(title)) {
@@ -745,13 +724,8 @@ async function executeWorkflowCall(params: {
       onSubagentStart: (event) => {
         const subagent = ensureSubagent(snapshot, profiles, event);
         subagent.sessionKey = event.sessionKey ?? subagent.sessionKey;
-        subagent.cached = event.cached === true;
-        subagent.status = event.cached ? "done" : "running";
+        subagent.status = "running";
         subagent.startedAt = Date.now();
-        if (event.cached) {
-          subagent.endedAt = subagent.startedAt;
-          snapshot.cachedSubagentCount = (snapshot.cachedSubagentCount ?? 0) + 1;
-        }
         emit();
       },
       onSubagentEnd: (event) => {
@@ -770,29 +744,17 @@ async function executeWorkflowCall(params: {
         }
         emit();
       },
-      onSubagentResult: async (event) => {
-        runner.restoreSessionBinding(event);
-        await journalWriter?.appendSubagentResult(event);
-      },
     });
 
     snapshot.status = "completed";
     snapshot.subagentCount = result.subagentCount;
     snapshot.result = resultPreview(result.result);
-    try {
-      await journalWriter?.complete(result.result);
-    } catch (error) {
-      snapshot.logs.push(`workflow journal completion failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
     return workflowExecutionSnapshot(snapshot, workflowContent(result.result));
   } catch (error) {
     const aborted = signal.aborted || isWorkflowAbortError(error);
     const message = signal.aborted ? abortReason(signal, error) : errorMessage(error);
     snapshot.status = aborted ? "aborted" : "error";
     snapshot.error = message;
-    try {
-      await journalWriter?.fail(message);
-    } catch {}
     for (const subagent of snapshot.subagents) {
       if (isActiveSubagentStatus(subagent.status)) {
         subagent.status = aborted ? "aborted" : "error";
@@ -823,14 +785,12 @@ export function createRunWorkflowTool(
       const name = requiredWorkflowName(params);
       const normalizedParams = { ...params, name };
       const managed = await options.getTaskManager().run({
-        taskType: "workflow",
         signal,
-        execute: async (taskSignal, taskId) => {
+        execute: async (taskSignal) => {
           let value: WorkflowExecutionResult;
           try {
             value = await executeWorkflowCall({
               options,
-              taskId,
               name,
               toolParams: normalizedParams,
               signal: taskSignal,
@@ -839,7 +799,6 @@ export function createRunWorkflowTool(
             });
           } catch (error) {
             value = workflowErrorDetails(
-              taskId,
               name,
               taskSignal.aborted ? abortReason(taskSignal, error) : error,
               taskSignal.aborted,
@@ -868,7 +827,6 @@ export function createRunWorkflowTool(
         execution = { details, terminalContent: reason, usage: execution.usage };
       }
       const envelope: WorkflowTerminalTaskEnvelope = {
-        task_id: managed.taskId,
         task_type: "workflow",
         status: managed.status,
         name,

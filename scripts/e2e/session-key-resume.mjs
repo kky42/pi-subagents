@@ -3,10 +3,9 @@
 //
 // Each selected backend starts a subagent without a session_key, then resumes
 // it with the generated key returned by the first synchronous Tool result. The first
-// child reads a secret file in a way that leaves the
-// value in the child session transcript, then deletes it; the second child must
-// recall the deleted secret from its continued child session. A fresh child
-// cannot read the file after the first turn, so the final token proves resume
+// child reads a non-sensitive marker into its transcript and deletes the source file;
+// the second child must recall that marker from its continued conversation. A fresh
+// child cannot read the file after the first turn, so the final token proves resume
 // semantics at the backend boundary.
 
 import { spawn, spawnSync } from "node:child_process";
@@ -41,7 +40,7 @@ const BACKENDS = ["pi", "codex", "claude"];
 function parseArgs(argv) {
   const options = {
     backend: "all",
-    rootModel: "deepseek/deepseek-v4-flash",
+    rootModel: "opencode-go/deepseek-v4-flash",
     rootThinking: "high",
     codexModel: "gpt-5.4-mini",
     codexThinking: "medium",
@@ -83,7 +82,7 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/e2e/session-key-resume.mjs [options]\n\nOptions:\n  --backend <all|pi|codex|claude>  backend(s) to test (default: all)\n  --root-model <provider/model>    pi root model (default: deepseek/deepseek-v4-flash)\n  --root-thinking <level>          pi root thinking level (default: high)\n  --codex-model <model>            Codex subagent model (default: gpt-5.4-mini)\n  --codex-thinking <level>         Codex subagent thinking (default: medium)\n  --claude-model <model>           Claude Code alias mapped to DeepSeek (default: haiku)\n  --claude-thinking <level>        Claude Code subagent thinking (default: medium)\n  --deepseek-api-key-env <name>    preferred DeepSeek credential env var (fallback: DEEPSEEK_API_KEY, DEEPSEEK_API_TOKEN)\n  --agent-dir <dir>                pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                 temp run root\n  --timeout-ms <ms>                per-backend pi timeout (default: 300000)\n  --keep                           keep temp run root and temporary profiles\n`);
+  console.log(`Usage: node scripts/e2e/session-key-resume.mjs [options]\n\nOptions:\n  --backend <all|pi|codex|claude>  backend(s) to test (default: all)\n  --root-model <provider/model>    pi root model (default: opencode-go/deepseek-v4-flash)\n  --root-thinking <level>          pi root thinking level (default: high)\n  --codex-model <model>            Codex subagent model (default: gpt-5.4-mini)\n  --codex-thinking <level>         Codex subagent thinking (default: medium)\n  --claude-model <model>           Claude Code alias mapped to DeepSeek (default: haiku)\n  --claude-thinking <level>        Claude Code subagent thinking (default: medium)\n  --deepseek-api-key-env <name>    preferred DeepSeek credential env var (fallback: DEEPSEEK_API_KEY, DEEPSEEK_API_TOKEN)\n  --agent-dir <dir>                pi agent dir (default: PI_CODING_AGENT_DIR or ~/.pi/agent)\n  --run-root <dir>                 temp run root\n  --timeout-ms <ms>                per-backend pi timeout (default: 300000)\n  --keep                           keep temp run root and temporary profiles\n`);
 }
 
 function ensureDir(dir) {
@@ -168,12 +167,10 @@ function analyzeTaskMessages(root) {
         if (
           envelope?.task_type === "agent"
           && (envelope.status === "completed" || envelope.status === "failed")
-          && typeof envelope.task_id === "string"
         ) {
           const call = callsById.get(message.toolCallId);
           terminal.push({
             toolCallId: message.toolCallId,
-            taskId: envelope.task_id,
             sessionKey: typeof envelope.session_key === "string" ? envelope.session_key : undefined,
             envelope,
             details: message.details && typeof message.details === "object" ? message.details : undefined,
@@ -231,7 +228,7 @@ function assert(condition, message) {
 function writeFixture(runRoot, backend) {
   const fixture = path.join(runRoot, backend, "fixture");
   ensureDir(fixture);
-  writeFileSync(path.join(fixture, "README.md"), `# ${backend} session_key E2E\n\nThe child agent must read and delete an untracked e2e-secret.txt, then recall it from session memory.\n`, "utf8");
+  writeFileSync(path.join(fixture, "README.md"), `# ${backend} session_key E2E\n\nThe child agent must read and delete an untracked public E2E marker, then recall it from conversation memory.\n`, "utf8");
   assert(shell("git", ["init", "-q"], { cwd: fixture }).status === 0, `[${backend}] could not initialize fixture Git repository`);
   assert(shell("git", ["add", "."], { cwd: fixture }).status === 0, `[${backend}] could not stage ordinary fixture`);
   assert(
@@ -239,13 +236,13 @@ function writeFixture(runRoot, backend) {
     `[${backend}] could not commit ordinary fixture`,
   );
 
-  const secret = `${backend.toUpperCase()}_SESSION_KEY_SECRET_${Date.now()}`;
-  writeFileSync(path.join(fixture, "e2e-secret.txt"), `${secret}\n`, "utf8");
+  const marker = `${backend}_session_memory_marker_${Date.now()}`;
+  writeFileSync(path.join(fixture, "e2e-memory-marker.txt"), `${marker}\n`, "utf8");
   assert(
-    shell("git", ["ls-files", "--error-unmatch", "e2e-secret.txt"], { cwd: fixture }).status !== 0,
-    `[${backend}] secret file unexpectedly became tracked`,
+    shell("git", ["ls-files", "--error-unmatch", "e2e-memory-marker.txt"], { cwd: fixture }).status !== 0,
+    `[${backend}] marker file unexpectedly became tracked`,
   );
-  return { fixture, secret };
+  return { fixture, marker };
 }
 
 function profileBody(backend, profileName, options) {
@@ -261,9 +258,9 @@ function profileBody(backend, profileName, options) {
 function writePrompt(runRoot, backend, profileName, expectedPrefix) {
   const promptPath = path.join(runRoot, backend, "prompt.md");
   ensureDir(path.dirname(promptPath));
-  const firstPrompt = "Read e2e-secret.txt in a way that leaves its exact trimmed content visible in this subagent session's tool transcript, remember that exact content, delete e2e-secret.txt, and then reply exactly STEP1_DONE.";
-  const secondPrompt = `Using only the prior conversation in this same subagent session, reply exactly ${expectedPrefix}:<remembered secret>. Do not read files.`;
-  writeFileSync(promptPath, `You are testing pi-flow generated session_key continuation for backend ${backend}.\n\nYou MUST call the run_agent tool exactly twice, sequentially, with profile "${profileName}". Do not pass session_key on the first call. When its synchronous Tool result returns, copy the returned terminal envelope's session_key exactly and pass that key on the second call. Do not invent or preselect a key.\n\nFirst run_agent call:\n- label: "${backend} remember secret"\n- prompt exactly:\n${firstPrompt}\n\nSecond run_agent call after the first terminal Tool result:\n- label: "${backend} recall secret"\n- session_key: the exact generated session_key returned by the first run_agent Tool result\n- prompt exactly:\n${secondPrompt}\n\nAfter the second terminal Tool result returns, reply with exactly the second subagent's token line and nothing else.\n`, "utf8");
+  const firstPrompt = "The file e2e-memory-marker.txt contains a public, non-sensitive E2E marker. Read it in a way that leaves its exact trimmed content visible in this subagent conversation, remember that exact marker, delete e2e-memory-marker.txt, and then reply exactly STEP1_DONE.";
+  const secondPrompt = `Using only the prior conversation in this same subagent session, repeat the public, non-sensitive E2E marker by replying exactly ${expectedPrefix}:<remembered marker>. Do not read files.`;
+  writeFileSync(promptPath, `You are testing pi-flow generated session_key continuation for backend ${backend}.\n\nYou MUST call the run_agent tool exactly twice, sequentially, with profile "${profileName}". Do not pass session_key on the first call. When its synchronous Tool result returns, copy the returned terminal envelope's session_key exactly and pass that key on the second call. Do not invent or preselect a key.\n\nFirst run_agent call:\n- label: "${backend} remember marker"\n- prompt exactly:\n${firstPrompt}\n\nSecond run_agent call after the first terminal Tool result:\n- label: "${backend} recall marker"\n- session_key: the exact generated session_key returned by the first run_agent Tool result\n- prompt exactly:\n${secondPrompt}\n\nAfter the second terminal Tool result returns, reply with exactly the second subagent's token line and nothing else.\n`, "utf8");
   return promptPath;
 }
 
@@ -278,9 +275,9 @@ async function runBackend(options, backend) {
     apiKeyEnv: options.deepseekApiKeyEnv,
     runtimeDir: path.join(backendRoot, "claude-runtime"),
   });
-  const { fixture, secret } = writeFixture(options.runRoot, backend);
+  const { fixture, marker } = writeFixture(options.runRoot, backend);
   const expectedPrefix = `${backend.toUpperCase()}_SESSION_KEY_OK`;
-  const expected = `${expectedPrefix}:${secret}`;
+  const expected = `${expectedPrefix}:${marker}`;
   let run;
   let observation;
   try {
@@ -342,10 +339,12 @@ async function runBackend(options, backend) {
     assert(tasks.calls.every((call) => call.profile === profileName), `[${backend}] run_agent calls did not select profile ${profileName}`);
     assert(tasks.calls[0].session_key === undefined, `[${backend}] first run_agent call must omit session_key`);
     assert(tasks.terminal.length === 2, `[${backend}] expected two terminal run_agent Tool results, observed ${tasks.terminal.length}`);
+    const expectedEnvelopeKeys = ["content", "label", "session_key", "status", "task_type"];
+    assert(tasks.terminal.every((item) => JSON.stringify(Object.keys(item.envelope).sort()) === JSON.stringify(expectedEnvelopeKeys)), `[${backend}] terminal envelope shape was not compact`);
     assert(tasks.terminal.every((item) => item.envelope.task_type === "agent"), `[${backend}] terminal task_type was not agent`);
     assert(tasks.terminal.every((item) => item.envelope.status === "completed"), `[${backend}] a run_agent terminal envelope was not completed`);
     assert(tasks.terminal.every((item) => item.details?.status === "done"), `[${backend}] rich agent details were not done`);
-    assert(tasks.terminal.every((item) => item.details?.taskId === item.taskId), `[${backend}] rich details taskId did not match terminal task_id`);
+    assert(tasks.terminal.every((item) => !Object.hasOwn(item.details ?? {}, "taskId")), `[${backend}] rich agent details retained removed execution metadata`);
     assert(tasks.terminal.every((item) => item.details?.sessionKey === item.sessionKey), `[${backend}] rich details sessionKey did not match terminal session_key`);
     assert(tasks.terminal.every((item) => Number.isFinite(item.toolRecordIntervalMs)), `[${backend}] persisted Tool call-to-result record interval was not recorded`);
     assert(tasks.customTaskNotificationCount === 0, `[${backend}] observed ${tasks.customTaskNotificationCount} unexpected custom task notification(s)`);
@@ -353,17 +352,16 @@ async function runBackend(options, backend) {
     assert(/^session_[a-f0-9]{32}$/.test(generatedKey ?? ""), `[${backend}] first run_agent did not return a generated session_key`);
     assert(tasks.calls[1].session_key === generatedKey, `[${backend}] second run_agent call did not reuse the generated session_key`);
     assert(tasks.terminal[1].sessionKey === generatedKey, `[${backend}] second terminal result changed session_key`);
-    assert(new Set(tasks.terminal.map((item) => item.taskId)).size === 2, `[${backend}] terminal task_id values were not distinct`);
     assert(transcriptText.includes("STEP1_DONE"), `[${backend}] first child result was not observed`);
     assert(transcriptText.includes(expected), `[${backend}] expected resumed token not found: ${expected}`);
-    assert(!existsSync(path.join(fixture, "e2e-secret.txt")), `[${backend}] first child did not delete e2e-secret.txt`);
-    const committedSecretSearch = shell("git", ["grep", "-F", secret, ...shell("git", ["rev-list", "--all"], { cwd: fixture }).stdout.trim().split(/\s+/).filter(Boolean)], { cwd: fixture });
-    assert(committedSecretSearch.status === 1 && committedSecretSearch.stdout === "", `[${backend}] secret was recoverable from committed Git content`);
-    assert(shell("git", ["status", "--porcelain"], { cwd: fixture }).stdout === "", `[${backend}] fixture did not return to its committed state after secret deletion`);
-    assert(!readAllTextUnder(fixture).includes(secret), `[${backend}] secret remained in a persistent fixture file after deletion`);
+    assert(!existsSync(path.join(fixture, "e2e-memory-marker.txt")), `[${backend}] first child did not delete e2e-memory-marker.txt`);
+    const committedMarkerSearch = shell("git", ["grep", "-F", marker, ...shell("git", ["rev-list", "--all"], { cwd: fixture }).stdout.trim().split(/\s+/).filter(Boolean)], { cwd: fixture });
+    assert(committedMarkerSearch.status === 1 && committedMarkerSearch.stdout === "", `[${backend}] marker was recoverable from committed Git content`);
+    assert(shell("git", ["status", "--porcelain"], { cwd: fixture }).stdout === "", `[${backend}] fixture did not return to its committed state after marker deletion`);
+    assert(!readAllTextUnder(fixture).includes(marker), `[${backend}] marker remained in a persistent fixture file after deletion`);
     console.log(`[${backend}] PASS session_key resume E2E`);
     console.log(`[${backend}] Observed token: ${expected}`);
-    console.log(`[${backend}] Terminal Tool results: ${JSON.stringify(tasks.terminal.map((item) => ({ task_id: item.taskId, session_key: item.sessionKey, status: item.envelope.status, detailsStatus: item.details?.status, toolCallRecordAtMs: item.toolCallRecordAtMs, toolResultRecordAtMs: item.toolResultRecordAtMs, toolRecordIntervalMs: item.toolRecordIntervalMs, usage: item.usage ?? null })))}`);
+    console.log(`[${backend}] Terminal Tool results: ${JSON.stringify(tasks.terminal.map((item) => ({ session_key: item.sessionKey, status: item.envelope.status, detailsStatus: item.details?.status, toolCallRecordAtMs: item.toolCallRecordAtMs, toolResultRecordAtMs: item.toolResultRecordAtMs, toolRecordIntervalMs: item.toolRecordIntervalMs, usage: item.usage ?? null })))}`);
   } finally {
     if (!options.keep) {
       try { unlinkSync(profilePath); } catch {}

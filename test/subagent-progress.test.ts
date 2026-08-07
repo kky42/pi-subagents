@@ -36,7 +36,6 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 function terminalEnvelope(result: { content: Array<{ text: string }> }) {
   return JSON.parse(result.content[0].text) as {
-    task_id: string;
     task_type: "agent";
     status: "completed" | "failed";
     session_key: string;
@@ -100,10 +99,10 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     makeExecutionContext,
   } = setupPiSubagentTestHarness();
 
-  it("waits for the child and returns the terminal Tool result", async () => {
-    const taskStates: unknown[] = [];
+  it("waits for the child and returns the terminal Tool result without extension lifecycle events", async () => {
+    const taskStateEvents: unknown[] = [];
     const taskStateObserver: ExtensionFactory = (pi) => {
-      pi.events.on("pi-flow:task-state", (event) => taskStates.push(event));
+      pi.events.on("pi-flow:task-state", (event) => taskStateEvents.push(event));
     };
     const { session, registration, model, modelRegistry } = await createSession({
       extensionFactories: [taskStateObserver],
@@ -130,19 +129,12 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
 
     await waitUntil(() => childStarted);
     expect(settled).toBe(false);
-    expect(taskStates).toEqual([{
-      version: 1,
-      task_id: expect.stringMatching(/^task_[a-f0-9]+$/),
-      task_type: "agent",
-      status: "accepted",
-    }]);
 
     childGate.resolve();
     const result = await pending;
     const terminal = terminalEnvelope(result);
 
     expect(terminal).toEqual({
-      task_id: result.details.taskId,
       task_type: "agent",
       status: "completed",
       session_key: result.details.sessionKey,
@@ -155,13 +147,10 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
       backend: "pi",
       status: "done",
       result: "child complete",
-      taskId: expect.stringMatching(/^task_[a-f0-9]+$/),
       sessionKey: expect.stringMatching(/^session_[a-f0-9]+$/),
     });
-    expect(taskStates).toEqual([
-      { version: 1, task_id: result.details.taskId, task_type: "agent", status: "accepted" },
-      { version: 1, task_id: result.details.taskId, task_type: "agent", status: "completed" },
-    ]);
+    expect(result.details).not.toHaveProperty("taskId");
+    expect(taskStateEvents).toEqual([]);
     expect(customTaskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
@@ -192,6 +181,7 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     expect(updates.length).toBeGreaterThan(0);
     expect(updates.every((update) => JSON.stringify(update).length <= MAX_PROGRESS_UPDATE_JSON_CHARS)).toBe(true);
     expect(updates.some((update) => update.details.status === "done")).toBe(true);
+    expect(updates.every((update) => !Object.hasOwn(update.details, "taskId"))).toBe(true);
     disposeSession(session);
   });
 
@@ -220,7 +210,6 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
       label: "Progress child",
       profile: "general-purpose",
       backend: "pi",
-      taskId: expect.stringMatching(/^task_[a-f0-9]+$/),
       sessionKey: expect.stringMatching(/^session_[a-f0-9]+$/),
       progress: {
         status: "running",
@@ -231,6 +220,7 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     const result = await pending;
     const done = updates.slice().reverse().find((update) => update.details.status === "done");
     expect(done).toBeDefined();
+    expect([queued, running, done].every((update) => !Object.hasOwn(update.details, "taskId"))).toBe(true);
     expect(queued.details).toMatchObject({
       status: "queued",
       progress: { status: "queued", activity: [] },
@@ -242,7 +232,6 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     expect(result.details).toMatchObject({
       status: "done",
       progress: { status: "done" },
-      taskId: running.details.taskId,
       sessionKey: running.details.sessionKey,
     });
     expect(result.usage?.input).toBeGreaterThan(0);
@@ -276,7 +265,6 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     expect(result.details.status).toBe("aborted");
     expect(result.details.error).toBeTruthy();
     expect(terminal).toMatchObject({
-      task_id: result.details.taskId,
       status: "failed",
       session_key: result.details.sessionKey,
       label: "Cancelled child",
@@ -306,7 +294,6 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     expect(result.details.status).toBe("aborted");
     expect(result.details.error).toContain("Subagent timed out after 20ms");
     expect(terminal).toEqual({
-      task_id: result.details.taskId,
       task_type: "agent",
       status: "failed",
       session_key: result.details.sessionKey,
@@ -347,7 +334,6 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     expect(result.details.status).toBe("aborted");
     expect(result.details.error).toBe("Pi session shut down");
     expect(terminal).toMatchObject({
-      task_id: result.details.taskId,
       status: "failed",
       content: "Pi session shut down",
     });

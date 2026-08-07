@@ -84,7 +84,7 @@ describe("pi-subagent tool contract", () => {
     expect(tool?.description.trim().length).toBeGreaterThan(0);
     expect(schema?.required).toEqual(["name"]);
     expect(schema?.additionalProperties).toBe(false);
-    expect(Object.keys(properties).sort()).toEqual(["args", "name", "resume_from_task_id", "script", "script_path"]);
+    expect(Object.keys(properties).sort()).toEqual(["args", "name", "script", "script_path"]);
     expectDescribedProperties(properties);
 
     disposeSession(session);

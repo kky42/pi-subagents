@@ -3,7 +3,7 @@ import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "../core/spawn.ts";
 import { assertBindingMatchesProfile, SessionKeyLocks, type SessionKeyBinding } from "../core/session-key.ts";
 import { resolveProfileModel, usesPiBackend } from "../core/model.ts";
 import type { SubagentBackend, SubagentProfile, SubagentTelemetry, SubagentToolDetails, SubagentUsage } from "../types.ts";
-import type { WorkflowSubagentResultEvent, WorkflowSubagentRunner } from "./types.ts";
+import type { WorkflowSubagentRunner } from "./types.ts";
 import { createStructuredOutputTool, STRUCTURED_OUTPUT_CONTRACT, WORKFLOW_PLAIN_TEXT_OUTPUT_NOTE, type StructuredOutputCapture } from "./structured-output.ts";
 
 export interface WorkflowSubagentRunnerOptions {
@@ -20,7 +20,6 @@ export interface WorkflowSubagentRunnerOptions {
 export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOptions): {
   runSubagent: WorkflowSubagentRunner;
   serializeSubagent: <T>(sessionKey: string | undefined, task: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
-  restoreSessionBinding: (event: WorkflowSubagentResultEvent) => void;
 } {
   const bindings = new Map<string, SessionKeyBinding>();
   const locks = new SessionKeyLocks();
@@ -88,22 +87,5 @@ export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOpti
     return details.result ?? "";
   };
 
-  const restoreSessionBinding = (event: WorkflowSubagentResultEvent) => {
-    if (
-      !event.sessionKey ||
-      !event.sessionId ||
-      (event.backend !== "pi" && event.backend !== "codex" && event.backend !== "claude")
-    ) return;
-    const binding: SessionKeyBinding = {
-      key: event.sessionKey,
-      sessionId: event.sessionId,
-      profile: event.profile,
-      backend: event.backend,
-    };
-    const existing = bindings.get(event.sessionKey);
-    if (existing) assertBindingMatchesProfile(existing, binding);
-    bindings.set(event.sessionKey, binding);
-  };
-
-  return { runSubagent, serializeSubagent: (key, task, signal) => locks.run(key, task, signal), restoreSessionBinding };
+  return { runSubagent, serializeSubagent: (key, task, signal) => locks.run(key, task, signal) };
 }

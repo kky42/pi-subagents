@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SynchronousTaskManager,
   taskEnvelopeContent,
-  type TaskStateEvent,
+  type WorkflowTerminalTaskEnvelope,
 } from "../src/core/task-manager.ts";
 
 function deferred<T>() {
@@ -18,15 +18,11 @@ function deferred<T>() {
 describe("SynchronousTaskManager", () => {
   it("keeps the call pending until its operation completes", async () => {
     const gate = deferred<string>();
-    const states: TaskStateEvent[] = [];
-    const manager = new SynchronousTaskManager({ onTaskState: (event) => states.push(event) });
-    let taskId = "";
+    const manager = new SynchronousTaskManager();
     let settled = false;
 
     const pending = manager.run({
-      taskType: "agent",
-      execute: async (_signal, id) => {
-        taskId = id;
+      execute: async () => {
         return { status: "completed", value: await gate.promise };
       },
     }).then((result) => {
@@ -34,42 +30,12 @@ describe("SynchronousTaskManager", () => {
       return result;
     });
 
-    expect(taskId).toMatch(/^task_[a-f0-9]{32}$/);
     expect(settled).toBe(false);
-    expect(manager.isActive(taskId)).toBe(true);
-    expect(states).toEqual([{
-      version: 1,
-      task_id: taskId,
-      task_type: "agent",
-      status: "accepted",
-    }]);
 
     gate.resolve("done");
     const result = await pending;
 
-    expect(result).toEqual({ taskId, status: "completed", value: "done" });
-    expect(manager.isActive(taskId)).toBe(false);
-    expect(states.at(-1)).toEqual({
-      version: 1,
-      task_id: taskId,
-      task_type: "agent",
-      status: "completed",
-    });
-  });
-
-  it("publishes the terminal event before returning the result", async () => {
-    const order: string[] = [];
-    const manager = new SynchronousTaskManager({
-      onTaskState: (event) => order.push(event.status),
-    });
-
-    await manager.run({
-      taskType: "workflow",
-      execute: async () => ({ status: "completed", value: "result" }),
-    });
-    order.push("returned");
-
-    expect(order).toEqual(["accepted", "completed", "returned"]);
+    expect(result).toEqual({ status: "completed", value: "done" });
   });
 
   it("waits only for active synchronous calls", async () => {
@@ -78,14 +44,12 @@ describe("SynchronousTaskManager", () => {
     const manager = new SynchronousTaskManager();
 
     const firstRun = manager.run({
-      taskType: "agent",
       execute: async () => {
         await first.promise;
         return { status: "completed", value: 1 };
       },
     });
     const secondRun = manager.run({
-      taskType: "workflow",
       execute: async () => {
         await second.promise;
         return { status: "completed", value: 2 };
@@ -105,12 +69,10 @@ describe("SynchronousTaskManager", () => {
   });
 
   it("aborts active calls without closing the manager", async () => {
-    const states: TaskStateEvent[] = [];
-    const manager = new SynchronousTaskManager({ onTaskState: (event) => states.push(event) });
+    const manager = new SynchronousTaskManager();
     const started = deferred<void>();
 
     const aborted = manager.run({
-      taskType: "workflow",
       execute: async (signal) => {
         started.resolve();
         await new Promise<void>((resolve) => {
@@ -125,10 +87,8 @@ describe("SynchronousTaskManager", () => {
 
     expect(abortedResult.status).toBe("failed");
     expect(abortedResult.abortReason).toBe("Pi session tree changed");
-    expect(states.at(-1)?.status).toBe("failed");
 
     const next = await manager.run({
-      taskType: "agent",
       execute: async () => ({ status: "completed", value: "next" }),
     });
     expect(next.status).toBe("completed");
@@ -138,7 +98,6 @@ describe("SynchronousTaskManager", () => {
     const manager = new SynchronousTaskManager();
     const started = deferred<void>();
     const pending = manager.run({
-      taskType: "agent",
       execute: async (signal) => {
         started.resolve();
         await new Promise<void>((resolve) => {
@@ -164,44 +123,26 @@ describe("SynchronousTaskManager", () => {
     await manager.shutdown();
 
     await expect(manager.run({
-      taskType: "agent",
       execute: async () => ({ status: "completed", value: "late" }),
     })).rejects.toThrow("after session shutdown");
   });
 
-  it("clears an unexpectedly rejected operation and publishes failure", async () => {
-    const states: TaskStateEvent[] = [];
-    const manager = new SynchronousTaskManager({ onTaskState: (event) => states.push(event) });
+  it("clears an unexpectedly rejected operation", async () => {
+    const manager = new SynchronousTaskManager();
 
     await expect(manager.run({
-      taskType: "workflow",
       execute: async () => {
         throw new Error("unexpected failure");
       },
     })).rejects.toThrow("unexpected failure");
 
     expect(manager.hasActiveTasks()).toBe(false);
-    expect(states.map((event) => event.status)).toEqual(["accepted", "failed"]);
-  });
-
-  it("isolates task-state observer failures", async () => {
-    const manager = new SynchronousTaskManager({
-      onTaskState: () => {
-        throw new Error("observer failed");
-      },
-    });
-
-    await expect(manager.run({
-      taskType: "agent",
-      execute: async () => ({ status: "completed", value: "ok" }),
-    })).resolves.toMatchObject({ status: "completed", value: "ok" });
   });
 
   it("serializes a terminal envelope as model-visible content", () => {
-    const envelope = {
-      task_id: "task_1",
-      task_type: "workflow" as const,
-      status: "completed" as const,
+    const envelope: WorkflowTerminalTaskEnvelope = {
+      task_type: "workflow",
+      status: "completed",
       name: "audit",
       content: "passed",
     };

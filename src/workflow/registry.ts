@@ -10,7 +10,6 @@ const GLOBAL_WORKFLOWS_DIR = "workflows";
 const PROJECT_WORKFLOWS_DIR = join(".pi", "workflows");
 
 export type SavedWorkflowScope = "global" | "project";
-export type WorkflowPathScope = SavedWorkflowScope | "session";
 
 export interface SavedWorkflow {
   name: string;
@@ -38,19 +37,10 @@ interface WorkflowRoot {
   path: string;
 }
 
-interface WorkflowPathRoot {
-  scope: WorkflowPathScope;
-  path: string;
-}
-
-export interface LoadWorkflowScriptPathOptions extends LoadSavedWorkflowOptions {
-  sessionWorkflowDir?: string;
-}
-
 export interface LoadedWorkflowScriptPath {
   path: string;
   root: string;
-  scope: WorkflowPathScope;
+  scope: SavedWorkflowScope;
   script: string;
   meta: WorkflowMeta;
 }
@@ -72,12 +62,8 @@ export function getSavedWorkflowRoots(options: LoadSavedWorkflowOptions): Workfl
   return roots;
 }
 
-function getWorkflowPathRoots(options: LoadWorkflowScriptPathOptions): WorkflowPathRoot[] {
-  const roots: WorkflowPathRoot[] = [...getSavedWorkflowRoots(options)];
-  if (options.sessionWorkflowDir) {
-    roots.push({ scope: "session", path: options.sessionWorkflowDir });
-  }
-  return roots;
+function getWorkflowPathRoots(options: LoadSavedWorkflowOptions): WorkflowRoot[] {
+  return getSavedWorkflowRoots(options);
 }
 
 export function loadSavedWorkflowRegistry(options: LoadSavedWorkflowOptions): SavedWorkflowRegistry {
@@ -119,7 +105,7 @@ export function listSavedWorkflows(options: LoadSavedWorkflowOptions): SavedWork
 
 export function loadWorkflowScriptPath(
   scriptPath: string,
-  options: LoadWorkflowScriptPathOptions,
+  options: LoadSavedWorkflowOptions,
 ): LoadWorkflowScriptPathResult {
   const warnings: string[] = [];
   if (extname(scriptPath) !== WORKFLOW_FILE_EXTENSION) {
@@ -140,7 +126,7 @@ export function loadWorkflowScriptPath(
 
   const roots = getWorkflowPathRoots(options)
     .map((root) => ({ ...root, realPath: safeRealDirectory(root.path) }))
-    .filter((root): root is WorkflowPathRoot & { realPath: string } => Boolean(root.realPath));
+    .filter((root): root is WorkflowRoot & { realPath: string } => Boolean(root.realPath));
   const root = roots.find((candidate) => isInsideRoot(realPath, candidate.realPath));
   if (!root) {
     return {
@@ -168,7 +154,7 @@ export function loadWorkflowScriptPath(
   try {
     const meta = parseWorkflowScript(script).meta;
     const name = meta.name.trim();
-    if (root.scope !== "session" && !isValidSavedWorkflowName(name)) {
+    if (!isValidSavedWorkflowName(name)) {
       return {
         ok: false,
         message: `Workflow script_path is invalid: meta.name must match ${VALID_SAVED_WORKFLOW_NAME}`,

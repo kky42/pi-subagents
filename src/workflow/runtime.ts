@@ -1,6 +1,5 @@
 import { assertPortableOutputSchema } from "./output-schema.ts";
 import { parseWorkflowScript } from "./script-validation.ts";
-import { fingerprintWorkflowSubagentCall } from "./replay-cache.ts";
 import { createWorkflowScriptWorker, type ParentToWorkerMessage, type WorkerToParentMessage } from "./script-worker.ts";
 import {
   defaultSubagentLabel,
@@ -11,9 +10,9 @@ import {
 } from "./runtime-values.ts";
 import type {
   RunWorkflowOptions,
-  WorkflowSubagentResultEvent,
   WorkflowLimits,
   WorkflowRunResult,
+  WorkflowSubagentResultEvent,
 } from "./types.ts";
 
 export type {
@@ -21,21 +20,18 @@ export type {
   WorkflowSubagentCall,
   WorkflowSubagentResultEvent,
   WorkflowSubagentRunner,
-  WorkflowCachedSubagentResult,
   WorkflowLimits,
   WorkflowMeta,
   WorkflowMetaPhase,
   WorkflowRunResult,
 } from "./types.ts";
 export { parseWorkflowScript } from "./script-validation.ts";
-export { fingerprintWorkflowSubagentCall, hashStableValue } from "./replay-cache.ts";
 
 interface RuntimeState {
   currentPhase?: string;
   logs: string[];
   phases: string[];
   subagentCount: number;
-  resumePrefixActive: boolean;
 }
 
 const DEFAULT_PROFILE = "general-purpose";
@@ -80,9 +76,7 @@ export async function runWorkflow<T = unknown>(
     logs: [],
     phases: [],
     subagentCount: 0,
-    resumePrefixActive: Boolean(options.resumeSubagentResults?.length),
   };
-  const resumeSubagentResults = options.resumeSubagentResults ?? [];
   const limiter = options.limiter;
   const defaultProfile = options.defaultProfile ?? DEFAULT_PROFILE;
   const runtimeAbortController = new AbortController();
@@ -178,18 +172,7 @@ export async function runWorkflow<T = unknown>(
       sessionId: undefined as string | undefined,
       schema: opts.schema,
     };
-    const fingerprint = fingerprintWorkflowSubagentCall(call);
     options.onSubagentQueued?.({ index, label, phase: assignedPhase, profile, sessionKey: opts.sessionKey, prompt: taskPrompt });
-    const cachedResult = state.resumePrefixActive ? resumeSubagentResults[index - 1] : undefined;
-    if (cachedResult?.index === index && cachedResult.fingerprint === fingerprint && !cachedResult.failed) {
-      call.sessionId = cachedResult.sessionId;
-      call.backend = cachedResult.backend;
-      options.onSubagentStart?.({ index, label, phase: assignedPhase, profile, sessionKey: opts.sessionKey, prompt: taskPrompt, cached: true });
-      options.onSubagentEnd?.({ index, label, phase: assignedPhase, result: cachedResult.result, cached: true, failed: false });
-      await recordSubagentResult({ ...call, index, fingerprint, result: cachedResult.result, failed: false, cached: true });
-      return cachedResult.result;
-    }
-    state.resumePrefixActive = false;
 
     // Queue on session_key serialization first, then on the shared global cap.
     // Same-key followers stay queued and do not occupy a global subagent slot
@@ -216,7 +199,7 @@ export async function runWorkflow<T = unknown>(
         return;
       }
       ended = true;
-      options.onSubagentEnd?.({ index, label, phase: assignedPhase, result, failed, cached: false });
+      options.onSubagentEnd?.({ index, label, phase: assignedPhase, result, failed });
     };
     try {
       result = options.serializeSubagent
@@ -235,7 +218,7 @@ export async function runWorkflow<T = unknown>(
       result = null;
     }
     endSubagent();
-    await recordSubagentResult({ ...call, index, fingerprint, result, failed, error: failureMessage, cached: false });
+    await recordSubagentResult({ ...call, index, result, failed, error: failureMessage });
     return result;
   };
 

@@ -21,31 +21,17 @@ export interface WorkflowSubagentCall {
   backend?: string;
   /** Caller-chosen key for a resumable child conversation. */
   sessionKey?: string;
-  /** Backend-native session/thread id captured for workflow replay bookkeeping. */
+  /** Backend-native session/thread id exposed only to terminal result observers. */
   sessionId?: string;
   /** Portable strict JSON Schema for structured output from the child subagent. */
   schema?: unknown;
 }
 
-export interface WorkflowCachedSubagentResult {
+export interface WorkflowSubagentResultEvent extends WorkflowSubagentCall {
   index: number;
-  fingerprint: string;
   result: unknown;
-  failed?: boolean;
+  failed: boolean;
   error?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  profile?: string;
-  backend?: string;
-}
-
-export interface WorkflowSubagentResultEvent extends WorkflowCachedSubagentResult {
-  label: string;
-  phase?: string;
-  profile: string;
-  prompt: string;
-  schema?: unknown;
-  cached: boolean;
 }
 
 /**
@@ -60,7 +46,7 @@ export type WorkflowSubagentRunner = (
 ) => Promise<unknown>;
 
 export interface WorkflowLimits {
-  /** Hard cap on run_agent() calls per workflow run, including cached calls. */
+  /** Hard cap on run_agent() calls per workflow run. */
   maxSubagentCalls: number;
   /** Retained workflow log lines. Further logs are summarized/truncated. */
   maxLogs: number;
@@ -97,10 +83,9 @@ export interface RunWorkflowOptions {
   limits?: Partial<WorkflowLimits>;
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;
-  resumeSubagentResults?: WorkflowCachedSubagentResult[];
   onSubagentQueued?: (event: { index: number; label: string; phase?: string; profile: string; sessionKey?: string; prompt: string }) => void;
-  onSubagentStart?: (event: { index: number; label: string; phase?: string; profile: string; sessionKey?: string; prompt: string; cached?: boolean }) => void;
-  onSubagentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; cached?: boolean; failed?: boolean }) => void;
+  onSubagentStart?: (event: { index: number; label: string; phase?: string; profile: string; sessionKey?: string; prompt: string }) => void;
+  onSubagentEnd?: (event: { index: number; label: string; phase?: string; result: unknown; failed?: boolean }) => void;
   onSubagentResult?: (event: WorkflowSubagentResultEvent) => void | Promise<void>;
 }
 

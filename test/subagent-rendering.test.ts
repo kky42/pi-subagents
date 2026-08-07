@@ -69,7 +69,6 @@ describe("pi-subagent synchronous rendering", () => {
         backend: "pi",
         status: "done",
         result: "auth files found",
-        taskId: "task_done",
         sessionKey: "session_done",
       },
     }, {}, theme, {}));
@@ -81,7 +80,6 @@ describe("pi-subagent synchronous rendering", () => {
         backend: "pi",
         status: "error",
         error: "Provider failed",
-        taskId: "task_failed",
         sessionKey: "session_failed",
       },
     }, {}, theme, {}));
@@ -93,7 +91,6 @@ describe("pi-subagent synchronous rendering", () => {
         backend: "pi",
         status: "aborted",
         error: "User aborted",
-        taskId: "task_aborted",
         sessionKey: "session_aborted",
       },
     }, {}, theme, {}));
@@ -105,7 +102,6 @@ describe("pi-subagent synchronous rendering", () => {
     expect(failed).toContain("error: Provider failed");
     expect(aborted).toContain("⊘ Pi Agent(general-purpose, Stop task)");
     expect(aborted).toContain("aborted: User aborted");
-    expect(completed).not.toContain("task_done");
     expect(completed).not.toContain("session_done");
   });
 
@@ -122,7 +118,6 @@ describe("pi-subagent synchronous rendering", () => {
           profile: "general-purpose",
           backend: "pi",
           status: "queued",
-          taskId: "task_queued",
           sessionKey: "session_queued",
           progress: {
             label: "Wait turn",
@@ -142,7 +137,6 @@ describe("pi-subagent synchronous rendering", () => {
           profile: "code-searcher" as const,
           backend: "pi" as const,
           status: "running" as const,
-          taskId: "task_running",
           sessionKey: "session_running",
           activeCount: 1,
           usage: {
@@ -195,7 +189,6 @@ describe("pi-subagent synchronous rendering", () => {
         backend: "pi" as const,
         status: "running" as const,
         activeCount: 1,
-        taskId: "task_long",
         sessionKey: "session_long",
         progress: {
           label: "Long tool call",

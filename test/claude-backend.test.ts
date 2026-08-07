@@ -228,7 +228,6 @@ console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false
     expect(claudeRun.stdin).toBe("Review the latest diff.");
     expect(result.details).toMatchObject({
       status: "done",
-      taskId: terminal.task_id,
       sessionKey: expect.stringMatching(/^session_/),
     });
     expect(result.usage).toMatchObject({ input: 150, cacheRead: 250, cacheWrite: 350, output: 25 });

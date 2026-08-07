@@ -85,35 +85,57 @@ describe("canonical workflow agent runner", () => {
     });
   });
 
-  it("restores cached session_key bindings before the next live call", async () => {
+  it("continues a caller-keyed conversation within one workflow run", async () => {
     const runner = createWorkflowSubagentRunner({
       profiles: new Map([[profile.name, profile]]),
       ctx: { cwd: "/tmp", modelRegistry: {} } as never,
       timeoutMs: 123,
     });
-    runner.restoreSessionBinding({
-      index: 1, fingerprint: "cached", result: "old", label: "old", prompt: "old",
-      profile: "reviewer", backend: "codex", sessionKey: "worker", sessionId: "session-1", cached: true,
+
+    await runner.runSubagent(
+      { prompt: "first", label: "first", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    );
+    await runner.runSubagent(
+      { prompt: "continue", label: "second", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    );
+    const separateRunner = createWorkflowSubagentRunner({
+      profiles: new Map([[profile.name, profile]]),
+      ctx: { cwd: "/tmp", modelRegistry: {} } as never,
+      timeoutMs: 123,
     });
-    await runner.runSubagent({ prompt: "continue", label: "lane", profile: "reviewer", sessionKey: "worker" }, new AbortController().signal);
-    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1", persistSession: true }));
+    await separateRunner.runSubagent(
+      { prompt: "fresh", label: "third", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    );
+
+    expect(spawn).toHaveBeenNthCalledWith(1, expect.objectContaining({ persistSession: true, sessionId: undefined }));
+    expect(spawn).toHaveBeenNthCalledWith(2, expect.objectContaining({ persistSession: true, sessionId: "new-session" }));
+    expect(spawn).toHaveBeenNthCalledWith(3, expect.objectContaining({ persistSession: true, sessionId: undefined }));
   });
 
-  it("rejects keyed replay when the profile backend changed", async () => {
+  it("rejects reuse of a workflow-local key with another profile or backend", async () => {
+    const claudeProfile: SubagentProfile = {
+      name: "claude-reviewer",
+      description: "review",
+      backend: "claude",
+    };
     const runner = createWorkflowSubagentRunner({
-      profiles: new Map([[profile.name, profile]]),
+      profiles: new Map([[profile.name, profile], [claudeProfile.name, claudeProfile]]),
       ctx: { cwd: "/tmp", modelRegistry: {} } as never,
       timeoutMs: 123,
     });
-    runner.restoreSessionBinding({
-      index: 1, fingerprint: "cached", result: "old", label: "old", prompt: "old",
-      profile: "reviewer", backend: "pi", sessionKey: "worker", sessionId: "session-1", cached: true,
-    });
+
+    await runner.runSubagent(
+      { prompt: "first", label: "first", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    );
     await expect(runner.runSubagent(
-      { prompt: "continue", label: "lane", profile: "reviewer", sessionKey: "worker" },
+      { prompt: "continue", label: "second", profile: "claude-reviewer", sessionKey: "worker" },
       new AbortController().signal,
     )).rejects.toThrow(/already belongs/i);
-    expect(spawn).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("forwards profile model and thinking to the backend spawn", async () => {

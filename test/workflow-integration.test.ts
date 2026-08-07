@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -22,7 +22,6 @@ import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 const TASK_NOTIFICATION_TYPE = "pi-flow-task-notification";
 
 type TerminalWorkflow = {
-  task_id: string;
   task_type: "workflow";
   status: "completed" | "failed";
   name: string;
@@ -68,10 +67,12 @@ async function executeWorkflow(
   const terminal = JSON.parse(result.content[0]?.text ?? "null") as TerminalWorkflow;
 
   expect(result.content).toEqual([{ type: "text", text: JSON.stringify(terminal) }]);
-  expect(Object.keys(terminal).sort()).toEqual(["content", "name", "status", "task_id", "task_type"]);
+  expect(Object.keys(terminal).sort()).toEqual(["content", "name", "status", "task_type"]);
   expect(terminal).toMatchObject({ task_type: "workflow", name: params.name });
-  expect(terminal.task_id).toMatch(/^task_[a-f0-9]+$/);
-  expect(result.details).toMatchObject({ taskId: terminal.task_id, name: terminal.name });
+  expect(result.details).toMatchObject({ name: terminal.name });
+  expect(result.details).not.toHaveProperty("taskId");
+  expect(result.details).not.toHaveProperty("cachedSubagentCount");
+  expect(result.details.subagents.every((subagent) => !Object.hasOwn(subagent, "cached"))).toBe(true);
   if (terminal.status === "completed") {
     expect(result.details.status).toBe("completed");
   } else {
@@ -138,7 +139,6 @@ describe("pi-subagent workflow integration", () => {
 
     const { result, terminal } = await pending;
     expect(terminal).toEqual({
-      task_id: result.details.taskId,
       task_type: "workflow",
       status: "completed",
       name: "inspect",
@@ -225,7 +225,7 @@ return await parallel([
     disposeSession(session);
   });
 
-  it("bounds aggregate workflow snapshots while preserving totals, terminal content, and journals", async () => {
+  it("bounds aggregate workflow snapshots while preserving totals and terminal content", async () => {
     const childCount = 32;
     const { session, registration, model, modelRegistry } = await createSession({ mode: "rpc" });
     const fullResults = Array.from(
@@ -291,15 +291,6 @@ return await parallel(tasks);`;
     expect(terminal.content.length).toBeLessThanOrEqual(MAX_MODEL_VISIBLE_TEXT_CHARS);
     expect(typeof result.details.result).toBe("string");
     expect((result.details.result as string).length).toBeLessThanOrEqual(WORKFLOW_RESULT_PREVIEW_CHARS);
-
-    const entries = readFileSync(
-      join(workflowStateDir(tempDir), `task-${terminal.task_id}.jsonl`),
-      "utf8",
-    ).trim().split("\n").map((line) => JSON.parse(line));
-    expect(entries.filter((entry) => entry.type === "task_log")).toHaveLength(childCount);
-    expect(entries.some((entry) => entry.type === "task_log" && entry.message.includes("LOG_TAIL_31"))).toBe(true);
-    expect(entries.some((entry) => entry.type === "subagent_result" &&
-      typeof entry.result === "string" && entry.result.includes("RESULT_TAIL_31"))).toBe(true);
     disposeSession(session);
   });
 
@@ -441,14 +432,8 @@ return await run_agent('Review this revision:\\n' + draft, { label: 'reviewer-2'
       status: "aborted",
       error: expect.stringMatching(/timed out|timeout/i),
     });
+    expect(result.details.logs.some((line) => /timed out|timeout/i.test(line))).toBe(true);
     expect(Date.now() - started).toBeGreaterThanOrEqual(20);
-    const entries = readFileSync(
-      join(workflowStateDir(tempDir), `task-${terminal.task_id}.jsonl`),
-      "utf8",
-    ).trim().split("\n").map((line) => JSON.parse(line));
-    const subagentResult = entries.find((entry) => entry.type === "subagent_result");
-    expect(subagentResult).toMatchObject({ failed: true, error: expect.stringMatching(/timed out|timeout/i) });
-    expect(entries.find((entry) => entry.type === "task_log")?.message).toMatch(/timed out|timeout/i);
 
     disposeSession(session);
   });
@@ -494,7 +479,7 @@ return await run_agent('Review this revision:\\n' + draft, { label: 'reviewer-2'
     disposeSession(session);
   });
 
-  it("journals explicit logs without changing a successful JSON result", async () => {
+  it("retains explicit logs without changing a successful JSON result", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     registration.setResponses([fauxAssistantMessage("logged child done")]);
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
@@ -504,15 +489,25 @@ return await run_agent('Review this revision:\\n' + draft, { label: 'reviewer-2'
 
     expect(JSON.parse(terminal.content)).toEqual({ reply: "logged child done" });
     expect(result.details.logs).toEqual(["starting review"]);
-    const entries = readFileSync(
-      join(workflowStateDir(tempDir), `task-${terminal.task_id}.jsonl`),
-      "utf8",
-    ).trim().split("\n").map((line) => JSON.parse(line));
-    expect(entries).toContainEqual({ type: "task_log", message: "starting review" });
     disposeSession(session);
   });
 
-  it("runs a saved workflow by name and replays its persisted snapshot", async () => {
+  it("does not persist inline workflow scripts or task journals", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    registration.setResponses([fauxAssistantMessage("done")]);
+    const script = `export const meta = { name: 'ephemeral', description: 'Run without persistence' };\nreturn await run_agent('finish');`;
+
+    await executeWorkflow(
+      session,
+      { name: "ephemeral", script },
+      makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }),
+    );
+
+    expect(existsSync(workflowStateDir(tempDir))).toBe(false);
+    disposeSession(session);
+  });
+
+  it("runs the current saved workflow by name or trusted path without persistence", async () => {
     mkdirSync(join(agentDir, "workflows"), { recursive: true });
     const savedPath = join(agentDir, "workflows", "saved-review.js");
     writeFileSync(
@@ -520,49 +515,30 @@ return await run_agent('Review this revision:\\n' + draft, { label: 'reviewer-2'
       `export const meta = { name: 'saved-review', description: 'Review through a saved workflow' };\nreturn await run_agent('saved workflow task', { label: 'saved' });`,
     );
     const { session, registration, model, modelRegistry } = await createSession();
-    registration.setResponses([fauxAssistantMessage("saved child done")]);
+    registration.setResponses([
+      fauxAssistantMessage("saved child done"),
+      fauxAssistantMessage("changed child done"),
+      fauxAssistantMessage("path child done"),
+    ]);
     const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
 
     const first = await executeWorkflow(session, { name: "saved-review" }, context);
-
-    expect(first.result.details.name).toBe("saved-review");
-    expect(first.terminal).toMatchObject({ status: "completed", name: "saved-review", content: "saved child done" });
+    expect(first.terminal).toMatchObject({ status: "completed", content: "saved child done" });
 
     writeFileSync(
       savedPath,
       `export const meta = { name: 'saved-review', description: 'Edited saved workflow' };\nreturn await run_agent('changed workflow task', { label: 'changed' });`,
     );
-    const replay = await executeWorkflow(
-      session,
-      { name: "saved-review", resume_from_task_id: first.terminal.task_id },
-      context,
-    );
-    expect(replay.result.details.name).toBe("saved-review");
-    expect(replay.result.details.cachedSubagentCount).toBe(1);
-    expect(replay.terminal).toMatchObject({ status: "completed", name: "saved-review", content: "saved child done" });
+    const second = await executeWorkflow(session, { name: "saved-review" }, context);
+
+    expect(second.result.details.name).toBe("saved-review");
+    expect(second.terminal).toMatchObject({ status: "completed", name: "saved-review", content: "changed child done" });
+
+    const byPath = await executeWorkflow(session, { name: "saved-review", script_path: savedPath }, context);
+    expect(byPath.terminal).toMatchObject({ status: "completed", content: "path child done" });
+    expect(existsSync(workflowStateDir(tempDir))).toBe(false);
     expect(registration.getPendingResponseCount()).toBe(0);
 
-    disposeSession(session);
-  });
-
-  it("rejects replay when name does not match the task journal", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
-    registration.setResponses([fauxAssistantMessage("original child done")]);
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
-    const script = `export const meta = { name: 'journal_name', description: 'Replay name guard' };\nreturn await run_agent('run once');`;
-    const first = await executeWorkflow(session, { name: "journal_name", script }, context);
-
-    const mismatch = await executeWorkflow(
-      session,
-      { name: "wrong_name", resume_from_task_id: first.terminal.task_id },
-      context,
-    );
-
-    expect(mismatch.terminal.status).toBe("failed");
-    expect(mismatch.terminal.content).toContain(
-      `task ${first.terminal.task_id} belongs to workflow "journal_name", not "wrong_name"`,
-    );
-    expect(registration.getPendingResponseCount()).toBe(0);
     disposeSession(session);
   });
 
@@ -583,160 +559,6 @@ return await run_agent('Review this revision:\\n' + draft, { label: 'reviewer-2'
     expect(terminal.status).toBe("failed");
     expect(terminal.content).toContain('Unknown saved workflow "missing-flow"');
     expect(terminal.content).toContain("known-flow");
-
-    disposeSession(session);
-  });
-
-  it("rejects resume_from_task_id with an inline script", async () => {
-    const { session, model, modelRegistry } = await createSession();
-    const script = `export const meta = { name: 'resume_inline', description: 'resume misuse' };\nreturn await run_agent('x');`;
-
-    const { terminal } = await executeWorkflow(
-      session,
-      { name: "resume_inline", script, resume_from_task_id: "task_previous" },
-      makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true }),
-    );
-
-    expect(terminal.status).toBe("failed");
-    expect(terminal.content).toContain("resume_from_task_id may only be used with name and optional script_path");
-
-    disposeSession(session);
-  });
-
-  it("rejects replay while the original workflow task is still running", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    setContextRoutingResponses(registration, async () => {
-      await gate;
-      return fauxAssistantMessage("original done");
-    });
-    const script = `export const meta = { name: 'active_replay', description: 'Active replay guard' };\nreturn await run_agent('wait', { label: 'worker' });`;
-
-    const firstPending = executeWorkflow(session, { name: "active_replay", script }, context);
-    const firstTaskId = await waitUntil(() => {
-      const stateDir = workflowStateDir(tempDir);
-      if (!existsSync(stateDir)) return undefined;
-      const journalName = readdirSync(stateDir).find((name) => /^task-task_[a-f0-9]+\.jsonl$/.test(name));
-      return journalName?.slice("task-".length, -".jsonl".length);
-    });
-
-    const replay = await executeWorkflow(
-      session,
-      { name: "active_replay", resume_from_task_id: firstTaskId },
-      context,
-    );
-    release();
-    const first = await firstPending;
-
-    expect(replay.terminal).toMatchObject({ status: "failed" });
-    expect(replay.terminal.content).toContain(`task ${firstTaskId} is still running`);
-    expect(replay.terminal.task_id).not.toBe(firstTaskId);
-    expect(first.terminal).toMatchObject({ task_id: firstTaskId, status: "completed", content: "original done" });
-    disposeSession(session);
-  });
-
-  it("replays an orphaned running journal when no live task owns it", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
-    registration.setResponses([fauxAssistantMessage("journaled result")]);
-    const script = `export const meta = { name: 'orphan_replay', description: 'Replay an orphaned journal' };\nreturn await run_agent('run once', { label: 'worker' });`;
-
-    const first = await executeWorkflow(session, { name: "orphan_replay", script }, context);
-    const journalPath = join(workflowStateDir(tempDir), `task-${first.terminal.task_id}.jsonl`);
-    const runningJournal = readFileSync(journalPath, "utf8")
-      .split("\n")
-      .filter((line) => !line.includes('"type":"task_complete"'))
-      .join("\n");
-    writeFileSync(journalPath, runningJournal);
-
-    const replay = await executeWorkflow(
-      session,
-      { name: "orphan_replay", resume_from_task_id: first.terminal.task_id },
-      context,
-    );
-
-    expect(replay.terminal).toMatchObject({ status: "completed", content: "journaled result" });
-    expect(replay.result.details.cachedSubagentCount).toBe(1);
-    expect(registration.getPendingResponseCount()).toBe(0);
-    disposeSession(session);
-  });
-
-  it("rejects implicit replay when the persisted script snapshot changed", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
-    registration.setResponses([fauxAssistantMessage("original result")]);
-    const script = `export const meta = { name: 'immutable_replay', description: 'Immutable replay snapshot' };\nreturn await run_agent('original prompt', { label: 'worker' });`;
-
-    const first = await executeWorkflow(session, { name: "immutable_replay", script }, context);
-    const stateDir = workflowStateDir(tempDir);
-    const scriptPath = join(stateDir, readdirSync(stateDir).find((name) => name.endsWith(".js")) ?? "");
-    writeFileSync(scriptPath, readFileSync(scriptPath, "utf8").replace("original prompt", "mutated prompt"));
-
-    const replay = await executeWorkflow(
-      session,
-      { name: "immutable_replay", resume_from_task_id: first.terminal.task_id },
-      context,
-    );
-
-    expect(replay.terminal.status).toBe("failed");
-    expect(replay.terminal.content).toContain(`persisted script for task ${first.terminal.task_id} has changed`);
-    expect(registration.getPendingResponseCount()).toBe(0);
-    disposeSession(session);
-  });
-
-  it("persists inline scripts and replays an edited script_path by task ID", async () => {
-    const { session, registration, model, modelRegistry } = await createSession();
-    const context = makeExecutionContext({ hasUI: false, model, modelRegistry, persistedSession: true });
-    registration.setResponses([fauxAssistantMessage("first v1"), fauxAssistantMessage("second v1")]);
-
-    const script = `export const meta = { name: 'resume_flow', description: 'Resume test flow' };
-const a = await run_agent('first prompt', { label: 'first' });
-const b = await run_agent('second prompt', { label: 'second' });
-return [a, b];`;
-    const first = await executeWorkflow(session, { name: "resume_flow", script }, context);
-    expect(JSON.parse(first.terminal.content)).toEqual(["first v1", "second v1"]);
-
-    const stateDir = workflowStateDir(tempDir);
-    const scriptPath = join(stateDir, readdirSync(stateDir).find((name) => name.endsWith(".js")) ?? "");
-    expect(existsSync(scriptPath)).toBe(true);
-    expect(existsSync(join(stateDir, `task-${first.terminal.task_id}.jsonl`))).toBe(true);
-
-    const unchanged = await executeWorkflow(
-      session,
-      { name: "resume_flow", resume_from_task_id: first.terminal.task_id },
-      context,
-    );
-    expect(unchanged.terminal.status).toBe("completed");
-    expect(JSON.parse(unchanged.terminal.content)).toEqual(["first v1", "second v1"]);
-    expect(unchanged.result.details.cachedSubagentCount).toBe(2);
-
-    writeFileSync(scriptPath, readFileSync(scriptPath, "utf8").replace("second prompt", "second prompt changed"));
-    registration.setResponses([fauxAssistantMessage("second v2")]);
-
-    const second = await executeWorkflow(
-      session,
-      { name: "resume_flow", script_path: scriptPath, resume_from_task_id: first.terminal.task_id },
-      context,
-    );
-
-    expect(second.terminal.status).toBe("completed");
-    expect(JSON.parse(second.terminal.content)).toEqual(["first v1", "second v2"]);
-    expect(second.result.details.cachedSubagentCount).toBe(1);
-    expect(second.terminal.task_id).not.toBe(first.terminal.task_id);
-    expect(registration.getPendingResponseCount()).toBe(0);
-
-    writeFileSync(scriptPath, readFileSync(scriptPath, "utf8").replace("resume_flow", "different_flow"));
-    const pathMismatch = await executeWorkflow(
-      session,
-      { name: "resume_flow", script_path: scriptPath, resume_from_task_id: first.terminal.task_id },
-      context,
-    );
-    expect(pathMismatch.terminal.status).toBe("failed");
-    expect(pathMismatch.terminal.content).toContain(
-      'Workflow name "resume_flow" does not match script meta.name "different_flow"',
-    );
 
     disposeSession(session);
   });

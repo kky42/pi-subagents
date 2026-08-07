@@ -224,9 +224,9 @@ function isAstNode(value: unknown): value is AnyNode {
   return !!value && typeof value === "object" && typeof (value as AnyNode).type === "string";
 }
 
-// Determinism is the only invariant this scan enforces. Resume-by-replay assumes
-// a cooperative script reproduces the same run_agent() calls from the same inputs,
-// so references to the two common host sources of nondeterminism are rejected:
+// Determinism is the only invariant this scan enforces. Workflow scripts should
+// reproduce the same orchestration from the same inputs, so references to the two
+// common host sources of nondeterminism are rejected:
 // Date APIs (`new Date()`, `Date()`, `Date.now`, members, and simple aliases)
 // and `Math.random` (including static/computed member access plus simple object
 // aliases and destructuring). This is not a security sandbox; workflows are

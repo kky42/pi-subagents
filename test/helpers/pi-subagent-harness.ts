@@ -31,7 +31,6 @@ export const packageRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url
 export type FauxModelDef = { id: string; name: string; reasoning: boolean };
 export type TestFauxProvider = FauxProviderHandle & { unregister: () => void };
 export type TaskEnvelope = {
-  task_id: string;
   task_type: "agent" | "workflow";
   status: "completed" | "failed";
   label?: string;
@@ -276,13 +275,12 @@ export function setupPiSubagentTestHarness(onSetup?: (state: HarnessState) => vo
     ));
   }
 
-  function taskNotifications(session: { messages: readonly unknown[] }, taskId?: string): TaskEnvelope[] {
+  function taskNotifications(session: { messages: readonly unknown[] }): TaskEnvelope[] {
     return session.messages
       .filter((message): message is { role: string; customType?: string; details?: unknown } =>
         typeof message === "object" && message !== null && "role" in message)
       .filter((message) => message.role === "custom" && message.customType === "pi-flow-task-notification")
-      .map((message) => message.details as TaskEnvelope)
-      .filter((envelope) => taskId === undefined || envelope.task_id === taskId);
+      .map((message) => message.details as TaskEnvelope);
   }
 
   async function executeSubagentTask(

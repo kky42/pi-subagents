@@ -377,10 +377,7 @@ function analyzeJsonl(text) {
               ? "inline"
               : typeof input.script_path === "string"
                 ? "path"
-                : typeof input.resume_from_task_id === "string"
-                  ? "replay"
-                  : "saved",
-            replayFromTaskId: typeof input.resume_from_task_id === "string" ? input.resume_from_task_id : undefined,
+                : "saved",
             pipeline: script.includes("pipeline("),
             parallel: script.includes("parallel("),
             schema: /\bschema\s*:/.test(script),
@@ -399,13 +396,11 @@ function analyzeJsonl(text) {
       if (
         envelope?.task_type === taskType
         && (envelope.status === "completed" || envelope.status === "failed")
-        && typeof envelope.task_id === "string"
       ) {
         const call = delegationCallsById.get(message.toolCallId);
         const details = parseEnvelope(message.details);
         analysis.terminalToolResults.push({
           toolCallId: message.toolCallId,
-          taskId: envelope.task_id,
           taskType,
           status: envelope.status,
           sessionKey: taskType === "agent" && typeof envelope.session_key === "string"
@@ -413,7 +408,6 @@ function analyzeJsonl(text) {
             : undefined,
           envelope,
           detailsStatus: typeof details?.status === "string" ? details.status : undefined,
-          detailsTaskId: typeof details?.taskId === "string" ? details.taskId : undefined,
           detailsSessionKey: taskType === "agent" && typeof details?.sessionKey === "string"
             ? details.sessionKey
             : undefined,
@@ -619,7 +613,6 @@ function summarizedAnalysis(analysis) {
         : "different";
   const tasks = analysis.terminalToolResults.map((terminal) => ({
     toolCallId: terminal.toolCallId,
-    taskId: terminal.taskId,
     taskType: terminal.taskType,
     status: terminal.status,
     toolCallRecordAtMs: terminal.toolCallRecordAtMs ?? null,
@@ -627,8 +620,6 @@ function summarizedAnalysis(analysis) {
     toolRecordIntervalMs: terminal.toolRecordIntervalMs ?? null,
     usage: terminal.usage ?? null,
     detailsStatus: terminal.detailsStatus ?? null,
-    detailsTaskId: terminal.detailsTaskId ?? null,
-    detailsTaskIdMatches: terminal.detailsTaskId === terminal.taskId,
     envelope: terminal.envelope,
     ...(terminal.taskType === "agent"
       ? {

@@ -39,7 +39,6 @@ import { renderSubagentNode } from "./core/subagent-render.ts";
 import { normalizeProfileName, normalizeSubagentLabel } from "./core/subagent-values.ts";
 import {
   SynchronousTaskManager,
-  TASK_STATE_EVENT,
   taskEnvelopeContent,
   type AgentTerminalTaskEnvelope,
 } from "./core/task-manager.ts";
@@ -103,7 +102,6 @@ interface DelegationState {
 }
 
 interface ActiveAgentRun {
-  taskId: string;
   sessionKey: string;
   progress: SubagentProgressNode;
   usage?: SubagentUsage;
@@ -111,7 +109,6 @@ interface ActiveAgentRun {
 }
 
 interface RunAgentToolDetails extends SubagentToolDetails {
-  taskId: string;
   sessionKey: string;
   usage?: SubagentUsage;
 }
@@ -226,7 +223,6 @@ function emitRunUpdate(state: DelegationState, run: ActiveAgentRun): void {
     content: [{ type: "text", text: `Subagent "${details.label}" (${details.profile}) ${details.status}.` }],
     details: {
       ...details,
-      taskId: run.taskId,
       sessionKey: run.sessionKey,
       ...(usage ? { usage } : {}),
     },
@@ -268,11 +264,10 @@ async function executeAgentCall(params: {
   profileName: string;
   sessionKey: string;
   signal: AbortSignal;
-  taskId: string;
   onUpdate: ((result: AgentToolResult<RunAgentToolDetails>) => void) | undefined;
   ctx: ExtensionContext;
 }): Promise<SubagentToolResult> {
-  const { state, options, toolCallId, label, profileName, sessionKey, signal, taskId, onUpdate, ctx } = params;
+  const { state, options, toolCallId, label, profileName, sessionKey, signal, onUpdate, ctx } = params;
   const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
   const profile = profiles.get(profileName);
   if (!profile) {
@@ -297,7 +292,6 @@ async function executeAgentCall(params: {
 
   const run: ActiveAgentRun | undefined = onUpdate
     ? {
-        taskId,
         sessionKey,
         progress: createProgressNode(label, profileName, "queued", profile.backend),
         onUpdate,
@@ -423,9 +417,8 @@ function createRunAgentTool(
       const sessionKey = normalizeSessionKey(params.session_key) ?? createSessionKey();
       const label = normalizeSubagentLabel(params.label) ?? params.label.trim();
       const managed = await options.getTaskManager().run({
-        taskType: "agent",
         signal,
-        execute: async (taskSignal, taskId) => {
+        execute: async (taskSignal) => {
           const result = label
             ? await executeAgentCall({
                 state,
@@ -436,7 +429,6 @@ function createRunAgentTool(
                 profileName,
                 sessionKey,
                 signal: taskSignal,
-                taskId,
                 onUpdate,
                 ctx,
               })
@@ -471,7 +463,6 @@ function createRunAgentTool(
         result = { ...result, details };
       }
       const envelope: AgentTerminalTaskEnvelope = {
-        task_id: managed.taskId,
         task_type: "agent",
         status: managed.status,
         session_key: sessionKey,
@@ -485,7 +476,6 @@ function createRunAgentTool(
         content: taskEnvelopeContent(envelope),
         details: {
           ...subagentDisplayDetails(details),
-          taskId: managed.taskId,
           sessionKey,
           ...(result.usage ? { usage: { ...result.usage, cost: { ...result.usage.cost } } } : {}),
         },
@@ -562,11 +552,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       activeRuns: new Map(),
       frame: 0,
     };
-    const createTaskManager = () => new SynchronousTaskManager({
-      onTaskState: (event) => {
-        pi.events.emit(TASK_STATE_EVENT, event);
-      },
-    });
+    const createTaskManager = () => new SynchronousTaskManager();
     let taskManager = createTaskManager();
     let taskManagerNeedsReset = false;
     const getTaskManager = () => taskManager;
