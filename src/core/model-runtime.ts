@@ -29,7 +29,7 @@ export async function createChildModelRuntime(
   if (modelRegistry.getProviderAuthStatus(model.provider).source === "runtime") {
     const auth = await modelRegistry.getProviderAuth(model.provider);
     if (auth?.auth.apiKey) {
-      await modelRuntime.setRuntimeApiKey(model.provider, auth.auth.apiKey, { allowNetwork: false });
+      await modelRuntime.setRuntimeApiKey(model.provider, auth.auth.apiKey);
     }
   }
 

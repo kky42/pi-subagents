@@ -4,12 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentTerminalTaskEnvelope } from "../src/core/task-manager.ts";
 import {
   createProgressEmitter,
+  createProgressNode,
   MAX_ACTIVITY_LINE_CHARS,
   MAX_ACTIVITY_LINES,
   MAX_MODEL_VISIBLE_TEXT_CHARS,
   MAX_PROGRESS_METADATA_CHARS,
   MAX_PROGRESS_RESULT_CHARS,
   MAX_PROGRESS_UPDATE_JSON_CHARS,
+  updateProgressFromEvent,
 } from "../src/core/progress.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
@@ -79,6 +81,52 @@ describe("direct subagent progress payloads", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("pi-subagent progress event parsing", () => {
+  it("extracts streaming assistant text from in-process message_update events", () => {
+    // Pi 0.84 strips cumulative fields only in the JSON/RPC encoding; in-process
+    // session events still carry assistantMessageEvent.partial and message.
+    const progress = createProgressNode("Event child", "general-purpose", "running", "pi");
+
+    updateProgressFromEvent(progress, {
+      type: "message_start",
+      message: { role: "assistant", content: [] },
+    } as never);
+    updateProgressFromEvent(progress, {
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "partial text" }] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: " partial text",
+        partial: { role: "assistant", content: [{ type: "text", text: "partial text" }] },
+      },
+    } as never);
+    expect(progress.activity.at(-1)).toBe("partial text");
+    updateProgressFromEvent(progress, {
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "final text" }] },
+    } as never);
+
+    expect(progress.activity.at(-1)).toBe("final text");
+  });
+
+  it("falls back to the event message when the streaming event is terminal", () => {
+    const progress = createProgressNode("Event child", "general-purpose", "running", "pi");
+
+    updateProgressFromEvent(progress, {
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "terminal text" }] },
+      assistantMessageEvent: {
+        type: "done",
+        reason: "stop",
+        message: { role: "assistant", content: [{ type: "text", text: "terminal text" }] },
+      },
+    } as never);
+
+    expect(progress.activity.at(-1)).toBe("terminal text");
   });
 });
 

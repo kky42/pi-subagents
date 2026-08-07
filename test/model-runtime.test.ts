@@ -54,7 +54,7 @@ describe("child model runtime", () => {
       const model = parentRuntime.getModels("anthropic")[0];
       expect(model).toBeDefined();
       if (!model) return;
-      await parentRuntime.setRuntimeApiKey(model.provider, "runtime-secret", { allowNetwork: false });
+      await parentRuntime.setRuntimeApiKey(model.provider, "runtime-secret");
 
       const childRuntime = await createChildModelRuntime(registry, model, agentDir);
 

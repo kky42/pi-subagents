@@ -186,7 +186,7 @@ describe("pi-subagent tool contract", () => {
     });
     const modelRegistry = new ModelRegistry(modelRuntime);
     const registration = installFauxProvider(modelRegistry, faux);
-    await modelRuntime.setRuntimeApiKey(model.provider, "test-api-key", { allowNetwork: false });
+    await modelRuntime.setRuntimeApiKey(model.provider, "test-api-key");
     registrations.push(registration);
     const settingsManager = SettingsManager.inMemory({});
     const sessionManager = SessionManager.inMemory(cwd);
