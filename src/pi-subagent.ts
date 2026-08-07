@@ -86,7 +86,7 @@ const runAgentToolParameters = Type.Object({
   session_key: Type.Optional(
     Type.String({
       description:
-        "Prior run_agent session_key to continue. Omit to start a new child conversation; the effective key is returned.",
+        "Prior run_agent session_key to continue. Omit to start a new child conversation; the effective key is returned once the child starts.",
     }),
   ),
 }, { additionalProperties: false });
@@ -109,7 +109,7 @@ interface ActiveAgentRun {
 }
 
 interface RunAgentToolDetails extends SubagentToolDetails {
-  sessionKey: string;
+  sessionKey?: string;
   usage?: SubagentUsage;
 }
 
@@ -255,6 +255,12 @@ function failedSubagentResult(
   });
 }
 
+interface AgentCallOutcome {
+  result: SubagentToolResult;
+  /** True when a resumable child session was created for this call; the session key is only contractually valid then. */
+  sessionStarted: boolean;
+}
+
 async function executeAgentCall(params: {
   state: DelegationState;
   options: CreateRunAgentToolOptions;
@@ -266,28 +272,34 @@ async function executeAgentCall(params: {
   signal: AbortSignal;
   onUpdate: ((result: AgentToolResult<RunAgentToolDetails>) => void) | undefined;
   ctx: ExtensionContext;
-}): Promise<SubagentToolResult> {
+}): Promise<AgentCallOutcome> {
   const { state, options, toolCallId, label, profileName, sessionKey, signal, onUpdate, ctx } = params;
   const profiles = filterProfilesForModelRegistry(getSubagentProfiles(getAgentDir()), ctx.modelRegistry);
   const profile = profiles.get(profileName);
   if (!profile) {
-    return failedSubagentResult(
-      label,
-      profileName,
-      undefined,
-      `Unknown profile "${profileName}". Available profiles: ${formatProfileNames(profiles)}.`,
-      signal,
-    );
+    return {
+      sessionStarted: false,
+      result: failedSubagentResult(
+        label,
+        profileName,
+        undefined,
+        `Unknown profile "${profileName}". Available profiles: ${formatProfileNames(profiles)}.`,
+        signal,
+      ),
+    };
   }
   const model = resolveProfileModel(profile, ctx);
   if (usesPiBackend(profile) && !model) {
-    return failedSubagentResult(
-      label,
-      profileName,
-      profile.backend,
-      profile.model ? `Profile model not found: ${profile.model}` : "No model is selected",
-      signal,
-    );
+    return {
+      sessionStarted: false,
+      result: failedSubagentResult(
+        label,
+        profileName,
+        profile.backend,
+        profile.model ? `Profile model not found: ${profile.model}` : "No model is selected",
+        signal,
+      ),
+    };
   }
 
   const run: ActiveAgentRun | undefined = onUpdate
@@ -303,9 +315,9 @@ async function executeAgentCall(params: {
   }
 
   try {
-    let result: SubagentToolResult;
+    let outcome: AgentCallOutcome;
     try {
-      result = await state.sessionKeyLocks.run(sessionKey, async () => {
+      outcome = await state.sessionKeyLocks.run(sessionKey, async () => {
         signal.throwIfAborted();
         const binding = getSessionKeyBinding(state, ctx, sessionKey);
         if (binding) {
@@ -355,22 +367,28 @@ async function executeAgentCall(params: {
             });
           }
           if (details.status === "done" && !details.sessionId) {
-            return textResult(`Subagent "${label}" (${profileName}) failed: Subagent completed without a resumable session ID`, {
-              ...details,
-              status: "error",
-              error: "Subagent completed without a resumable session ID",
-            }, spawned.usage);
+            return {
+              sessionStarted: false,
+              result: textResult(`Subagent "${label}" (${profileName}) failed: Subagent completed without a resumable session ID`, {
+                ...details,
+                status: "error",
+                error: "Subagent completed without a resumable session ID",
+              }, spawned.usage),
+            };
           }
-          return spawned;
+          return { sessionStarted: Boolean(details.sessionId), result: spawned };
         } finally {
           release();
         }
       }, signal);
     } catch (error) {
-      result = failedSubagentResult(label, profileName, profile.backend, error, signal);
+      return {
+        sessionStarted: false,
+        result: failedSubagentResult(label, profileName, profile.backend, error, signal),
+      };
     }
 
-    const details = { ...(result.details as SubagentToolDetails) };
+    const details = { ...(outcome.result.details as SubagentToolDetails) };
     delete details.sessionId;
     if (run) {
       if (details.progress) {
@@ -383,12 +401,12 @@ async function executeAgentCall(params: {
         run.progress.endedAt = Date.now();
         details.progress = run.progress;
       }
-      run.usage = result.usage;
+      run.usage = outcome.result.usage;
       details.activeCount = runningRunCount(state);
       details.frame = state.frame;
       broadcastRunUpdates(state);
     }
-    return { ...result, details };
+    return { result: { ...outcome.result, details }, sessionStarted: outcome.sessionStarted };
   } finally {
     if (run) {
       state.activeRuns.delete(toolCallId);
@@ -419,7 +437,7 @@ function createRunAgentTool(
       const managed = await options.getTaskManager().run({
         signal,
         execute: async (taskSignal) => {
-          const result = label
+          const outcome = label
             ? await executeAgentCall({
                 state,
                 options,
@@ -432,16 +450,19 @@ function createRunAgentTool(
                 onUpdate,
                 ctx,
               })
-            : failedSubagentResult("unnamed", profileName, undefined, "Agent label must contain non-whitespace characters", taskSignal);
-          const details = result.details as SubagentToolDetails;
+            : {
+                sessionStarted: false,
+                result: failedSubagentResult("unnamed", profileName, undefined, "Agent label must contain non-whitespace characters", taskSignal),
+              };
+          const details = outcome.result.details as SubagentToolDetails;
           return {
             status: details.status === "done" ? "completed" : "failed",
-            value: result,
+            value: outcome,
           };
         },
       });
 
-      let result = managed.value;
+      let { result, sessionStarted } = managed.value;
       let details = result.details as SubagentToolDetails;
       if (managed.abortReason && (details.status === "done" || details.status === "aborted")) {
         details = {
@@ -465,7 +486,7 @@ function createRunAgentTool(
       const envelope: AgentTerminalTaskEnvelope = {
         task_type: "agent",
         status: managed.status,
-        session_key: sessionKey,
+        ...(sessionStarted ? { session_key: sessionKey } : {}),
         label: label || "unnamed",
         content: managed.status === "completed"
           ? boundedProgressText(details.result ?? "", MAX_MODEL_VISIBLE_TEXT_CHARS)
@@ -476,7 +497,7 @@ function createRunAgentTool(
         content: taskEnvelopeContent(envelope),
         details: {
           ...subagentDisplayDetails(details),
-          sessionKey,
+          ...(sessionStarted ? { sessionKey } : {}),
           ...(result.usage ? { usage: { ...result.usage, cost: { ...result.usage.cost } } } : {}),
         },
       };

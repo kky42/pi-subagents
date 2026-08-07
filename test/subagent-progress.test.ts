@@ -268,9 +268,10 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     expect(result.details.error).toBeTruthy();
     expect(terminal).toMatchObject({
       status: "failed",
-      session_key: result.details.sessionKey,
       label: "Cancelled child",
     });
+    expect(terminal.session_key).toBeUndefined();
+    expect(result.details.sessionKey).toBeUndefined();
     expect(childContext).toBeUndefined();
     expect(customTaskNotifications(session)).toEqual([]);
     disposeSession(session);

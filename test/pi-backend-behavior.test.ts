@@ -245,6 +245,8 @@ Custom Code Searcher Role`);
       status: "failed",
       content: "rate limit exceeded (429)",
     });
+    expect(terminal.session_key).toMatch(/^session_/);
+    expect(result.details.sessionKey).toMatch(/^session_/);
     expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });
@@ -264,6 +266,50 @@ Custom Code Searcher Role`);
     expect(result.details.status).toBe("error");
     expect(terminal.status).toBe("failed");
     expect(terminal.content).toContain("Unknown profile");
+    expect(terminal.session_key).toBeUndefined();
+    expect(result.details.sessionKey).toBeUndefined();
+    expect(taskNotifications(session)).toEqual([]);
+    disposeSession(session);
+  });
+
+  it("omits the session key when the label is blank", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("run_agent") as any;
+    const result = await tool.execute(
+      "blank",
+      { label: "   ", prompt: "Search." },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model, modelRegistry }),
+    );
+    const terminal = JSON.parse(result.content[0].text);
+
+    expect(result.details.status).toBe("error");
+    expect(terminal.status).toBe("failed");
+    expect(terminal.content).toContain("non-whitespace");
+    expect(terminal.session_key).toBeUndefined();
+    expect(result.details.sessionKey).toBeUndefined();
+    expect(taskNotifications(session)).toEqual([]);
+    disposeSession(session);
+  });
+
+  it("omits the session key when no model is selected", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const tool = session.getToolDefinition("run_agent") as any;
+    const result = await tool.execute(
+      "no-model",
+      { label: "Search", prompt: "Search." },
+      undefined,
+      undefined,
+      makeExecutionContext({ hasUI: false, model: undefined as never, modelRegistry }),
+    );
+    const terminal = JSON.parse(result.content[0].text);
+
+    expect(result.details.status).toBe("error");
+    expect(terminal.status).toBe("failed");
+    expect(terminal.content).toContain("No model is selected");
+    expect(terminal.session_key).toBeUndefined();
+    expect(result.details.sessionKey).toBeUndefined();
     expect(taskNotifications(session)).toEqual([]);
     disposeSession(session);
   });

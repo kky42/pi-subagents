@@ -1,7 +1,8 @@
 export interface AgentTerminalTaskEnvelope {
   task_type: "agent";
   status: "completed" | "failed";
-  session_key: string;
+  /** Effective key for resuming the child; present only when a child session actually started. */
+  session_key?: string;
   label: string;
   content: string;
 }
