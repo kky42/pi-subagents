@@ -155,7 +155,9 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     disposeSession(session);
   });
 
-  it("bounds model-visible terminal text while keeping TUI details bounded", async () => {
+  // The 76KB faux result flows through the full spawn path with bounded progress serialization;
+  // CI runners (Node 22 matrix job) exceeded the 5s default timeout, so keep 15s of headroom.
+  it("bounds model-visible terminal text while keeping TUI details bounded", { timeout: 15_000 }, async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     const fullResult = `${"large direct result ".repeat(4_000)}DIRECT_RESULT_TAIL`;
     setContextRoutingResponses(registration, async () => fauxAssistantMessage(fullResult));
