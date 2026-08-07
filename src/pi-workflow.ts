@@ -10,6 +10,11 @@ import {
 import { Container, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import type { ConcurrencyLimiter } from "./core/concurrency.ts";
+import {
+  publishFlowStatus,
+  recordFlowUsage,
+  type FlowStatusState,
+} from "./core/flow-status.ts";
 import { filterProfilesForModelRegistry } from "./core/model.ts";
 import { MAX_MODEL_VISIBLE_TEXT_CHARS } from "./core/progress.ts";
 import {
@@ -17,7 +22,7 @@ import {
   isCompletedSubagentStatus,
   renderSubagentNode,
 } from "./core/subagent-render.ts";
-import { SPINNER_INTERVAL_MS } from "./core/spinner.ts";
+import { createSpinnerHeartbeat } from "./core/spinner.ts";
 import {
   SynchronousTaskManager,
   taskEnvelopeContent,
@@ -133,6 +138,7 @@ export interface CreateRunWorkflowToolOptions {
   getLimiter: () => ConcurrencyLimiter;
   getThinkingLevel: () => ReturnType<ExtensionAPI["getThinkingLevel"]>;
   getSubagentTimeoutMs: () => number;
+  getFlowStatus: () => FlowStatusState;
 }
 
 interface WorkflowExecutionResult {
@@ -618,13 +624,14 @@ function ensureSubagent(
 
 async function executeWorkflowCall(params: {
   options: CreateRunWorkflowToolOptions;
+  toolCallId: string;
   name: string;
   toolParams: WorkflowToolParams;
   signal: AbortSignal;
   onUpdate: ((result: ReturnType<typeof workflowSnapshotResult>) => void) | undefined;
   ctx: ExtensionContext;
 }): Promise<WorkflowExecutionResult> {
-  const { options, name, toolParams, signal, onUpdate, ctx } = params;
+  const { options, toolCallId, name, toolParams, signal, onUpdate, ctx } = params;
   const snapshot: WorkflowToolDetails = {
     name,
     status: "running",
@@ -638,11 +645,16 @@ async function executeWorkflowCall(params: {
     logs: [],
   };
   const emit = () => {
-    if (!onUpdate) return;
     const aggregate = aggregateWorkflowUsage(snapshot.subagents);
     const details = boundedWorkflowSnapshot(snapshot, aggregate.telemetry);
     const displayName = boundedTextPreview(name, WORKFLOW_METADATA_PREVIEW_CHARS);
-    onUpdate(workflowSnapshotResult(`Workflow "${displayName}" running.`, details, aggregate.usage, true));
+    if (onUpdate) {
+      onUpdate(workflowSnapshotResult(`Workflow "${displayName}" running.`, details, aggregate.usage, true));
+    }
+    if (aggregate.usage) {
+      recordFlowUsage(options.getFlowStatus(), toolCallId, aggregate.usage, aggregate.telemetry);
+      publishFlowStatus(ctx, options.getFlowStatus());
+    }
   };
 
   signal.throwIfAborted();
@@ -689,15 +701,16 @@ async function executeWorkflowCall(params: {
     },
   });
 
-  const heartbeat = ctx.mode === "tui" && onUpdate
-    ? setInterval(() => {
-        if (snapshot.status === "running" && snapshot.subagents.some((subagent) => isActiveSubagentStatus(subagent.status))) {
+  const spinnerHeartbeat = ctx.mode === "tui" && onUpdate
+    ? createSpinnerHeartbeat(
+        () => snapshot.status === "running" && snapshot.subagents.some((subagent) => isActiveSubagentStatus(subagent.status)),
+        () => {
           snapshot.frame = (snapshot.frame ?? 0) + 1;
           emit();
-        }
-      }, SPINNER_INTERVAL_MS)
+        },
+      )
     : undefined;
-  heartbeat?.unref?.();
+  spinnerHeartbeat?.start();
 
   try {
     const result = await runWorkflow(script, {
@@ -766,8 +779,12 @@ async function executeWorkflowCall(params: {
     }
     return workflowExecutionSnapshot(snapshot, message);
   } finally {
-    if (heartbeat) {
-      clearInterval(heartbeat);
+    spinnerHeartbeat?.stop();
+    const flowStatus = options.getFlowStatus();
+    const aggregate = aggregateWorkflowUsage(snapshot.subagents);
+    if (aggregate.usage) {
+      recordFlowUsage(flowStatus, toolCallId, aggregate.usage, aggregate.telemetry);
+      publishFlowStatus(ctx, flowStatus);
     }
   }
 }
@@ -783,7 +800,7 @@ export function createRunWorkflowTool(
     promptGuidelines: WORKFLOW_PROMPT_GUIDELINES,
     parameters: workflowToolParameters,
     executionMode: "parallel",
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       const name = requiredWorkflowName(params);
       const normalizedParams = { ...params, name };
       const managed = await options.getTaskManager().run({
@@ -793,6 +810,7 @@ export function createRunWorkflowTool(
           try {
             value = await executeWorkflowCall({
               options,
+              toolCallId,
               name,
               toolParams: normalizedParams,
               signal: taskSignal,

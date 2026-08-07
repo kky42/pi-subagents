@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
+import { createFlowStatusState } from "../src/core/flow-status.ts";
 import { SessionKeyLocks } from "../src/core/session-key.ts";
 import { SynchronousTaskManager } from "../src/core/task-manager.ts";
 import { createSubagentExtension } from "../src/pi-subagent.ts";
@@ -874,6 +875,7 @@ describe("run_workflow tool rendering", () => {
     getLimiter: () => new ConcurrencyLimiter(4),
     getThinkingLevel: () => "high",
     getSubagentTimeoutMs: () => 0,
+    getFlowStatus: () => createFlowStatusState(),
   }) as unknown as {
     renderCall: (args: unknown, theme: Theme, context: { executionStarted: boolean }) => { render: (width: number) => string[] };
     renderResult: (result: unknown, options: unknown, theme: Theme) => { render: (width: number) => string[] };

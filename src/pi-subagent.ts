@@ -16,6 +16,13 @@ import {
   getBackendAgentLabel,
   type AgentDisplayMetadata,
 } from "./core/display.ts";
+import {
+  clearFlowUsage,
+  createFlowStatusState,
+  publishFlowStatus,
+  recordFlowUsage,
+  type FlowStatusState,
+} from "./core/flow-status.ts";
 import { filterProfilesForModelRegistry, resolveProfileModel, usesPiBackend } from "./core/model.ts";
 import {
   boundedProgressText,
@@ -36,6 +43,7 @@ import {
   type SessionKeyBinding,
 } from "./core/session-key.ts";
 import { CHILD_EXCLUDED_TOOLS, spawnSubagent } from "./core/spawn.ts";
+import { createSpinnerHeartbeat } from "./core/spinner.ts";
 import { renderSubagentNode } from "./core/subagent-render.ts";
 import { normalizeProfileName, normalizeSubagentLabel } from "./core/subagent-values.ts";
 import {
@@ -102,6 +110,7 @@ interface DelegationState {
   sessionBindings: Map<string, SessionKeyBinding>;
   sessionKeyLocks: SessionKeyLocks;
   activeRuns: Map<string, ActiveAgentRun>;
+  flowStatus: FlowStatusState;
   frame: number;
 }
 
@@ -317,6 +326,18 @@ async function executeAgentCall(params: {
     state.activeRuns.set(toolCallId, run);
     broadcastRunUpdates(state);
   }
+  // Animate the direct tool row at pi's own spinner cadence while it runs,
+  // independent of throttled child progress events.
+  const spinnerHeartbeat = run && ctx.mode === "tui"
+    ? createSpinnerHeartbeat(
+        () => state.activeRuns.has(toolCallId) && run.progress.status === "running",
+        () => {
+          state.frame++;
+          emitRunUpdate(state, run);
+        },
+      )
+    : undefined;
+  spinnerHeartbeat?.start();
 
   try {
     let outcome: AgentCallOutcome;
@@ -354,6 +375,10 @@ async function executeAgentCall(params: {
                   run.usage = partial.usage;
                   state.frame++;
                   emitRunUpdate(state, run);
+                  if (partial.usage) {
+                    recordFlowUsage(state.flowStatus, toolCallId, partial.usage, details.telemetry ?? run.progress.telemetry);
+                    publishFlowStatus(ctx, state.flowStatus);
+                  }
                 }
               : undefined,
             onUsage: () => {},
@@ -413,7 +438,12 @@ async function executeAgentCall(params: {
     return { result: { ...outcome.result, details }, sessionStarted: outcome.sessionStarted };
   } finally {
     if (run) {
+      spinnerHeartbeat?.stop();
       state.activeRuns.delete(toolCallId);
+      if (run.usage) {
+        recordFlowUsage(state.flowStatus, toolCallId, run.usage, run.progress.telemetry);
+        publishFlowStatus(ctx, state.flowStatus);
+      }
       state.frame++;
       broadcastRunUpdates(state);
     }
@@ -575,6 +605,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       sessionBindings: new Map(),
       sessionKeyLocks: new SessionKeyLocks(),
       activeRuns: new Map(),
+      flowStatus: createFlowStatusState(),
       frame: 0,
     };
     const createTaskManager = () => new SynchronousTaskManager();
@@ -618,6 +649,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
         getLimiter: () => rootState.limiter,
         getThinkingLevel: () => pi.getThinkingLevel(),
         getSubagentTimeoutMs: () => getState().subagentTimeoutMs,
+        getFlowStatus: () => rootState.flowStatus,
       }));
     }
 
@@ -632,6 +664,7 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       rootState.sessionKeyLocks = new SessionKeyLocks();
       rootState.activeRuns.clear();
       rootState.frame = 0;
+      clearFlowUsage(rootState.flowStatus);
       if (ctx.hasUI) {
         ctx.ui.setStatus(FLOW_UI_KEY, undefined);
         ctx.ui.setWidget(FLOW_UI_KEY, undefined);
@@ -658,13 +691,15 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       }
     });
 
-    pi.on("session_tree", () => {
+    pi.on("session_tree", (_event, ctx) => {
       taskManager = createTaskManager();
       syncLimiter();
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       rootState.activeRuns.clear();
       rootState.frame = 0;
+      clearFlowUsage(rootState.flowStatus);
+      publishFlowStatus(ctx, rootState.flowStatus);
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {

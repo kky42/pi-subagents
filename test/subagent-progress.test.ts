@@ -283,6 +283,36 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
     disposeSession(session);
   });
 
+  it("animates the direct tool row at the shared spinner cadence while running", async () => {
+    const { session, registration, model, modelRegistry } = await createSession();
+    const childGate = deferred();
+    setContextRoutingResponses(registration, async () => {
+      await childGate.promise;
+      return fauxAssistantMessage("spinner child done");
+    });
+    const tool = session.getToolDefinition("run_agent") as any;
+    const updates: any[] = [];
+    const context = { ...makeExecutionContext({ hasUI: true, model, modelRegistry, tui: true }), mode: "tui" };
+    const pending = tool.execute(
+      "spinner-call",
+      { label: "Spinner child", prompt: "Wait for release." },
+      undefined,
+      (update: unknown) => updates.push(update),
+      context,
+    );
+
+    await waitUntil(() => updates.some((update) => update.details.status === "running"));
+    const runningIndex = updates.findIndex((update) => update.details.status === "running");
+    await waitUntil(() => updates.length >= runningIndex + 3);
+    const frames = updates.slice(runningIndex).map((update) => update.details.frame as number);
+    expect(frames.length).toBeGreaterThanOrEqual(3);
+    expect(frames.every((frame, index) => index === 0 || frame > frames[index - 1])).toBe(true);
+
+    childGate.resolve();
+    await pending;
+    disposeSession(session);
+  });
+
   it("returns an aborted Tool result without starting a pre-aborted call", async () => {
     const { session, registration, model, modelRegistry } = await createSession();
     const controller = new AbortController();
