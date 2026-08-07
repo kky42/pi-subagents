@@ -25,7 +25,7 @@ describe("README", () => {
     expect(packageJson.files).toContain("assets");
     expect(packageJson.files).not.toContain("docs");
     expect(packageJson.pi).not.toHaveProperty("image");
-    expect(readme).toContain("pi -e .");
+    expect(readme).toContain("pi install npm:@kky42/pi-flow");
     expect(readme).not.toContain("—");
 
     const localTargets = [...readme.matchAll(/\((\.\/[^)#\s]+)(?:#[^)]+)?\)/g)]
@@ -38,8 +38,8 @@ describe("README", () => {
 
   it("keeps the branch quick start, natural-language examples, and valid custom profiles together", () => {
     const gettingStarted = readme.slice(
-      readme.indexOf("## Try this branch"),
-      readme.indexOf("## Why this synchronous branch?"),
+      readme.indexOf("## Try it"),
+      readme.indexOf("## License"),
     );
     const naturalLanguageExamples = [...gettingStarted.matchAll(/```text\n([\s\S]*?)\n```/g)];
     const profileExamples = [...gettingStarted.matchAll(/```md\n([\s\S]*?)\n```/g)];
@@ -58,15 +58,20 @@ describe("README", () => {
     const profiles = loadCustomSubagentProfiles(agentDir);
     expect(profiles.get("pi-explorer")).toMatchObject({
       backend: "pi",
-      tools: ["read", "grep", "find", "ls"],
+      model: "deepseek/deepseek-v4-flash",
+      thinking: "high",
       systemPrompt: "Map the repository and return the important paths.",
     });
     expect(profiles.get("codex-reviewer")).toMatchObject({
       backend: "codex",
+      model: "gpt-5.6-luna",
+      thinking: "high",
       systemPrompt: "Review the current diff and lead with concrete findings.",
     });
     expect(profiles.get("claude-ui-reviewer")).toMatchObject({
       backend: "claude",
+      model: "claude-sonnet-4-5",
+      thinking: "high",
       systemPrompt: "Inspect the UI and recommend specific improvements.",
     });
   });

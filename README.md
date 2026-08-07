@@ -11,26 +11,24 @@ Run subagents and multi-agent workflows across **Pi**, **Codex CLI**, and **Clau
 
 </div>
 
-> This branch is the synchronous PiFlow experiment. The published npm package currently uses the background execution contract.
-
 ## One coordinator, focused specialists
 
-`run_agent` and `run_workflow` behave like normal Pi tools: the tool remains active, shows live progress, and returns its final result when the delegated work finishes. Independent `run_agent` calls issued together still execute concurrently under PiFlow's shared limit.
+Define specialists for **Pi**, **Codex CLI**, and **Claude Code**, then orchestrate them from one Pi session - a few parallel `run_agent` calls or a staged `run_workflow` with live progress.
 
 | Primitive | Use it for |
 | --- | --- |
 | **`run_agent`** | One focused, resumable specialist or several independent specialists in parallel. |
 | **`run_workflow`** | Parallel or staged subagents, branching, structured results, and saved orchestration. |
 
-Every subagent runs through a named profile, so one Pi coordinator can mix Pi, Codex CLI, and Claude Code specialists in the same task.
+<p align="center">
+  <img src="./assets/pi-flow-subagents.png" alt="Three Pi subagents greet the user in parallel" width="49%">
+  <img src="./assets/pi-flow-workflow.png" alt="A two-phase demo workflow runs four specialists" width="49%">
+</p>
 
-## Try this branch
+## Try it
 
 ```bash
-git clone --branch experiment/synchronous-execution https://github.com/kky42/pi-flow.git
-cd pi-flow
-npm ci
-pi -e .
+pi install npm:@kky42/pi-flow
 ```
 
 Ask Pi naturally:
@@ -54,7 +52,8 @@ Profiles live at `~/.pi/agent/subagents/<name>.md`. The filename becomes the pro
 ```md
 ---
 description: Fast read-only repository explorer.
-tools: read, grep, find, ls
+model: deepseek/deepseek-v4-flash
+thinking: high
 ---
 Map the repository and return the important paths.
 ```
@@ -65,6 +64,8 @@ Map the repository and return the important paths.
 ---
 description: Reviews code for correctness and missed edge cases.
 backend: codex
+model: gpt-5.6-luna
+thinking: high
 ---
 Review the current diff and lead with concrete findings.
 ```
@@ -75,31 +76,11 @@ Review the current diff and lead with concrete findings.
 ---
 description: Reviews UI quality and accessibility.
 backend: claude
+model: claude-sonnet-4-5
+thinking: high
 ---
 Inspect the UI and recommend specific improvements.
 ```
-
-## Why this synchronous branch?
-
-- **Direct results.** Delegation completes through the standard Pi Tool result path without a separate completion notification.
-- **Parallel but bounded.** Direct and workflow subagents share one concurrency limit.
-- **Multi-backend.** Mix Pi, Codex CLI, and Claude Code through simple profiles.
-- **Real orchestration.** Workflows support parallel stages, pipelines, branching, schemas, and saved scripts.
-- **Resumable specialists.** Pass a direct `session_key` up front or omit it and reuse the generated key returned with the result. Workflow scripts can reuse a key across internal `run_agent()` calls.
-- **Visible progress.** Tool rows distinguish queued, running, completed, failed, and aborted work and show usage when available.
-
-## Requirements
-
-- [Pi](https://github.com/earendil-works/pi) 0.83.0 or newer
-- Node.js 22.19 or newer
-- [Codex CLI](https://github.com/openai/codex), installed and authenticated only for `backend: codex`
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), installed and authenticated only for `backend: claude`
-
-Pi-backed specialists require no external CLI.
-
-## Trust and safety
-
-`run_workflow` JavaScript runs as trusted local code, not inside a security sandbox. Run only scripts you trust.
 
 ## License
 
