@@ -14,6 +14,10 @@ export interface WorkflowSubagentRunnerOptions {
   allowedBackends?: readonly SubagentBackend[];
   onUsage?: (index: number, usage: SubagentUsage, telemetry: SubagentTelemetry) => void;
   onProgress?: (index: number, details: SubagentToolDetails, usage?: SubagentUsage) => void;
+  /** Seed the session-key table, e.g. with bindings a previous runner reported. Later entries win on duplicate keys, matching latest-wins persisted-entry replay. */
+  initialSessionBindings?: readonly SessionKeyBinding[];
+  /** Observes every write to the session-key table, so an embedder can carry bindings across runner instances. */
+  onSessionBinding?: (binding: SessionKeyBinding) => void;
 }
 
 /** Canonical profile-aware runner shared by the interactive tool and headless API. */
@@ -21,7 +25,9 @@ export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOpti
   runSubagent: WorkflowSubagentRunner;
   serializeSubagent: <T>(sessionKey: string | undefined, task: () => Promise<T>, signal?: AbortSignal) => Promise<T>;
 } {
-  const bindings = new Map<string, SessionKeyBinding>();
+  const bindings = new Map<string, SessionKeyBinding>(
+    (options.initialSessionBindings ?? []).map((binding) => [binding.key, binding]),
+  );
   const locks = new SessionKeyLocks();
   let sequence = 0;
   const allowed = options.allowedBackends ? new Set(options.allowedBackends) : undefined;
@@ -73,7 +79,9 @@ export function createWorkflowSubagentRunner(options: WorkflowSubagentRunnerOpti
     options.onProgress?.(index, details, result.usage);
     if (call.sessionKey && details.sessionId) {
       call.sessionId = details.sessionId;
-      bindings.set(call.sessionKey, { key: call.sessionKey, sessionId: details.sessionId, profile: call.profile, backend: profile.backend });
+      const next: SessionKeyBinding = { key: call.sessionKey, sessionId: details.sessionId, profile: call.profile, backend: profile.backend };
+      bindings.set(call.sessionKey, next);
+      options.onSessionBinding?.(next);
     }
     if (details.status !== "done") throw new Error(details.error ?? "subagent failed");
     if (call.sessionKey && !details.sessionId) throw new Error("subagent completed without a resumable session ID");

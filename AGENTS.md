@@ -60,6 +60,7 @@
 - `@kky42/pi-flow/runtime` remains the lightweight plain-Node orchestration engine: callers provide `runSubagent`, and the export must not gain runtime dependencies on Pi peer packages.
 - `@kky42/pi-flow/headless` is the batteries-included programmatic executor for schedulers and services. It loads current profiles and reuses the same canonical profile/model/thinking/backend/tools/session-key/structured-output spawn path as the interactive `run_workflow` tool, without requiring an `ExtensionContext` or TUI.
 - The shared profile-aware runner lives in `src/workflow/subagent-runner.ts`; do not reimplement that behavior in headless consumers. Headless callers may restrict allowed backends as an execution policy and receive cumulative usage callbacks.
+- Session keys stay workflow-local by default: each `executeWorkflow` call builds a fresh runner with an empty binding table. An embedder that drives one logical conversation across several calls opts into continuity by persisting the bindings `onSessionBinding` reports and replaying them through `sessionBindings` on a later call; profile/backend mismatches on a seeded key are rejected the same way as live reuse, and duplicate seeded keys resolve latest-wins like persisted-entry replay.
 
 ## Saved workflows (v3)
 

@@ -1,10 +1,13 @@
 import { join } from "node:path";
 import { getAgentDir, ModelRegistry, ModelRuntime, SettingsManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ConcurrencyLimiter } from "./src/core/concurrency.ts";
+import type { SessionKeyBinding } from "./src/core/session-key.ts";
 import { getSubagentProfiles } from "./src/profiles.ts";
 import type { SubagentBackend, SubagentUsage } from "./src/types.ts";
 import { createWorkflowSubagentRunner } from "./src/workflow/subagent-runner.ts";
 import { isWorkflowAbortError, runWorkflow, type WorkflowLimits } from "./src/workflow/runtime.ts";
+
+export type { SessionKeyBinding } from "./src/core/session-key.ts";
 
 export interface HeadlessUsage extends SubagentUsage { childSubagents: number }
 export interface HeadlessWorkflowOptions {
@@ -20,6 +23,10 @@ export interface HeadlessWorkflowOptions {
   onLog?: (message: string) => void;
   onPhase?: (title: string) => void;
   onUsage?: (usage: HeadlessUsage) => void;
+  /** Seed session-key bindings reported by an earlier run, so a reused session_key resumes that conversation instead of starting fresh. */
+  sessionBindings?: readonly SessionKeyBinding[];
+  /** Observes every session-key binding this run creates or updates; persist these to seed a later run. */
+  onSessionBinding?: (binding: SessionKeyBinding) => void;
 }
 export interface HeadlessWorkflowResult<T = unknown> { result: T; logs: string[]; phases: string[]; subagentCount: number; usage: HeadlessUsage }
 export type HeadlessWorkflowErrorCode = "ABORTED" | "WORKFLOW_TIMEOUT" | "EXECUTION_FAILED";
@@ -107,6 +114,8 @@ export async function executeWorkflow<T = unknown>(options: HeadlessWorkflowOpti
     timeoutMs: subagentTimeoutMs,
     allowedBackends: options.allowedBackends,
     onUsage: updateUsage,
+    initialSessionBindings: options.sessionBindings,
+    onSessionBinding: options.onSessionBinding,
   });
   try {
     const result = await runWorkflow<T>(options.script, {

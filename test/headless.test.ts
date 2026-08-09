@@ -29,7 +29,7 @@ vi.mock("../src/profiles.ts", () => ({
 import { getSubagentUsage, textResult } from "../src/core/progress.ts";
 import { incrementalPiUsage } from "../src/core/spawn.ts";
 import { createWorkflowSubagentRunner } from "../src/workflow/subagent-runner.ts";
-import { executeWorkflow } from "../headless.ts";
+import { executeWorkflow, type SessionKeyBinding } from "../headless.ts";
 
 const profile: SubagentProfile = { name: "reviewer", description: "review", backend: "codex", model: "gpt-test", thinking: "high" };
 
@@ -113,6 +113,64 @@ describe("canonical workflow agent runner", () => {
     expect(spawn).toHaveBeenNthCalledWith(1, expect.objectContaining({ persistSession: true, sessionId: undefined }));
     expect(spawn).toHaveBeenNthCalledWith(2, expect.objectContaining({ persistSession: true, sessionId: "new-session" }));
     expect(spawn).toHaveBeenNthCalledWith(3, expect.objectContaining({ persistSession: true, sessionId: undefined }));
+  });
+
+  it("resumes a seeded session binding in a separate runner instance", async () => {
+    const reported: SessionKeyBinding[] = [];
+    const runner = createWorkflowSubagentRunner({
+      profiles: new Map([[profile.name, profile]]),
+      ctx: { cwd: "/tmp", modelRegistry: {} } as never,
+      timeoutMs: 123,
+      onSessionBinding: (binding) => reported.push(binding),
+    });
+    await runner.runSubagent(
+      { prompt: "first", label: "first", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    );
+    expect(reported).toEqual([{ key: "worker", sessionId: "new-session", profile: "reviewer", backend: "codex" }]);
+
+    const laterRunner = createWorkflowSubagentRunner({
+      profiles: new Map([[profile.name, profile]]),
+      ctx: { cwd: "/tmp", modelRegistry: {} } as never,
+      timeoutMs: 123,
+      initialSessionBindings: reported,
+    });
+    await laterRunner.runSubagent(
+      { prompt: "continue", label: "second", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    );
+    expect(spawn).toHaveBeenNthCalledWith(2, expect.objectContaining({ persistSession: true, sessionId: "new-session" }));
+  });
+
+  it("replays duplicate seeded keys with the latest entry winning", async () => {
+    const runner = createWorkflowSubagentRunner({
+      profiles: new Map([[profile.name, profile]]),
+      ctx: { cwd: "/tmp", modelRegistry: {} } as never,
+      timeoutMs: 123,
+      initialSessionBindings: [
+        { key: "worker", sessionId: "stale", profile: "reviewer", backend: "codex" },
+        { key: "worker", sessionId: "fresh", profile: "reviewer", backend: "codex" },
+      ],
+    });
+    await runner.runSubagent(
+      { prompt: "continue", label: "later", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    );
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "fresh" }));
+  });
+
+  it("rejects a seeded binding reused with another profile or backend", async () => {
+    const runner = createWorkflowSubagentRunner({
+      profiles: new Map([[profile.name, profile]]),
+      ctx: { cwd: "/tmp", modelRegistry: {} } as never,
+      timeoutMs: 123,
+      initialSessionBindings: [{ key: "worker", sessionId: "held", profile: "claude-reviewer", backend: "claude" }],
+    });
+    await expect(runner.runSubagent(
+      { prompt: "continue", label: "second", profile: "reviewer", sessionKey: "worker" },
+      new AbortController().signal,
+    )).rejects.toThrow(/already belongs/i);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("rejects reuse of a workflow-local key with another profile or backend", async () => {
@@ -203,6 +261,19 @@ describe("headless workflow", () => {
       script: `export const meta = { name: "cache", description: "test" };\nreturn await parallel([() => run_agent("a", { label: "one", profile: "reviewer" }), () => run_agent("b", { label: "two", profile: "reviewer" })]);`,
     });
     expect(result.usage).toMatchObject({ input: 150, cacheRead: 50, totalTokens: 202 });
+  });
+
+  it("carries session bindings from one workflow run into the next", async () => {
+    const bindings: SessionKeyBinding[] = [];
+    const script = `export const meta = { name: "resume", description: "test" };\nreturn await run_agent("inspect", { profile: "reviewer", session_key: "worker" });`;
+    await executeWorkflow({ cwd: process.cwd(), script, onSessionBinding: (binding) => bindings.push(binding) });
+    expect(bindings).toEqual([{ key: "worker", sessionId: "new-session", profile: "reviewer", backend: "codex" }]);
+
+    await executeWorkflow({ cwd: process.cwd(), script, sessionBindings: bindings });
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ persistSession: true, sessionId: "new-session" }));
+
+    await executeWorkflow({ cwd: process.cwd(), script });
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ persistSession: true, sessionId: undefined }));
   });
 
   it("runs without an ExtensionContext or UI and reports immutable cumulative usage snapshots", async () => {
