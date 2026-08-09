@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { SPINNER_INTERVAL_MS } from "../src/core/spinner.ts";
 import { setupPiSubagentTestHarness } from "./helpers/pi-subagent-harness.ts";
 
 function delay(ms: number): Promise<void> {
@@ -114,6 +115,60 @@ describe("pi-subagent synchronous concurrency", () => {
     const results = await pending;
     expect(results.map((result) => result.details.status)).toEqual(["done", "done"]);
     disposeSession(session);
+  });
+
+  it("advances each parallel TUI spinner by one frame per heartbeat", async () => {
+    const { session, registration, model, modelRegistry } = await createSession({ maxConcurrentSubagents: 2 });
+    const tool = session.getToolDefinition("run_agent") as any;
+    const context = {
+      ...makeExecutionContext({ hasUI: true, model, modelRegistry, tui: true }),
+      mode: "tui",
+    };
+    const gate = deferred();
+    const updates: Record<string, any[]> = { first: [], second: [] };
+    const spinnerTicks: Array<() => void> = [];
+    let started = 0;
+    setContextRoutingResponses(registration, async () => {
+      started++;
+      await gate.promise;
+      return fauxAssistantMessage("done");
+    });
+    const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void, delayMs?: number) => {
+      if (delayMs === SPINNER_INTERVAL_MS) {
+        spinnerTicks.push(callback);
+      }
+      return { unref() {} } as ReturnType<typeof setInterval>;
+    }) as typeof setInterval);
+
+    let pending: Promise<any[]> | undefined;
+    try {
+      pending = Promise.all([
+        tool.execute("spinner-a", { label: "Spinner A", prompt: "A" }, undefined, (update: any) => updates.first.push(update), context),
+        tool.execute("spinner-b", { label: "Spinner B", prompt: "B" }, undefined, (update: any) => updates.second.push(update), context),
+      ]);
+      await waitUntil(() => started === 2);
+
+      const latestFrame = (key: "first" | "second") => updates[key].at(-1)?.details.frame as number;
+      expect(spinnerTicks).toHaveLength(2);
+      expect(latestFrame("first")).toBe(0);
+      expect(latestFrame("second")).toBe(0);
+
+      const priorFrames = { first: 0, second: 0 };
+      for (const tick of spinnerTicks) {
+        const lengths = { first: updates.first.length, second: updates.second.length };
+        tick();
+        const changed = updates.first.length > lengths.first ? "first" : "second";
+        expect(latestFrame(changed)).toBe(priorFrames[changed] + 1);
+        priorFrames[changed]++;
+      }
+      expect(latestFrame("first")).toBe(1);
+      expect(latestFrame("second")).toBe(1);
+    } finally {
+      gate.resolve();
+      await pending;
+      intervalSpy.mockRestore();
+      disposeSession(session);
+    }
   });
 
   it("uses the max-concurrency flag over the factory default", async () => {

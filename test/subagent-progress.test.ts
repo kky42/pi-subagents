@@ -303,10 +303,14 @@ describe("pi-subagent synchronous progress and lifecycle", () => {
 
     await waitUntil(() => updates.some((update) => update.details.status === "running"));
     const runningIndex = updates.findIndex((update) => update.details.status === "running");
-    await waitUntil(() => updates.length >= runningIndex + 3);
+    const initialFrame = updates[runningIndex].details.frame as number;
+    await waitUntil(() => updates.slice(runningIndex).some((update) => update.details.frame > initialFrame));
     const frames = updates.slice(runningIndex).map((update) => update.details.frame as number);
-    expect(frames.length).toBeGreaterThanOrEqual(3);
-    expect(frames.every((frame, index) => index === 0 || frame > frames[index - 1])).toBe(true);
+    expect(initialFrame).toBe(0);
+    expect(frames.every((frame, index) => {
+      const prior = frames[index - 1];
+      return index === 0 || (frame >= prior && frame - prior <= 1);
+    })).toBe(true);
 
     childGate.resolve();
     await pending;

@@ -111,12 +111,12 @@ interface DelegationState {
   sessionKeyLocks: SessionKeyLocks;
   activeRuns: Map<string, ActiveAgentRun>;
   flowStatus: FlowStatusState;
-  frame: number;
 }
 
 interface ActiveAgentRun {
   sessionKey: string;
   progress: SubagentProgressNode;
+  frame: number;
   usage?: SubagentUsage;
   onUpdate: ((result: AgentToolResult<RunAgentToolDetails>) => void) | undefined;
 }
@@ -227,7 +227,7 @@ function emitRunUpdate(state: DelegationState, run: ActiveAgentRun): void {
     telemetry: run.progress.telemetry,
     progress: run.progress,
     activeCount: runningRunCount(state),
-    frame: state.frame,
+    frame: run.frame,
   });
   const usage = run.usage
     ? { ...run.usage, cost: { ...run.usage.cost } }
@@ -319,6 +319,7 @@ async function executeAgentCall(params: {
     ? {
         sessionKey,
         progress: createProgressNode(label, profileName, "queued", profile.backend),
+        frame: 0,
         onUpdate,
       }
     : undefined;
@@ -332,12 +333,11 @@ async function executeAgentCall(params: {
     ? createSpinnerHeartbeat(
         () => state.activeRuns.has(toolCallId) && run.progress.status === "running",
         () => {
-          state.frame++;
+          run.frame++;
           emitRunUpdate(state, run);
         },
       )
     : undefined;
-  spinnerHeartbeat?.start();
 
   try {
     let outcome: AgentCallOutcome;
@@ -353,8 +353,8 @@ async function executeAgentCall(params: {
           if (run) {
             run.progress.status = "running";
             run.progress.startedAt = Date.now();
-            state.frame++;
             broadcastRunUpdates(state);
+            spinnerHeartbeat?.start();
           }
           const spawned = await spawnSubagent({
             label,
@@ -373,7 +373,6 @@ async function executeAgentCall(params: {
                     run.progress = details.progress;
                   }
                   run.usage = partial.usage;
-                  state.frame++;
                   emitRunUpdate(state, run);
                   if (partial.usage) {
                     recordFlowUsage(state.flowStatus, toolCallId, partial.usage, details.telemetry ?? run.progress.telemetry);
@@ -432,7 +431,7 @@ async function executeAgentCall(params: {
       }
       run.usage = outcome.result.usage;
       details.activeCount = runningRunCount(state);
-      details.frame = state.frame;
+      details.frame = run.frame;
       broadcastRunUpdates(state);
     }
     return { result: { ...outcome.result, details }, sessionStarted: outcome.sessionStarted };
@@ -444,7 +443,6 @@ async function executeAgentCall(params: {
         recordFlowUsage(state.flowStatus, toolCallId, run.usage, run.progress.telemetry);
         publishFlowStatus(ctx, state.flowStatus);
       }
-      state.frame++;
       broadcastRunUpdates(state);
     }
   }
@@ -606,7 +604,6 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       sessionKeyLocks: new SessionKeyLocks(),
       activeRuns: new Map(),
       flowStatus: createFlowStatusState(),
-      frame: 0,
     };
     const createTaskManager = () => new SynchronousTaskManager();
     let taskManager = createTaskManager();
@@ -663,7 +660,6 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       rootState.activeRuns.clear();
-      rootState.frame = 0;
       clearFlowUsage(rootState.flowStatus);
       if (ctx.hasUI) {
         ctx.ui.setStatus(FLOW_UI_KEY, undefined);
@@ -697,7 +693,6 @@ export function createSubagentExtension(options: SubagentExtensionOptions = {}):
       rootState.sessionBindings.clear();
       rootState.sessionKeyLocks = new SessionKeyLocks();
       rootState.activeRuns.clear();
-      rootState.frame = 0;
       clearFlowUsage(rootState.flowStatus);
       publishFlowStatus(ctx, rootState.flowStatus);
     });
