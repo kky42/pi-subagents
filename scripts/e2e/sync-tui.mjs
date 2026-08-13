@@ -18,11 +18,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SPINNER_FRAMES } from "../../src/core/spinner.ts";
 import { loadDotEnv, resolveDeepseekApiKey } from "./lib/deepseek-claude-env.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const extensionPath = repoRoot;
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const AGENT_ROW = /Pi Agent|Codex Agent|Claude Agent|Agent\(/;
 const WORKFLOW_ROW = /Workflow\(/;
 const WIDGET_LINE = /pi-flow ↑/;

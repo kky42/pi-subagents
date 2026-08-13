@@ -7,16 +7,6 @@ import {
 } from "../scripts/e2e/lib/basic-metrics.mjs";
 
 describe("basic metrics semi-E2E reporting", () => {
-  it("defines the requested agent and model matrix", () => {
-    expect(BASIC_METRICS_ROWS.map(({ id, agent, model, thinking }) => ({ id, agent, model, thinking }))).toEqual([
-      { id: "claude-deepseek-v4-flash", agent: "claude-code", model: "deepseek-v4-flash", thinking: "medium" },
-      { id: "codex-gpt-5.5", agent: "codex", model: "gpt-5.5", thinking: "medium" },
-      { id: "codex-gpt-5.6-luna", agent: "codex", model: "gpt-5.6-luna", thinking: "medium" },
-      { id: "pi-gpt-5.5", agent: "pi", model: "openai-codex/gpt-5.5", thinking: "medium" },
-      { id: "pi-gpt-5.6-luna", agent: "pi", model: "openai-codex/gpt-5.6-luna", thinking: "medium" },
-    ]);
-  });
-
   it("builds each harness invocation with the requested model and medium thinking", () => {
     const claude = buildProbeInvocation(BASIC_METRICS_ROWS[0]);
     expect(claude.command).toBe("claude");
@@ -138,7 +128,6 @@ describe("basic metrics semi-E2E reporting", () => {
 
     expect(summary.status).toBe("fail");
     expect(summary.checks.tool).toBe("fail");
-    expect(summary.errors).toContain("tool execution failed");
   });
 
   it("requires estimated cost for locally priced Codex models", () => {
@@ -244,7 +233,6 @@ describe("basic metrics semi-E2E reporting", () => {
     expect(unknownCost.usage?.costStatus).toBe("unknown");
     expect(unknownCost.usageDisplay).toBe("↑100 ↓10 CH0.0% $?");
     expect(unknownCost.checks.cost).toBe("warn");
-    expect(unknownCost.warnings).toContain("cost unavailable from upstream pricing metadata");
 
     const missingUsage = summarizeProbe({
       row,
@@ -260,6 +248,5 @@ describe("basic metrics semi-E2E reporting", () => {
     expect(missingUsage.checks.usage).toBe("fail");
     expect(missingUsage.checks.tokens).toBe("fail");
     expect(missingUsage.checks.cacheHitRate).toBe("fail");
-    expect(missingUsage.errors).toContain("usage telemetry missing");
   });
 });

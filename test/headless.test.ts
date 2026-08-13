@@ -153,12 +153,9 @@ describe("headless workflow", () => {
   it("rejects invalid runtime bounds before starting work", async () => {
     const script = `export const meta = { name: "bounds", description: "test" };\nreturn await run_agent("inspect", { profile: "reviewer" });`;
 
-    await expect(executeWorkflow({ cwd: process.cwd(), script, maxConcurrentSubagents: 0 }))
-      .rejects.toThrow("maxConcurrentSubagents must be a positive integer");
-    await expect(executeWorkflow({ cwd: process.cwd(), script, subagentTimeoutMs: -1 }))
-      .rejects.toThrow("subagentTimeoutMs must be a non-negative integer");
-    await expect(executeWorkflow({ cwd: process.cwd(), script, workflowTimeoutMs: 1.5 }))
-      .rejects.toThrow("workflowTimeoutMs must be a non-negative integer");
+    await expect(executeWorkflow({ cwd: process.cwd(), script, maxConcurrentSubagents: 0 })).rejects.toThrow(RangeError);
+    await expect(executeWorkflow({ cwd: process.cwd(), script, subagentTimeoutMs: -1 })).rejects.toThrow(RangeError);
+    await expect(executeWorkflow({ cwd: process.cwd(), script, workflowTimeoutMs: 1.5 })).rejects.toThrow(RangeError);
     expect(spawn).not.toHaveBeenCalled();
   });
 

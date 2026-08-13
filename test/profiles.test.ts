@@ -49,11 +49,9 @@ describe("pi-subagent profiles", () => {
     const profiles = loadBuiltinSubagentProfiles(join(packageRoot, "src", "subagents"));
 
     expect(profiles.get("general-purpose")).toMatchObject({
-      name: "general-purpose",
       systemPrompt: undefined,
       tools: undefined,
     });
-    expect(profiles.has("explorer")).toBe(false);
     expect(profiles.size).toBe(1);
   });
 

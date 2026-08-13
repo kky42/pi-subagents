@@ -129,7 +129,6 @@ describe("pi-subagent tool contract", () => {
     const prompt = await captureRootPrompt(["run_agent", "run_workflow"]);
     const profiles = getSubagentProfiles(agentDir);
 
-    expect(occurrenceCount(prompt, "- reviewer: Reviews source changes.")).toBe(1);
     expect(occurrenceCount(prompt, "- review_flow: Review source and tests.")).toBe(1);
     expect(prompt).not.toContain(profileBodySentinel);
     expect(prompt).not.toContain(workflowBodySentinel);

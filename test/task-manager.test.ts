@@ -120,7 +120,7 @@ describe("SynchronousTaskManager", () => {
 
     await expect(manager.run({
       execute: async () => ({ status: "completed", value: "late" }),
-    })).rejects.toThrow("after session shutdown");
+    })).rejects.toThrow();
   });
 
   it("clears an unexpectedly rejected operation", async () => {

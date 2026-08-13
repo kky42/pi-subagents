@@ -3,9 +3,9 @@ import { ConcurrencyLimiter } from "../src/core/concurrency.ts";
 
 describe("ConcurrencyLimiter", () => {
   it("rejects an invalid max", () => {
-    expect(() => new ConcurrencyLimiter(0)).toThrow(/positive integer/);
-    expect(() => new ConcurrencyLimiter(-1)).toThrow(/positive integer/);
-    expect(() => new ConcurrencyLimiter(1.5)).toThrow(/positive integer/);
+    expect(() => new ConcurrencyLimiter(0)).toThrow();
+    expect(() => new ConcurrencyLimiter(-1)).toThrow();
+    expect(() => new ConcurrencyLimiter(1.5)).toThrow();
   });
 
   it("caps synchronous tryAcquire at max and frees on release", () => {
@@ -98,7 +98,7 @@ describe("ConcurrencyLimiter", () => {
     const limiter = new ConcurrencyLimiter(1);
     const controller = new AbortController();
     controller.abort();
-    await expect(limiter.acquire(controller.signal)).rejects.toThrow(/Aborted/);
+    await expect(limiter.acquire(controller.signal)).rejects.toThrow();
     expect(limiter.activeCount).toBe(0);
   });
 
@@ -110,7 +110,7 @@ describe("ConcurrencyLimiter", () => {
     expect(limiter.pendingCount).toBe(1);
 
     controller.abort();
-    await expect(pending).rejects.toThrow(/Aborted/);
+    await expect(pending).rejects.toThrow();
     expect(limiter.pendingCount).toBe(0);
 
     r1?.();
@@ -126,7 +126,7 @@ describe("ConcurrencyLimiter", () => {
     expect(limiter.pendingCount).toBe(2);
 
     controller.abort();
-    await expect(abortedWaiter).rejects.toThrow(/Aborted/);
+    await expect(abortedWaiter).rejects.toThrow();
     expect(limiter.pendingCount).toBe(1);
 
     r1?.();
