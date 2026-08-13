@@ -1,3 +1,3 @@
 ---
-description: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.
+description: Use for complex, multi-step, or context-heavy tasks that benefit from independent execution, especially when no specialized subagent is a better fit.
 ---

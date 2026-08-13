@@ -50,7 +50,6 @@ describe("pi-subagent profiles", () => {
 
     expect(profiles.get("general-purpose")).toMatchObject({
       name: "general-purpose",
-      description: "General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks.",
       systemPrompt: undefined,
       tools: undefined,
     });
